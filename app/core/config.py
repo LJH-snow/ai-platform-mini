@@ -25,6 +25,6 @@ class Settings:
 def get_settings() -> Settings:
     return Settings(
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        ollama_default_model=os.getenv("OLLAMA_MODEL", "llama3.2"),
+        ollama_default_model=os.getenv("OLLAMA_MODEL", "qwen3:4b"),
         ollama_timeout_seconds=_get_float_env("OLLAMA_TIMEOUT", 60.0),
     )

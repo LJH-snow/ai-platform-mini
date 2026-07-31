@@ -12,6 +12,10 @@ class OllamaServiceError(Exception):
     """Raised when the Ollama API cannot satisfy a request."""
 
 
+class OllamaModelNotFoundError(OllamaServiceError):
+    """Raised when the requested Ollama model does not exist locally."""
+
+
 class OllamaService:
     def __init__(
         self,
@@ -61,8 +65,7 @@ class OllamaService:
                     timeout=self._timeout_seconds,
                 ) as client:
                     response = await client.post(path, json=payload)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
+        except httpx.RequestError as exc:
             raise OllamaServiceError(
                 f"Unable to reach Ollama at {self._base_url}. "
                 "Check that the Ollama service is running."
@@ -75,6 +78,22 @@ class OllamaService:
 
         if not isinstance(data, dict):
             raise OllamaServiceError("Ollama returned an unexpected response shape.")
+
+        if response.status_code == httpx.codes.NOT_FOUND:
+            error_message = data.get("error")
+            if isinstance(error_message, str):
+                raise OllamaModelNotFoundError(error_message)
+            raise OllamaModelNotFoundError("Requested Ollama model was not found.")
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            error_message = data.get("error")
+            if isinstance(error_message, str):
+                raise OllamaServiceError(error_message) from exc
+            raise OllamaServiceError(
+                f"Ollama request failed with status {response.status_code}."
+            ) from exc
 
         return data
 
