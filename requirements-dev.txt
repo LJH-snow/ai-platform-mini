@@ -1,0 +1,6 @@
+-e .
+httpx
+mypy
+pre-commit
+pytest
+ruff

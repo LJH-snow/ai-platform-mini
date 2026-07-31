@@ -1,0 +1,34 @@
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+ChatRole = Literal["system", "user", "assistant"]
+
+
+class ChatMessage(BaseModel):
+    role: ChatRole
+    content: str = Field(min_length=1)
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, description="Latest user message.")
+    model: str | None = Field(
+        default=None,
+        description="Optional Ollama model name. Falls back to OLLAMA_MODEL.",
+    )
+    system_prompt: str | None = Field(
+        default=None,
+        description="Optional system prompt prepended to the conversation.",
+    )
+    history: list[ChatMessage] = Field(
+        default_factory=list,
+        description="Existing chat history in chronological order.",
+    )
+
+
+class ChatResponse(BaseModel):
+    model: str
+    created_at: str | None = None
+    message: ChatMessage
+    done: bool
+    done_reason: str | None = None

@@ -1,0 +1,28 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: ruff format --check .
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: ruff-check
+        name: ruff check
+        entry: ruff check .
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: mypy
+        name: mypy
+        entry: mypy app tests
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: pytest
+        name: pytest
+        entry: pytest
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
