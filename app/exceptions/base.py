@@ -2,6 +2,10 @@ class AppError(Exception):
     """Base exception for all application-level errors."""
 
 
+class AuthenticationError(AppError):
+    """Raised when authentication fails (invalid or missing API key)."""
+
+
 class ProviderError(AppError):
     """Raised when a provider backend cannot satisfy a request."""
 

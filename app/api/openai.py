@@ -3,6 +3,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from app.auth.dependencies import require_api_key
+from app.auth.models import APIKey
 from app.schemas.openai import OpenAIChatRequest, OpenAIChatResponse
 from app.services.openai_service import OpenAIService, get_openai_service
 
@@ -19,6 +21,7 @@ router = APIRouter(tags=["openai"])
 async def create_chat_completions(
     request: OpenAIChatRequest,
     service: Annotated[OpenAIService, Depends(get_openai_service)],
+    _api_key: Annotated[APIKey, Depends(require_api_key)],
 ) -> OpenAIChatResponse | StreamingResponse:
     if request.stream:
         return StreamingResponse(

@@ -20,6 +20,9 @@ class Settings(BaseSettings):
 
     llm_provider: str = "ollama"
 
+    api_keys: str = ""
+    auth_enabled: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

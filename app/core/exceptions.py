@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.exceptions.base import (
+    AuthenticationError,
     ModelNotFoundError,
     ProviderError,
     ProviderUnavailableError,
@@ -14,6 +15,22 @@ logger = logging.getLogger(__name__)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(AuthenticationError)
+    async def handle_authentication_error(
+        request: Request, exc: AuthenticationError
+    ) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", None)
+        logger.warning("request_id=%s authentication_error %s", request_id, exc)
+        return JSONResponse(
+            status_code=401,
+            content=ErrorResponse(
+                code=ErrorCode.AUTHENTICATION_ERROR,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     @app.exception_handler(ModelNotFoundError)
     async def handle_model_not_found(
         request: Request, exc: ModelNotFoundError
