@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.auth.dependencies import provide_api_key_service
@@ -84,6 +85,24 @@ def test_no_keys_configured_allows_anonymous() -> None:
         )
     finally:
         app.dependency_overrides.clear()
+
+    assert response.status_code != 401
+
+
+def test_auth_disabled_allows_anonymous(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core.settings import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+    get_settings.cache_clear()
+
+    try:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "Hi"}]},
+        )
+    finally:
+        get_settings.cache_clear()
 
     assert response.status_code != 401
 

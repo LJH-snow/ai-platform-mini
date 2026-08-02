@@ -2,6 +2,7 @@ import logging
 
 from app.auth.models import APIKey
 from app.core.settings import get_settings
+from app.exceptions.base import AuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ class APIKeyService:
     def validate(self, raw_key: str) -> APIKey:
         if raw_key in self._key_set:
             return self._key_map[raw_key]
-        raise ValueError("Invalid API key")
+        raise AuthenticationError("Invalid API key.")
 
     @property
     def key_count(self) -> int:
