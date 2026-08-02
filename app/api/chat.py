@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.auth.dependencies import require_api_key
 from app.auth.models import APIKey
@@ -19,7 +19,18 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 )
 async def create_chat_completion(
     request: ChatRequest,
+    http_request: Request,
     service: Annotated[ChatService, Depends(get_chat_service)],
-    _api_key: Annotated[APIKey, Depends(require_api_key)],
+    api_key: Annotated[APIKey, Depends(require_api_key)],
 ) -> ChatResponse:
-    return await service.chat(request)
+    http_request.state.api_key_name = api_key.name
+
+    response = await service.chat(request)
+    http_request.state.usage_data = {
+        "model": response.model,
+        "prompt_tokens": response.prompt_tokens or 0,
+        "completion_tokens": response.completion_tokens or 0,
+        "total_tokens": (response.prompt_tokens or 0)
+        + (response.completion_tokens or 0),
+    }
+    return response

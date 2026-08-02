@@ -4,8 +4,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from app.auth.dependencies import require_api_key
+from app.auth.models import APIKey
 from app.core.container import provide_llm_provider
 from app.providers.base import LLMProvider
+from app.usage.middleware import get_usage_service
+from app.usage.models import UsageSummary
 
 logger = logging.getLogger(__name__)
 
@@ -40,3 +44,14 @@ async def readiness_check(
                 "reason": str(exc),
             },
         )
+
+
+@router.get(
+    "/usage",
+    summary="Usage statistics",
+    description="Returns aggregated token usage statistics.",
+)
+def get_usage(
+    _api_key: Annotated[APIKey, Depends(require_api_key)],
+) -> UsageSummary:
+    return get_usage_service().get_summary()

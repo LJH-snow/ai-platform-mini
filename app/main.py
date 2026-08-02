@@ -12,6 +12,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, setup_logging
 from app.core.settings import get_settings
 from app.middleware.request_id import RequestIdMiddleware
+from app.usage.middleware import UsageMiddleware
 
 
 @asynccontextmanager
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
     )
+    app.add_middleware(UsageMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.auth.dependencies import require_api_key
@@ -20,9 +20,12 @@ router = APIRouter(tags=["openai"])
 )
 async def create_chat_completions(
     request: OpenAIChatRequest,
+    http_request: Request,
     service: Annotated[OpenAIService, Depends(get_openai_service)],
-    _api_key: Annotated[APIKey, Depends(require_api_key)],
+    api_key: Annotated[APIKey, Depends(require_api_key)],
 ) -> OpenAIChatResponse | StreamingResponse:
+    http_request.state.api_key_name = api_key.name
+
     if request.stream:
         return StreamingResponse(
             service.chat_completions_stream(request),
@@ -32,4 +35,12 @@ async def create_chat_completions(
                 "Connection": "keep-alive",
             },
         )
-    return await service.chat_completions(request)
+
+    response = await service.chat_completions(request)
+    http_request.state.usage_data = {
+        "model": response.model,
+        "prompt_tokens": response.usage.prompt_tokens,
+        "completion_tokens": response.usage.completion_tokens,
+        "total_tokens": response.usage.total_tokens,
+    }
+    return response

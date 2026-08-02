@@ -15,6 +15,7 @@ from app.schemas.openai import (
     OpenAIStreamChoice,
     OpenAIStreamChunk,
     OpenAIStreamDelta,
+    OpenAIUsage,
 )
 from app.services.chat_service import ChatService, get_chat_service
 
@@ -111,6 +112,8 @@ class OpenAIService:
 
     def _to_openai_response(self, chat_response: ChatResponse) -> OpenAIChatResponse:
         created = self._parse_created_at(chat_response.created_at)
+        prompt = chat_response.prompt_tokens or 0
+        completion = chat_response.completion_tokens or 0
         return OpenAIChatResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
             created=created,
@@ -125,6 +128,11 @@ class OpenAIService:
                     finish_reason=chat_response.done_reason or "stop",
                 )
             ],
+            usage=OpenAIUsage(
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                total_tokens=prompt + completion,
+            ),
         )
 
     def _parse_created_at(self, created_at: str | None) -> int:

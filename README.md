@@ -44,6 +44,7 @@ pytest
 |--------|------|-------------|
 | GET | `/api/v1/health` | Liveness probe |
 | GET | `/api/v1/ready` | Readiness probe (checks downstream) |
+| GET | `/api/v1/usage` | Token usage statistics |
 | POST | `/v1/chat/completions` | OpenAI-compatible chat completions (supports SSE streaming) |
 | GET | `/api/v1/models` | List available LLM models |
 | POST | `/api/v1/chat` | Generate a chat completion using the configured LLM provider |
@@ -238,3 +239,27 @@ No code changes needed when switching environments or models.
 - ChatService.default_model property for stream fallback model name
 - OpenAPI descriptions on all endpoints
 - Docker: Dockerfile + docker-compose (app + Ollama) + .dockerignore
+
+### Sprint 3 (Day 1)
+
+- API Key authentication: `Authorization: Bearer sk-xxx` on all LLM endpoints
+- `app/auth/` module: models (APIKey dataclass), service (APIKeyService), dependencies (require_api_key)
+- API keys configured via `API_KEYS` env var (format: `sk-xxx:name,sk-yyy:name2`)
+- `AUTH_ENABLED` env var: set `false` to disable auth (development mode)
+- health/ready endpoints exempt from auth
+- `AuthenticationError(AppError)` → 401 + `WWW-Authenticate: Bearer`
+- `ErrorCode.AUTHENTICATION_ERROR`
+- `APIKeyService.validate()` raises `AuthenticationError` (unified exception hierarchy)
+- Tests: no key → 401, wrong key → 401, valid key → pass, no keys configured → anonymous, auth disabled → pass, health/ready bypass
+
+### Sprint 3 (Day 2)
+
+- Token usage tracking: `ProviderChatResult` now includes `prompt_tokens`/`completion_tokens`
+- ChatService parses Ollama `prompt_eval_count`/`eval_count` → token fields
+- ChatResponse schema: added `prompt_tokens`/`completion_tokens`
+- OpenAI response `usage` now populated with real token counts from provider
+- `app/usage/` module: models (UsageRecord, UsageSummary), service (UsageService), middleware (UsageMiddleware)
+- UsageMiddleware records request_id, model, tokens, latency_ms, api_key_name per request
+- UsageService keeps last 1000 records in memory, aggregates by model
+- `GET /api/v1/usage` endpoint returns aggregated usage statistics (requires auth)
+- Router layer writes `request.state.usage_data` and `request.state.api_key_name` for middleware

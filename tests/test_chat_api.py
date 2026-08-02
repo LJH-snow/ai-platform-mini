@@ -45,13 +45,12 @@ def test_chat_endpoint_returns_model_reply() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json() == {
-        "model": "llama3.2",
-        "created_at": "2026-07-31T00:00:00Z",
-        "message": {"role": "assistant", "content": "Hi there."},
-        "done": True,
-        "done_reason": "stop",
-    }
+    body = response.json()
+    assert body["model"] == "llama3.2"
+    assert body["created_at"] == "2026-07-31T00:00:00Z"
+    assert body["message"] == {"role": "assistant", "content": "Hi there."}
+    assert body["done"] is True
+    assert body["done_reason"] == "stop"
 
 
 def test_chat_endpoint_maps_ollama_errors_to_bad_gateway() -> None:

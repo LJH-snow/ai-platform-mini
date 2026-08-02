@@ -44,3 +44,5 @@ class ChatResponse(BaseModel):
     message: ChatMessage
     done: bool
     done_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None

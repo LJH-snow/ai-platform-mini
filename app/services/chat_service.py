@@ -41,6 +41,8 @@ class ChatService:
             message=ChatMessage(role=result.role, content=result.content),
             done=result.done,
             done_reason=result.done_reason,
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
         )
 
     async def chat_stream(
@@ -113,6 +115,8 @@ class ChatService:
             content=content,
             done=done,
             done_reason=done_reason,
+            prompt_tokens=self._extract_int(data, "prompt_eval_count"),
+            completion_tokens=self._extract_int(data, "eval_count"),
         )
 
     def _parse_stream_chunk(self, data: dict[str, object]) -> ProviderChatResult | None:
@@ -143,7 +147,14 @@ class ChatService:
             content=content,
             done=done,
             done_reason=done_reason if isinstance(done_reason, str) else None,
+            prompt_tokens=self._extract_int(data, "prompt_eval_count"),
+            completion_tokens=self._extract_int(data, "eval_count"),
         )
+
+    @staticmethod
+    def _extract_int(data: dict[str, object], key: str) -> int | None:
+        value = data.get(key)
+        return value if isinstance(value, int) else None
 
 
 def get_chat_service(
