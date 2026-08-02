@@ -1,4 +1,5 @@
 import logging
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -28,6 +29,53 @@ class OllamaProvider:
 
     async def chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/api/chat", payload=payload)
+
+    async def chat_stream(
+        self, payload: dict[str, Any]
+    ) -> AsyncIterator[dict[str, Any]]:
+        stream_payload = {**payload, "stream": True}
+        try:
+            if self._http_client is not None:
+                async with self._http_client.stream(
+                    "POST", "/api/chat", json=stream_payload
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        import json
+
+                        try:
+                            data = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(data, dict):
+                            yield data
+            else:
+                async with httpx.AsyncClient(
+                    base_url=self._base_url,
+                    timeout=self._timeout_seconds,
+                ) as client:
+                    async with client.stream(
+                        "POST", "/api/chat", json=stream_payload
+                    ) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line.strip():
+                                continue
+                            import json
+
+                            try:
+                                data = json.loads(line)
+                            except ValueError:
+                                continue
+                            if isinstance(data, dict):
+                                yield data
+        except httpx.RequestError as exc:
+            raise OllamaServiceError(
+                f"Unable to reach Ollama at {self._base_url}. "
+                "Check that the Ollama service is running."
+            ) from exc
 
     async def list_models(self) -> dict[str, Any]:
         return await self._request("GET", "/api/tags")

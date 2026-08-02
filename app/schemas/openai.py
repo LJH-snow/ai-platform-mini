@@ -35,3 +35,22 @@ class OpenAIChatResponse(BaseModel):
     model: str
     choices: list[OpenAIChoice]
     usage: OpenAIUsage = Field(default_factory=OpenAIUsage)
+
+
+class OpenAIStreamDelta(BaseModel):
+    role: str | None = None
+    content: str | None = None
+
+
+class OpenAIStreamChoice(BaseModel):
+    index: int
+    delta: OpenAIStreamDelta
+    finish_reason: str | None = None
+
+
+class OpenAIStreamChunk(BaseModel):
+    id: str
+    object: str = "chat.completion.chunk"
+    created: int
+    model: str
+    choices: list[OpenAIStreamChoice]

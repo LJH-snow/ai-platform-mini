@@ -1,8 +1,7 @@
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
-
-from fastapi import HTTPException, status
 
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.schemas.openai import (
@@ -10,6 +9,9 @@ from app.schemas.openai import (
     OpenAIChatRequest,
     OpenAIChatResponse,
     OpenAIChoice,
+    OpenAIStreamChoice,
+    OpenAIStreamChunk,
+    OpenAIStreamDelta,
 )
 from app.services.chat_service import ChatService, get_chat_service
 
@@ -19,15 +21,52 @@ class OpenAIService:
         self._chat_service = chat_service
 
     async def chat_completions(self, request: OpenAIChatRequest) -> OpenAIChatResponse:
-        if request.stream:
-            raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail="Streaming is not yet supported. Set stream=false.",
-            )
-
         chat_request = self._to_chat_request(request)
         chat_response = await self._chat_service.chat(chat_request)
         return self._to_openai_response(chat_response)
+
+    async def chat_completions_stream(
+        self, request: OpenAIChatRequest
+    ) -> AsyncIterator[str]:
+        chat_request = self._to_chat_request(request)
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        created = int(time.time())
+
+        first_chunk = OpenAIStreamChunk(
+            id=completion_id,
+            created=created,
+            model=request.model,
+            choices=[
+                OpenAIStreamChoice(
+                    index=0,
+                    delta=OpenAIStreamDelta(role="assistant"),
+                )
+            ],
+        )
+        yield f"data: {first_chunk.model_dump_json()}\n\n"
+
+        async for result in self._chat_service.chat_stream(chat_request):
+            delta = OpenAIStreamDelta(content=result.content)
+            finish_reason = result.done_reason if result.done else None
+
+            chunk = OpenAIStreamChunk(
+                id=completion_id,
+                created=created,
+                model=result.model,
+                choices=[
+                    OpenAIStreamChoice(
+                        index=0,
+                        delta=delta,
+                        finish_reason=finish_reason,
+                    )
+                ],
+            )
+            yield f"data: {chunk.model_dump_json()}\n\n"
+
+            if result.done:
+                break
+
+        yield "data: [DONE]\n\n"
 
     def _to_chat_request(self, request: OpenAIChatRequest) -> ChatRequest:
         last_message = request.messages[-1]

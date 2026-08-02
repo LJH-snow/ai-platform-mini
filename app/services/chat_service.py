@@ -1,10 +1,12 @@
 import logging
+from collections.abc import AsyncIterator
+from typing import cast
 
 from app.exceptions.ollama import OllamaServiceError
 from app.providers.base import LLMProvider
 from app.providers.factory import get_llm_provider
 from app.providers.results import ProviderChatResult
-from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
+from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse, ChatRole
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,19 @@ class ChatService:
             done=result.done,
             done_reason=result.done_reason,
         )
+
+    async def chat_stream(
+        self, request: ChatRequest
+    ) -> AsyncIterator[ProviderChatResult]:
+        messages = self._build_messages(request)
+        payload = {
+            "model": request.model or self._provider.default_model,
+            "messages": messages,
+        }
+        async for chunk in self._provider.chat_stream(payload):
+            result = self._parse_stream_chunk(chunk)
+            if result is not None:
+                yield result
 
     def _build_messages(self, request: ChatRequest) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
@@ -78,6 +93,36 @@ class ChatService:
             content=content,
             done=done,
             done_reason=done_reason,
+        )
+
+    def _parse_stream_chunk(self, data: dict[str, object]) -> ProviderChatResult | None:
+        model = data.get("model")
+        message = data.get("message")
+        done = data.get("done")
+        created_at = data.get("created_at")
+        done_reason = data.get("done_reason")
+
+        if not isinstance(model, str) or not isinstance(done, bool):
+            return None
+        if not isinstance(message, dict):
+            return None
+
+        role = message.get("role")
+        content = message.get("content")
+
+        if not isinstance(role, str) or not isinstance(content, str):
+            return None
+
+        safe_role: ChatRole = (
+            cast(ChatRole, role) if role in _VALID_ROLES else "assistant"
+        )
+        return ProviderChatResult(
+            model=model,
+            created_at=created_at if isinstance(created_at, str) else None,
+            role=safe_role,
+            content=content,
+            done=done,
+            done_reason=done_reason if isinstance(done_reason, str) else None,
         )
 
 

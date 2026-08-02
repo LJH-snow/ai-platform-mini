@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import Any
 
 
@@ -16,6 +17,30 @@ class MockProvider:
             "message": {
                 "role": "assistant",
                 "content": "Hello from Mock Provider",
+            },
+            "done": True,
+            "done_reason": "stop",
+        }
+
+    async def chat_stream(
+        self, payload: dict[str, Any]
+    ) -> AsyncIterator[dict[str, Any]]:
+        for token in ["Hello ", "from ", "Mock ", "Provider"]:
+            yield {
+                "model": payload.get("model", self._default_model),
+                "created_at": "2026-08-02T00:00:00Z",
+                "message": {
+                    "role": "assistant",
+                    "content": token,
+                },
+                "done": False,
+            }
+        yield {
+            "model": payload.get("model", self._default_model),
+            "created_at": "2026-08-02T00:00:00Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
             },
             "done": True,
             "done_reason": "stop",
