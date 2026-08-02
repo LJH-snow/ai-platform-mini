@@ -72,6 +72,23 @@ Ollama API
 
 - **Pydantic schemas** (`app/schemas/`) — typed request/response, no raw dicts
 - **Service layer** — Router never calls Ollama directly; swap provider by changing only the service
+- **Settings** (`app/core/settings.py`) — pydantic-settings reads `.env`, never hardcode configs
+- **Logging** (`app/core/logging.py`) — structured request logs with method, path, status, latency
+
+## Configuration
+
+Copy `.env.example` to `.env` and adjust:
+
+```
+APP_NAME=AI Platform Mini
+DEBUG=false
+LOG_LEVEL=INFO
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_DEFAULT_MODEL=qwen3:4b
+OLLAMA_TIMEOUT_SECONDS=60
+```
+
+No code changes needed when switching environments or models.
 
 ## Sprint log
 
@@ -83,3 +100,10 @@ Ollama API
 - API versioned under `/api/v1`
 - Full test suite (6 tests) + ruff + mypy green
 - Code Review flow established; deferred optimizations documented in AGENTS.md
+
+### Sprint 1 (Day 4)
+
+- Configuration management: `config.py` → `settings.py` with pydantic-settings + `.env`
+- Structured logging: `RequestLoggingMiddleware` + `setup_logging()` in core layer
+- `@lru_cache` on `get_settings()` to avoid re-reading `.env` per request
+- `.env.example` committed; `.env` gitignored for secret safety

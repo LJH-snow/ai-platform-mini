@@ -2,7 +2,7 @@ from typing import Any
 
 import httpx
 
-from app.core.config import get_settings
+from app.core.settings import get_settings
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 
 _VALID_ROLES = {"system", "user", "assistant"}
