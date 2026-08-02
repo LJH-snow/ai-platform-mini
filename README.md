@@ -35,7 +35,7 @@ pytest
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | Health check |
-| POST | `/v1/chat/completions` | OpenAI-compatible chat completions |
+| POST | `/v1/chat/completions` | OpenAI-compatible chat completions (supports SSE streaming) |
 | GET | `/api/v1/models` | List available LLM models |
 | POST | `/api/v1/chat` | Generate a chat completion using the configured LLM provider |
 
@@ -65,25 +65,27 @@ pytest
 ## Architecture
 
 ```
-              Client
-                 │
-                 ▼
-       RequestIdMiddleware
-                 │
-                 ▼
-      LoggingMiddleware
-                 │
-                 ▼
-          FastAPI Router
-                 │
-                 ▼
-          Service Layer
-                 │
-                 ▼
-          Ollama Provider
-                 │
-                 ▼
-          Ollama Server
+               Client
+                  │
+                  ▼
+        RequestIdMiddleware
+                  │
+                  ▼
+       LoggingMiddleware
+                  │
+                  ▼
+           FastAPI Router
+                  │
+                  ▼
+           Service Layer
+                  │
+                  ▼
+         LLMProvider Protocol
+             ┌────┴────┐
+        OllamaProvider  MockProvider
+             │
+             ▼
+         Ollama Server
 ```
 
 ### Directory structure
@@ -92,7 +94,9 @@ pytest
 app/
 ├── api/            # Router layer
 ├── core/           # Infrastructure (settings, logging, exceptions)
+├── exceptions/     # Provider-specific exceptions
 ├── middleware/     # Request ID
+├── providers/      # LLM Provider layer (Protocol + implementations)
 ├── schemas/        # Pydantic request/response models
 ├── services/       # Business logic
 └── main.py
@@ -182,3 +186,13 @@ No code changes needed when switching environments or models.
 - `model` in response uses actual provider model (not request model name)
 - `created` parsed from Ollama `created_at` ISO8601 timestamp
 - `stream=true` returns 501 (Streaming support coming in Day 5)
+
+### Sprint 2 (Day 5)
+
+- OpenAI-compatible streaming (SSE): `POST /v1/chat/completions?stream=true`
+- Provider layer: OllamaProvider.chat_stream() yielding NDJSON chunks, MockProvider.chat_stream() yielding tokens
+- ChatService.chat_stream(): async generator converting Provider chunks → ProviderChatResult
+- OpenAIService.chat_completions_stream(): ProviderChatResult → OpenAI SSE format (role chunk → content chunks → [DONE])
+- Stream chunk schemas: OpenAIStreamDelta, OpenAIStreamChoice, OpenAIStreamChunk
+- Router: stream=true returns StreamingResponse with text/event-stream
+- _parse_stream_chunk: lenient parsing (invalid chunks skipped with None), distinct from strict _parse_chat_response
