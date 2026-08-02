@@ -34,7 +34,8 @@ pytest
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/health` | Liveness probe |
+| GET | `/api/v1/ready` | Readiness probe (checks downstream) |
 | POST | `/v1/chat/completions` | OpenAI-compatible chat completions (supports SSE streaming) |
 | GET | `/api/v1/models` | List available LLM models |
 | POST | `/api/v1/chat` | Generate a chat completion using the configured LLM provider |
@@ -119,6 +120,7 @@ Copy `.env.example` to `.env` and adjust:
 APP_NAME=AI Platform Mini
 DEBUG=false
 LOG_LEVEL=INFO
+LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_DEFAULT_MODEL=qwen3:4b
 OLLAMA_TIMEOUT_SECONDS=60
@@ -196,3 +198,19 @@ No code changes needed when switching environments or models.
 - Stream chunk schemas: OpenAIStreamDelta, OpenAIStreamChoice, OpenAIStreamChunk
 - Router: stream=true returns StreamingResponse with text/event-stream
 - _parse_stream_chunk: lenient parsing (invalid chunks skipped with None), distinct from strict _parse_chat_response
+
+### Sprint 2 (Day 6)
+
+- Dependency Injection refactor: FastAPI `Depends()` manages Service/Provider lifecycle
+- Provider Container (`app/core/container.py`): `provide_llm_provider()` with `@lru_cache` singleton
+- Provider Factory: `create_llm_provider()` with clear semantics, unsupported provider raises ValueError
+- ChatService/ModelService/OpenAIService: factory functions use `Depends(provide_llm_provider)` injection
+- OllamaProvider: owns shared `httpx.AsyncClient` (connection reuse), `close()` for graceful shutdown
+- FastAPI lifespan: calls `provider.close()` on shutdown
+- LLMProvider Protocol: added `close()` method
+- Readiness probe: `GET /api/v1/ready` — checks downstream availability, returns 503 on failure
+- Bugfix: temperature/max_tokens now passed through ChatRequest → Ollama options (`num_predict`)
+- Bugfix: stream first chunk uses `result.model` (actual provider model, not request model)
+- Bugfix: OllamaProvider stream catches `httpx.HTTPStatusError`
+- Bugfix: SSE response includes `Cache-Control: no-cache` and `Connection: keep-alive`
+- Bugfix: `OpenAIChatRequest.model` defaults to `None` (provider decides default model)
