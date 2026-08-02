@@ -107,3 +107,12 @@ No code changes needed when switching environments or models.
 - Structured logging: `RequestLoggingMiddleware` + `setup_logging()` in core layer
 - `@lru_cache` on `get_settings()` to avoid re-reading `.env` per request
 - `.env.example` committed; `.env` gitignored for secret safety
+
+### Sprint 1 (Day 5)
+
+- Global exception handlers: `register_exception_handlers()` with `@app.exception_handler`
+- Standard error response: `ErrorCode` (StrEnum) + `ErrorResponse` (Pydantic) in `schemas/error.py`
+- Request ID middleware: `X-Request-ID` header support, auto-generates 8-char ID
+- Router simplified: removed try/except, exceptions handled globally
+- Logging middleware: 500 errors also logged with traceback via try/except/raise
+- Middleware order verified: RequestId → Logging → Router

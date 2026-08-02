@@ -5,6 +5,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
+logger = logging.getLogger(__name__)
+
 
 def setup_logging(log_level: str) -> None:
     logging.basicConfig(
@@ -14,17 +16,22 @@ def setup_logging(log_level: str) -> None:
     )
 
 
-logger = logging.getLogger("app")
-
-
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
         start = time.perf_counter()
-
-        response = await call_next(request)
-
+        try:
+            response = await call_next(request)
+        except Exception:
+            latency = time.perf_counter() - start
+            logger.exception(
+                "%s %s status=500 latency=%.3fs",
+                request.method,
+                request.url.path,
+                latency,
+            )
+            raise
         latency = time.perf_counter() - start
         logger.info(
             "%s %s status=%d latency=%.3fs",
@@ -33,5 +40,4 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response.status_code,
             latency,
         )
-
         return response

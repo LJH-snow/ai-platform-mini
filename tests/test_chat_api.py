@@ -66,9 +66,10 @@ def test_chat_endpoint_maps_ollama_errors_to_bad_gateway() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 502
-    assert response.json() == {
-        "detail": "Unable to reach Ollama at http://localhost:11434."
-    }
+    body = response.json()
+    assert body["code"] == "OLLAMA_ERROR"
+    assert body["message"] == "Unable to reach Ollama at http://localhost:11434."
+    assert "request_id" in body
 
 
 def test_chat_endpoint_maps_missing_model_to_not_found() -> None:
@@ -83,4 +84,7 @@ def test_chat_endpoint_maps_missing_model_to_not_found() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "model 'llama3.2' not found"}
+    body = response.json()
+    assert body["code"] == "MODEL_NOT_FOUND"
+    assert body["message"] == "model 'llama3.2' not found"
+    assert "request_id" in body
