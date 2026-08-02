@@ -10,10 +10,14 @@ from app.services.ollama_service import (
     get_ollama_service,
 )
 
-router = APIRouter(prefix="/api", tags=["chat"])
+router = APIRouter(prefix="/api/v1", tags=["chat"])
 
 
-@router.post("/chat", response_model=ChatResponse, summary="Chat with Ollama")
+@router.post(
+    "/chat",
+    response_model=ChatResponse,
+    summary="Generate a chat completion using the configured LLM provider",
+)
 async def create_chat_completion(
     request: ChatRequest,
     service: Annotated[OllamaService, Depends(get_ollama_service)],

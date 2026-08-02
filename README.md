@@ -8,6 +8,7 @@ Minimal FastAPI scaffold for an AI platform backend.
 - Style: follow PEP 8 and keep formatting/linting green with Ruff
 - Type hints: add type hints early; all new or edited production code should be annotated
 - Sprint rule: every Sprint must end with a runnable app and passing checks
+- Code Review: every code change goes through user review before moving to the next feature
 - Git workflow: push to GitHub from day one with small, meaningful commits
 
 ## Quick start
@@ -29,6 +30,56 @@ mypy app tests
 pytest
 ```
 
-## Health check
+## API
 
-After starting the app, open `http://127.0.0.1:8000/api/health`.
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/health` | Health check |
+| POST | `/api/v1/chat` | Generate a chat completion using the configured LLM provider |
+
+### Chat request example
+
+```json
+{
+  "message": "Hello",
+  "model": null,
+  "system_prompt": null,
+  "history": []
+}
+```
+
+### Chat response example
+
+```json
+{
+  "model": "qwen3:4b",
+  "created_at": "2026-08-02T00:00:00Z",
+  "message": {"role": "assistant", "content": "Hi there!"},
+  "done": true,
+  "done_reason": "stop"
+}
+```
+
+## Architecture
+
+```
+Router (app/api/)
+   ↓ Depends
+Service (app/services/)
+   ↓ httpx
+Ollama API
+```
+
+- **Pydantic schemas** (`app/schemas/`) — typed request/response, no raw dicts
+- **Service layer** — Router never calls Ollama directly; swap provider by changing only the service
+
+## Sprint log
+
+### Sprint 1 (Day 1–3)
+
+- FastAPI scaffold with health check and Ollama chat endpoint
+- Pydantic schemas (`ChatRequest`, `ChatResponse`, `ChatMessage`)
+- Service layer (`OllamaService`) with dependency injection via `Depends`
+- API versioned under `/api/v1`
+- Full test suite (6 tests) + ruff + mypy green
+- Code Review flow established; deferred optimizations documented in AGENTS.md

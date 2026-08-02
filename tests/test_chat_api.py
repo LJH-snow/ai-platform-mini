@@ -38,7 +38,7 @@ def test_chat_endpoint_returns_model_reply() -> None:
 
     try:
         response = client.post(
-            "/api/chat",
+            "/api/v1/chat",
             json={"message": "Hello", "history": [{"role": "user", "content": "Hi"}]},
         )
     finally:
@@ -61,7 +61,7 @@ def test_chat_endpoint_maps_ollama_errors_to_bad_gateway() -> None:
     app.dependency_overrides[get_ollama_service] = override_service
 
     try:
-        response = client.post("/api/chat", json={"message": "Hello"})
+        response = client.post("/api/v1/chat", json={"message": "Hello"})
     finally:
         app.dependency_overrides.clear()
 
@@ -78,7 +78,7 @@ def test_chat_endpoint_maps_missing_model_to_not_found() -> None:
     app.dependency_overrides[get_ollama_service] = override_service
 
     try:
-        response = client.post("/api/chat", json={"message": "Hello"})
+        response = client.post("/api/v1/chat", json={"message": "Hello"})
     finally:
         app.dependency_overrides.clear()
 

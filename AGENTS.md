@@ -30,6 +30,39 @@
   - `pytest`
 - The application must still start with `uvicorn app.main:app --reload`.
 
+## Code Review Flow (IMPORTANT)
+
+After writing or modifying any code, do NOT proceed to the next feature automatically. Instead, follow this flow:
+
+1. GLM writes/modifies code.
+2. Run the project to verify it works (`ruff format --check .`, `ruff check .`, `mypy app tests`, `pytest`).
+3. Present the changed code to the user for **Code Review** before moving on.
+4. Wait for the user's feedback on:
+   - Any patterns not recommended in enterprise projects.
+   - Architecture issues.
+   - Hidden bugs.
+   - Optimization opportunities.
+5. Apply fixes based on the user's review feedback, then repeat from step 2 if needed.
+6. Only after the user approves, proceed to the next task.
+
+This ensures the final project is not just runnable, but a Code-Reviewed, enterprise-grade codebase.
+
+## Sprint Completion Checklist
+
+At the end of every Sprint, complete these three things:
+
+1. **Git Commit** — Stage and commit with a conventional commit message (e.g. `feat: integrate Ollama chat endpoint`).
+2. **Update README** — Document what was added or changed in this Sprint.
+3. **Learning Summary** — Write a brief summary (≤5 sentences): What was learned? Why this design? What problems arose? How were they solved?
+
+## Deferred Optimizations
+
+These improvements were identified during Code Review and will be implemented in future Sprints:
+
+- **Global exception handlers** — Move `try/except` from Router to `app/core/exception_handlers.py` using `@app.exception_handler(...)` (Sprint 2+)
+- **Router logging** — Add structured request/response logging with `logging` module, not `print()` (Day 4)
+- **Pydantic Settings** — Upgrade `config.py` to `settings.py` using `pydantic-settings` with `.env` support (Day 4)
+
 ## Git and GitHub
 
 - Push to GitHub from day one to preserve a full development history.
