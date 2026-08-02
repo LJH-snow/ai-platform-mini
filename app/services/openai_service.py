@@ -76,7 +76,7 @@ class OpenAIService:
             fallback_chunk = OpenAIStreamChunk(
                 id=completion_id,
                 created=created,
-                model=chat_request.model or "",
+                model=self._chat_service.default_model,
                 choices=[
                     OpenAIStreamChoice(
                         index=0,

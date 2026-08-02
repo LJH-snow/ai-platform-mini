@@ -19,6 +19,10 @@ class ChatService:
     def __init__(self, provider: LLMProvider) -> None:
         self._provider = provider
 
+    @property
+    def default_model(self) -> str:
+        return self._provider.default_model
+
     async def chat(self, request: ChatRequest) -> ChatResponse:
         messages = self._build_messages(request)
         payload: dict[str, object] = {

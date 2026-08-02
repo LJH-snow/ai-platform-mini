@@ -21,6 +21,14 @@ pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 ```
 
+## Docker
+
+```bash
+docker compose up
+```
+
+This starts the app on `:8000` and Ollama on `:11434`.
+
 ## Quality gate
 
 ```bash
@@ -214,3 +222,19 @@ No code changes needed when switching environments or models.
 - Bugfix: OllamaProvider stream catches `httpx.HTTPStatusError`
 - Bugfix: SSE response includes `Cache-Control: no-cache` and `Connection: keep-alive`
 - Bugfix: `OpenAIChatRequest.model` defaults to `None` (provider decides default model)
+
+### Sprint 2 (Day 7)
+
+- Test suite: 25 tests covering ChatService, OpenAIService, Provider Factory, Exception Handlers, and API endpoints
+- Async tests with pytest-asyncio (`asyncio_mode=auto`)
+- MockProvider-based integration tests (no Ollama dependency)
+- Provider factory tests: mock/ollama switch, unsupported provider ValueError, singleton guarantee
+- Exception handler tests: ProviderUnavailable→502, ProviderError→502, ModelNotFound→404, validation→422
+- Parameter validation: temperature `ge=0, le=2`, max_tokens `gt=0, le=32768`
+- Exception hierarchy refactor: `AppError → ProviderError → ProviderUnavailableError/ModelNotFoundError/ProviderRequestError`
+- Ollama exceptions inherit Provider base classes (multi-inheritance for catchability)
+- ErrorCode: `OLLAMA_ERROR` → `PROVIDER_ERROR` (provider-agnostic)
+- Stream fallback: if Provider yields zero tokens, emit role+finish chunk before [DONE]
+- ChatService.default_model property for stream fallback model name
+- OpenAPI descriptions on all endpoints
+- Docker: Dockerfile + docker-compose (app + Ollama) + .dockerignore

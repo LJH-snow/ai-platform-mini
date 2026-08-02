@@ -11,7 +11,9 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 @router.post(
     "/chat",
     response_model=ChatResponse,
-    summary="Generate a chat completion using the configured LLM provider",
+    summary="Generate a chat completion",
+    description="Native chat endpoint. "
+    "Uses the configured LLM provider (Ollama by default).",
 )
 async def create_chat_completion(
     request: ChatRequest,

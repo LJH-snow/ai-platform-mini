@@ -13,6 +13,8 @@ router = APIRouter(tags=["openai"])
     "/v1/chat/completions",
     response_model=None,
     summary="OpenAI-compatible chat completions endpoint",
+    description="Compatible with the OpenAI Chat Completions API. "
+    "Supports streaming via SSE when `stream=true`.",
 )
 async def create_chat_completions(
     request: OpenAIChatRequest,

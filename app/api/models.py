@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/v1", tags=["models"])
     "/models",
     response_model=ModelsResponse,
     summary="List available LLM models",
+    description="Returns models available on the configured LLM provider.",
 )
 async def list_models(
     service: Annotated[ModelService, Depends(get_model_service)],
