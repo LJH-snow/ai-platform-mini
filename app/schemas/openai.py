@@ -9,7 +9,7 @@ class OpenAIChatMessage(BaseModel):
 
 
 class OpenAIChatRequest(BaseModel):
-    model: str = Field(default="qwen3:4b")
+    model: str | None = None
     messages: list[OpenAIChatMessage] = Field(min_length=1)
     stream: bool = False
     temperature: float | None = None

@@ -1,10 +1,12 @@
 import logging
 from collections.abc import AsyncIterator
-from typing import cast
+from typing import Annotated, cast
 
+from fastapi import Depends
+
+from app.core.container import provide_llm_provider
 from app.exceptions.ollama import OllamaServiceError
 from app.providers.base import LLMProvider
-from app.providers.factory import get_llm_provider
 from app.providers.results import ProviderChatResult
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse, ChatRole
 
@@ -19,11 +21,14 @@ class ChatService:
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         messages = self._build_messages(request)
-        payload = {
+        payload: dict[str, object] = {
             "model": request.model or self._provider.default_model,
             "messages": messages,
             "stream": False,
         }
+        options = self._build_options(request)
+        if options:
+            payload["options"] = options
         data = await self._provider.chat(payload)
         result = self._parse_chat_response(data)
         return ChatResponse(
@@ -38,10 +43,13 @@ class ChatService:
         self, request: ChatRequest
     ) -> AsyncIterator[ProviderChatResult]:
         messages = self._build_messages(request)
-        payload = {
+        payload: dict[str, object] = {
             "model": request.model or self._provider.default_model,
             "messages": messages,
         }
+        options = self._build_options(request)
+        if options:
+            payload["options"] = options
         async for chunk in self._provider.chat_stream(payload):
             result = self._parse_stream_chunk(chunk)
             if result is not None:
@@ -59,6 +67,14 @@ class ChatService:
         )
         messages.append({"role": "user", "content": request.message})
         return messages
+
+    def _build_options(self, request: ChatRequest) -> dict[str, object]:
+        options: dict[str, object] = {}
+        if request.temperature is not None:
+            options["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            options["num_predict"] = request.max_tokens
+        return options
 
     def _parse_chat_response(self, data: dict[str, object]) -> ProviderChatResult:
         model = data.get("model")
@@ -126,5 +142,7 @@ class ChatService:
         )
 
 
-def get_chat_service() -> ChatService:
-    return ChatService(provider=get_llm_provider())
+def get_chat_service(
+    provider: Annotated[LLMProvider, Depends(provide_llm_provider)],
+) -> ChatService:
+    return ChatService(provider)

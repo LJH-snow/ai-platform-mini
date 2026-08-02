@@ -24,6 +24,14 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Existing chat history in chronological order.",
     )
+    temperature: float | None = Field(
+        default=None,
+        description="Optional sampling temperature.",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        description="Optional maximum number of tokens to generate.",
+    )
 
 
 class ChatResponse(BaseModel):

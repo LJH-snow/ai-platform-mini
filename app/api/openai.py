@@ -22,5 +22,9 @@ async def create_chat_completions(
         return StreamingResponse(
             service.chat_completions_stream(request),
             media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
         )
     return await service.chat_completions(request)

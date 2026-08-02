@@ -1,3 +1,4 @@
+import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
@@ -16,16 +17,21 @@ class OllamaProvider:
         base_url: str,
         default_model: str,
         timeout_seconds: float,
-        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._default_model = default_model
         self._timeout_seconds = timeout_seconds
-        self._http_client = http_client
+        self._client = httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=self._timeout_seconds,
+        )
 
     @property
     def default_model(self) -> str:
         return self._default_model
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
     async def chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/api/chat", payload=payload)
@@ -35,42 +41,24 @@ class OllamaProvider:
     ) -> AsyncIterator[dict[str, Any]]:
         stream_payload = {**payload, "stream": True}
         try:
-            if self._http_client is not None:
-                async with self._http_client.stream(
-                    "POST", "/api/chat", json=stream_payload
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
-                        import json
-
-                        try:
-                            data = json.loads(line)
-                        except ValueError:
-                            continue
-                        if isinstance(data, dict):
-                            yield data
-            else:
-                async with httpx.AsyncClient(
-                    base_url=self._base_url,
-                    timeout=self._timeout_seconds,
-                ) as client:
-                    async with client.stream(
-                        "POST", "/api/chat", json=stream_payload
-                    ) as response:
-                        response.raise_for_status()
-                        async for line in response.aiter_lines():
-                            if not line.strip():
-                                continue
-                            import json
-
-                            try:
-                                data = json.loads(line)
-                            except ValueError:
-                                continue
-                            if isinstance(data, dict):
-                                yield data
+            async with self._client.stream(
+                "POST", "/api/chat", json=stream_payload
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(data, dict):
+                        yield data
+        except httpx.HTTPStatusError as exc:
+            raise OllamaServiceError(
+                f"Ollama streaming request failed with status "
+                f"{exc.response.status_code}."
+            ) from exc
         except httpx.RequestError as exc:
             raise OllamaServiceError(
                 f"Unable to reach Ollama at {self._base_url}. "
@@ -88,14 +76,7 @@ class OllamaProvider:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
-            if self._http_client is not None:
-                response = await self._http_client.request(method, path, json=payload)
-            else:
-                async with httpx.AsyncClient(
-                    base_url=self._base_url,
-                    timeout=self._timeout_seconds,
-                ) as client:
-                    response = await client.request(method, path, json=payload)
+            response = await self._client.request(method, path, json=payload)
         except httpx.RequestError as exc:
             raise OllamaServiceError(
                 f"Unable to reach Ollama at {self._base_url}. "

@@ -53,6 +53,9 @@ class MockProvider:
             ]
         }
 
+    async def close(self) -> None:
+        pass
+
 
 def get_mock_provider() -> MockProvider:
     return MockProvider()

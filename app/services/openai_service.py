@@ -2,6 +2,9 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
+from typing import Annotated
+
+from fastapi import Depends
 
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.schemas.openai import (
@@ -32,20 +35,23 @@ class OpenAIService:
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         created = int(time.time())
 
-        first_chunk = OpenAIStreamChunk(
-            id=completion_id,
-            created=created,
-            model=request.model,
-            choices=[
-                OpenAIStreamChoice(
-                    index=0,
-                    delta=OpenAIStreamDelta(role="assistant"),
-                )
-            ],
-        )
-        yield f"data: {first_chunk.model_dump_json()}\n\n"
-
+        first_chunk_sent = False
         async for result in self._chat_service.chat_stream(chat_request):
+            if not first_chunk_sent:
+                role_chunk = OpenAIStreamChunk(
+                    id=completion_id,
+                    created=created,
+                    model=result.model,
+                    choices=[
+                        OpenAIStreamChoice(
+                            index=0,
+                            delta=OpenAIStreamDelta(role="assistant"),
+                        )
+                    ],
+                )
+                yield f"data: {role_chunk.model_dump_json()}\n\n"
+                first_chunk_sent = True
+
             delta = OpenAIStreamDelta(content=result.content)
             finish_reason = result.done_reason if result.done else None
 
@@ -84,6 +90,8 @@ class OpenAIService:
             model=request.model,
             system_prompt=system_prompt,
             history=history,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
         )
 
     def _to_openai_response(self, chat_response: ChatResponse) -> OpenAIChatResponse:
@@ -114,5 +122,7 @@ class OpenAIService:
             return int(time.time())
 
 
-def get_openai_service() -> OpenAIService:
-    return OpenAIService(chat_service=get_chat_service())
+def get_openai_service(
+    chat_service: Annotated[ChatService, Depends(get_chat_service)],
+) -> OpenAIService:
+    return OpenAIService(chat_service)

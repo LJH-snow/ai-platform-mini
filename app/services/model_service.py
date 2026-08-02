@@ -1,8 +1,11 @@
 import logging
+from typing import Annotated
 
+from fastapi import Depends
+
+from app.core.container import provide_llm_provider
 from app.exceptions.ollama import OllamaServiceError
 from app.providers.base import LLMProvider
-from app.providers.factory import get_llm_provider
 from app.providers.results import ProviderModelEntry
 from app.schemas.models import ModelInfo, ModelsResponse
 
@@ -40,5 +43,7 @@ class ModelService:
         return entries
 
 
-def get_model_service() -> ModelService:
-    return ModelService(provider=get_llm_provider())
+def get_model_service(
+    provider: Annotated[LLMProvider, Depends(provide_llm_provider)],
+) -> ModelService:
+    return ModelService(provider)
