@@ -64,8 +64,10 @@ These improvements were identified during Code Review and will be implemented in
 - **dictConfig logging** — Upgrade `basicConfig()` to `logging.config.dictConfig()` for JSON/rotation/file handlers (Sprint 3+)
 - **Secret fields** — Add `openai_api_key` etc. with `.env` only, never committed to Git (Sprint 5+)
 - **Shared HTTP client** — Use a single shared `httpx.AsyncClient` with connection pool instead of creating one per request (Sprint 3+)
-- **Provider layer** — Extract HTTP logic from Service into `providers/` (Sprint 2 Day 2)
-- **Unify _get_json/_post_json** — Refactor into a single `_request(method, path, ...)` method (Sprint 2 Day 2)
+- **Provider layer** — Extract HTTP logic from Service into `providers/` (Done)
+- **Unify _get_json/_post_json** — Refactor into a single `_request(method, path, ...)` method (Done)
+- **Adapter layer** — Extract protocol translation from OpenAIService into `adapters/` (Sprint 3+)
+- **Usage token tracking** — Fill `prompt_tokens`/`completion_tokens` from Ollama `prompt_eval_count`/`eval_count` (Sprint 3+)
 
 ## Git and GitHub
 

@@ -35,6 +35,7 @@ pytest
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | Health check |
+| POST | `/v1/chat/completions` | OpenAI-compatible chat completions |
 | GET | `/api/v1/models` | List available LLM models |
 | POST | `/api/v1/chat` | Generate a chat completion using the configured LLM provider |
 
@@ -172,3 +173,12 @@ No code changes needed when switching environments or models.
 - Add `get_llm_provider()` factory with `LLM_PROVIDER` env switch (ollama/mock)
 - Service layer depends on abstraction (Protocol), not concrete OllamaProvider
 - Dependency Inversion: high-level modules depend on abstractions, not implementations
+
+### Sprint 2 (Day 4)
+
+- OpenAI-compatible API: `POST /v1/chat/completions`
+- Bidirectional protocol translation: OpenAI Request ⇄ ChatRequest ⇄ ChatResponse ⇄ OpenAI Response
+- OpenAIService wraps ChatService — protocol layer separated from business layer
+- `model` in response uses actual provider model (not request model name)
+- `created` parsed from Ollama `created_at` ISO8601 timestamp
+- `stream=true` returns 501 (Streaming support coming in Day 5)
