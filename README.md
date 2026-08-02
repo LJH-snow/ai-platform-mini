@@ -155,3 +155,20 @@ No code changes needed when switching environments or models.
 - `ModelInfo` schema with `object="model"` for future OpenAI compatibility
 - `list_models()` + `_get_json()` in OllamaService
 - Warning log for skipped non-dict model entries
+
+### Sprint 2 (Day 2)
+
+- Extract HTTP logic from Service to Provider Layer (`app/providers/`)
+- OllamaProvider: pure HTTP + error handling, no business logic
+- ChatService/ModelService: own payload construction, response parsing, schema building
+- Add `ProviderChatResult`/`ProviderModelEntry` dataclasses (frozen) replacing magic-string dicts
+- Move exceptions to `app/exceptions/ollama.py`, removing Provider→Service reverse dependency
+- Unify `_request()` method replacing `_get_json/_post_json`
+
+### Sprint 2 (Day 3)
+
+- Add `LLMProvider` Protocol defining Provider interface (chat, list_models, default_model)
+- Add `MockProvider` for architecture validation — zero HTTP, zero Service changes
+- Add `get_llm_provider()` factory with `LLM_PROVIDER` env switch (ollama/mock)
+- Service layer depends on abstraction (Protocol), not concrete OllamaProvider
+- Dependency Inversion: high-level modules depend on abstractions, not implementations
