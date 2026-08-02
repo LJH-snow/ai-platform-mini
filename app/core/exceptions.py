@@ -3,8 +3,8 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from app.exceptions.ollama import OllamaModelNotFoundError, OllamaServiceError
 from app.schemas.error import ErrorCode, ErrorResponse
-from app.services.ollama_service import OllamaModelNotFoundError, OllamaServiceError
 
 logger = logging.getLogger(__name__)
 

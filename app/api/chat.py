@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.ollama_service import OllamaService, get_ollama_service
+from app.services.chat_service import ChatService, get_chat_service
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
@@ -15,6 +15,6 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 )
 async def create_chat_completion(
     request: ChatRequest,
-    service: Annotated[OllamaService, Depends(get_ollama_service)],
+    service: Annotated[ChatService, Depends(get_chat_service)],
 ) -> ChatResponse:
     return await service.chat(request)

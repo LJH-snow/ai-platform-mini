@@ -1,14 +1,14 @@
 from fastapi.testclient import TestClient
 
-from app.api.chat import get_ollama_service
+from app.api.chat import get_chat_service
+from app.exceptions.ollama import OllamaModelNotFoundError, OllamaServiceError
 from app.main import app
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
-from app.services.ollama_service import OllamaModelNotFoundError, OllamaServiceError
 
 client = TestClient(app)
 
 
-class SuccessfulOllamaService:
+class SuccessfulChatService:
     async def chat(self, request: ChatRequest) -> ChatResponse:
         assert request.message == "Hello"
         return ChatResponse(
@@ -20,21 +20,21 @@ class SuccessfulOllamaService:
         )
 
 
-class FailingOllamaService:
+class FailingChatService:
     async def chat(self, request: ChatRequest) -> ChatResponse:
         raise OllamaServiceError("Unable to reach Ollama at http://localhost:11434.")
 
 
-class MissingModelOllamaService:
+class MissingModelChatService:
     async def chat(self, request: ChatRequest) -> ChatResponse:
         raise OllamaModelNotFoundError("model 'llama3.2' not found")
 
 
 def test_chat_endpoint_returns_model_reply() -> None:
-    async def override_service() -> SuccessfulOllamaService:
-        return SuccessfulOllamaService()
+    async def override_service() -> SuccessfulChatService:
+        return SuccessfulChatService()
 
-    app.dependency_overrides[get_ollama_service] = override_service
+    app.dependency_overrides[get_chat_service] = override_service
 
     try:
         response = client.post(
@@ -55,10 +55,10 @@ def test_chat_endpoint_returns_model_reply() -> None:
 
 
 def test_chat_endpoint_maps_ollama_errors_to_bad_gateway() -> None:
-    async def override_service() -> FailingOllamaService:
-        return FailingOllamaService()
+    async def override_service() -> FailingChatService:
+        return FailingChatService()
 
-    app.dependency_overrides[get_ollama_service] = override_service
+    app.dependency_overrides[get_chat_service] = override_service
 
     try:
         response = client.post("/api/v1/chat", json={"message": "Hello"})
@@ -73,10 +73,10 @@ def test_chat_endpoint_maps_ollama_errors_to_bad_gateway() -> None:
 
 
 def test_chat_endpoint_maps_missing_model_to_not_found() -> None:
-    async def override_service() -> MissingModelOllamaService:
-        return MissingModelOllamaService()
+    async def override_service() -> MissingModelChatService:
+        return MissingModelChatService()
 
-    app.dependency_overrides[get_ollama_service] = override_service
+    app.dependency_overrides[get_chat_service] = override_service
 
     try:
         response = client.post("/api/v1/chat", json={"message": "Hello"})
