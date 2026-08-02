@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     ollama_default_model: str = "qwen3:4b"
     ollama_timeout_seconds: float = 60.0
 
+    llm_provider: str = "ollama"
+
 
 @lru_cache
 def get_settings() -> Settings:

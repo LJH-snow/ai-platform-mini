@@ -1,7 +1,8 @@
 import logging
 
 from app.exceptions.ollama import OllamaServiceError
-from app.providers.ollama import OllamaProvider, get_ollama_provider
+from app.providers.base import LLMProvider
+from app.providers.factory import get_llm_provider
 from app.providers.results import ProviderChatResult
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 
@@ -11,7 +12,7 @@ _VALID_ROLES = {"system", "user", "assistant"}
 
 
 class ChatService:
-    def __init__(self, provider: OllamaProvider) -> None:
+    def __init__(self, provider: LLMProvider) -> None:
         self._provider = provider
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
@@ -81,4 +82,4 @@ class ChatService:
 
 
 def get_chat_service() -> ChatService:
-    return ChatService(provider=get_ollama_provider())
+    return ChatService(provider=get_llm_provider())

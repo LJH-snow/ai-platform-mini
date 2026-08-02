@@ -1,7 +1,8 @@
 import logging
 
 from app.exceptions.ollama import OllamaServiceError
-from app.providers.ollama import OllamaProvider, get_ollama_provider
+from app.providers.base import LLMProvider
+from app.providers.factory import get_llm_provider
 from app.providers.results import ProviderModelEntry
 from app.schemas.models import ModelInfo, ModelsResponse
 
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class ModelService:
-    def __init__(self, provider: OllamaProvider) -> None:
+    def __init__(self, provider: LLMProvider) -> None:
         self._provider = provider
 
     async def list_models(self) -> ModelsResponse:
@@ -40,4 +41,4 @@ class ModelService:
 
 
 def get_model_service() -> ModelService:
-    return ModelService(provider=get_ollama_provider())
+    return ModelService(provider=get_llm_provider())
