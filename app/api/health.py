@@ -6,10 +6,11 @@ from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import require_api_key
 from app.auth.models import APIKey
-from app.core.container import provide_llm_provider
+from app.core.container import provide_llm_provider, provide_usage_service
+from app.exceptions.base import ProviderError
 from app.providers.base import LLMProvider
-from app.usage.middleware import get_usage_service
 from app.usage.models import UsageSummary
+from app.usage.service import UsageService
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def readiness_check(
                 "model": provider.default_model,
             },
         )
-    except Exception as exc:
+    except ProviderError as exc:
         logger.warning("Readiness check failed: %s", exc)
         return JSONResponse(
             status_code=503,
@@ -53,5 +54,6 @@ async def readiness_check(
 )
 def get_usage(
     _api_key: Annotated[APIKey, Depends(require_api_key)],
+    usage_service: Annotated[UsageService, Depends(provide_usage_service)],
 ) -> UsageSummary:
-    return get_usage_service().get_summary()
+    return usage_service.get_summary()

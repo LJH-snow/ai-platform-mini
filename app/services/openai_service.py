@@ -6,6 +6,8 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from app.core.container import provide_usage_service
+from app.core.context import RequestContext
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.schemas.openai import (
     OpenAIChatMessage,
@@ -18,26 +20,56 @@ from app.schemas.openai import (
     OpenAIUsage,
 )
 from app.services.chat_service import ChatService, get_chat_service
+from app.usage.collector import UsageCollector
+from app.usage.service import UsageService
 
 
 class OpenAIService:
-    def __init__(self, chat_service: ChatService) -> None:
+    def __init__(
+        self,
+        chat_service: ChatService,
+        usage_collector: UsageCollector,
+    ) -> None:
         self._chat_service = chat_service
+        self._usage_collector = usage_collector
 
-    async def chat_completions(self, request: OpenAIChatRequest) -> OpenAIChatResponse:
+    async def chat_completions(
+        self,
+        request: OpenAIChatRequest,
+        context: RequestContext,
+    ) -> OpenAIChatResponse:
         chat_request = self._to_chat_request(request)
+        start = time.monotonic()
         chat_response = await self._chat_service.chat(chat_request)
+        latency_ms = (time.monotonic() - start) * 1000
+
+        self._usage_collector.record_chat(
+            context=context,
+            response=chat_response,
+            latency_ms=latency_ms,
+        )
+
         return self._to_openai_response(chat_response)
 
     async def chat_completions_stream(
-        self, request: OpenAIChatRequest
+        self,
+        request: OpenAIChatRequest,
+        context: RequestContext,
     ) -> AsyncIterator[str]:
         chat_request = self._to_chat_request(request)
+        model = chat_request.model or self._chat_service.default_model
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         created = int(time.time())
 
+        raw_stream = self._chat_service.chat_stream(chat_request)
+        tracked_stream = self._usage_collector.record_stream(
+            context=context,
+            stream=raw_stream,
+            model=model,
+        )
+
         first_chunk_sent = False
-        async for result in self._chat_service.chat_stream(chat_request):
+        async for result in tracked_stream:
             if not first_chunk_sent:
                 role_chunk = OpenAIStreamChunk(
                     id=completion_id,
@@ -112,8 +144,19 @@ class OpenAIService:
 
     def _to_openai_response(self, chat_response: ChatResponse) -> OpenAIChatResponse:
         created = self._parse_created_at(chat_response.created_at)
-        prompt = chat_response.prompt_tokens or 0
-        completion = chat_response.completion_tokens or 0
+        has_usage = (
+            chat_response.prompt_tokens is not None
+            or chat_response.completion_tokens is not None
+        )
+        usage: OpenAIUsage | None = None
+        if has_usage:
+            prompt = chat_response.prompt_tokens or 0
+            completion = chat_response.completion_tokens or 0
+            usage = OpenAIUsage(
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                total_tokens=prompt + completion,
+            )
         return OpenAIChatResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
             created=created,
@@ -128,11 +171,7 @@ class OpenAIService:
                     finish_reason=chat_response.done_reason or "stop",
                 )
             ],
-            usage=OpenAIUsage(
-                prompt_tokens=prompt,
-                completion_tokens=completion,
-                total_tokens=prompt + completion,
-            ),
+            usage=usage,
         )
 
     def _parse_created_at(self, created_at: str | None) -> int:
@@ -147,5 +186,9 @@ class OpenAIService:
 
 def get_openai_service(
     chat_service: Annotated[ChatService, Depends(get_chat_service)],
+    usage_service: Annotated[UsageService, Depends(provide_usage_service)],
 ) -> OpenAIService:
-    return OpenAIService(chat_service)
+    return OpenAIService(
+        chat_service=chat_service,
+        usage_collector=UsageCollector(usage_service),
+    )

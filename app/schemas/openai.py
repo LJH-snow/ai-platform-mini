@@ -34,7 +34,7 @@ class OpenAIChatResponse(BaseModel):
     created: int
     model: str
     choices: list[OpenAIChoice]
-    usage: OpenAIUsage = Field(default_factory=OpenAIUsage)
+    usage: OpenAIUsage | None = None
 
 
 class OpenAIStreamDelta(BaseModel):

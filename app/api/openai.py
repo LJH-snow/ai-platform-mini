@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 
 from app.auth.dependencies import require_api_key
 from app.auth.models import APIKey
+from app.core.context import RequestContext
 from app.schemas.openai import OpenAIChatRequest, OpenAIChatResponse
 from app.services.openai_service import OpenAIService, get_openai_service
 
@@ -22,13 +23,13 @@ async def create_chat_completions(
     request: OpenAIChatRequest,
     http_request: Request,
     service: Annotated[OpenAIService, Depends(get_openai_service)],
-    api_key: Annotated[APIKey, Depends(require_api_key)],
+    _api_key: Annotated[APIKey, Depends(require_api_key)],
 ) -> OpenAIChatResponse | StreamingResponse:
-    http_request.state.api_key_name = api_key.name
+    context: RequestContext = http_request.state.context
 
     if request.stream:
         return StreamingResponse(
-            service.chat_completions_stream(request),
+            service.chat_completions_stream(request, context=context),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -36,11 +37,4 @@ async def create_chat_completions(
             },
         )
 
-    response = await service.chat_completions(request)
-    http_request.state.usage_data = {
-        "model": response.model,
-        "prompt_tokens": response.usage.prompt_tokens,
-        "completion_tokens": response.usage.completion_tokens,
-        "total_tokens": response.usage.total_tokens,
-    }
-    return response
+    return await service.chat_completions(request, context=context)
