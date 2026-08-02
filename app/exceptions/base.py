@@ -6,6 +6,10 @@ class AuthenticationError(AppError):
     """Raised when authentication fails (invalid or missing API key)."""
 
 
+class RateLimitError(AppError):
+    """Raised when the request rate exceeds the configured limit."""
+
+
 class ProviderError(AppError):
     """Raised when a provider backend cannot satisfy a request."""
 

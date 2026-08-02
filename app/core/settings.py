@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     api_keys: str = ""
     auth_enabled: bool = True
 
+    rate_limit_enabled: bool = True
+    rate_limit_per_minute: int = 60
+
 
 @lru_cache
 def get_settings() -> Settings:
