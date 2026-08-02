@@ -63,17 +63,47 @@ pytest
 ## Architecture
 
 ```
-Router (app/api/)
-   ↓ Depends
-Service (app/services/)
-   ↓ httpx
-Ollama API
+              Client
+                 │
+                 ▼
+       RequestIdMiddleware
+                 │
+                 ▼
+      LoggingMiddleware
+                 │
+                 ▼
+          FastAPI Router
+                 │
+                 ▼
+          Service Layer
+                 │
+                 ▼
+          Ollama Provider
+                 │
+                 ▼
+          Ollama Server
 ```
+
+### Directory structure
+
+```
+app/
+├── api/            # Router layer
+├── core/           # Infrastructure (settings, logging, exceptions)
+├── middleware/     # Request ID
+├── schemas/        # Pydantic request/response models
+├── services/       # Business logic
+└── main.py
+```
+
+### Design principles
 
 - **Pydantic schemas** (`app/schemas/`) — typed request/response, no raw dicts
 - **Service layer** — Router never calls Ollama directly; swap provider by changing only the service
 - **Settings** (`app/core/settings.py`) — pydantic-settings reads `.env`, never hardcode configs
 - **Logging** (`app/core/logging.py`) — structured request logs with method, path, status, latency
+- **Exception handlers** (`app/core/exceptions.py`) — global error handling, no try/except in Router
+- **Middleware** (`app/middleware/`) — request ID tracing, supports client-provided `X-Request-ID`
 
 ## Configuration
 
