@@ -26,10 +26,14 @@ class ChatRequest(BaseModel):
     )
     temperature: float | None = Field(
         default=None,
+        ge=0,
+        le=2,
         description="Optional sampling temperature.",
     )
     max_tokens: int | None = Field(
         default=None,
+        gt=0,
+        le=32768,
         description="Optional maximum number of tokens to generate.",
     )
 

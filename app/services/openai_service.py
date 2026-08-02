@@ -72,6 +72,21 @@ class OpenAIService:
             if result.done:
                 break
 
+        if not first_chunk_sent:
+            fallback_chunk = OpenAIStreamChunk(
+                id=completion_id,
+                created=created,
+                model=chat_request.model or "",
+                choices=[
+                    OpenAIStreamChoice(
+                        index=0,
+                        delta=OpenAIStreamDelta(role="assistant"),
+                        finish_reason="stop",
+                    )
+                ],
+            )
+            yield f"data: {fallback_chunk.model_dump_json()}\n\n"
+
         yield "data: [DONE]\n\n"
 
     def _to_chat_request(self, request: OpenAIChatRequest) -> ChatRequest:

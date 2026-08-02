@@ -12,8 +12,8 @@ class OpenAIChatRequest(BaseModel):
     model: str | None = None
     messages: list[OpenAIChatMessage] = Field(min_length=1)
     stream: bool = False
-    temperature: float | None = None
-    max_tokens: int | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, gt=0, le=32768)
 
 
 class OpenAIChoice(BaseModel):

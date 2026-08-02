@@ -3,16 +3,20 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.exceptions.ollama import OllamaModelNotFoundError, OllamaServiceError
+from app.exceptions.base import (
+    ModelNotFoundError,
+    ProviderError,
+    ProviderUnavailableError,
+)
 from app.schemas.error import ErrorCode, ErrorResponse
 
 logger = logging.getLogger(__name__)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    @app.exception_handler(OllamaModelNotFoundError)
+    @app.exception_handler(ModelNotFoundError)
     async def handle_model_not_found(
-        request: Request, exc: OllamaModelNotFoundError
+        request: Request, exc: ModelNotFoundError
     ) -> JSONResponse:
         request_id = getattr(request.state, "request_id", None)
         logger.warning("request_id=%s model_not_found %s", request_id, exc)
@@ -25,16 +29,31 @@ def register_exception_handlers(app: FastAPI) -> None:
             ).model_dump(),
         )
 
-    @app.exception_handler(OllamaServiceError)
-    async def handle_ollama_error(
-        request: Request, exc: OllamaServiceError
+    @app.exception_handler(ProviderUnavailableError)
+    async def handle_provider_unavailable(
+        request: Request, exc: ProviderUnavailableError
     ) -> JSONResponse:
         request_id = getattr(request.state, "request_id", None)
-        logger.error("request_id=%s ollama_error %s", request_id, exc)
+        logger.error("request_id=%s provider_unavailable %s", request_id, exc)
         return JSONResponse(
             status_code=502,
             content=ErrorResponse(
-                code=ErrorCode.OLLAMA_ERROR,
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(ProviderError)
+    async def handle_provider_error(
+        request: Request, exc: ProviderError
+    ) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", None)
+        logger.error("request_id=%s provider_error %s", request_id, exc)
+        return JSONResponse(
+            status_code=502,
+            content=ErrorResponse(
+                code=ErrorCode.PROVIDER_ERROR,
                 message=str(exc),
                 request_id=request_id,
             ).model_dump(),

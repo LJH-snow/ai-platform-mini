@@ -67,7 +67,7 @@ def test_chat_endpoint_maps_ollama_errors_to_bad_gateway() -> None:
 
     assert response.status_code == 502
     body = response.json()
-    assert body["code"] == "OLLAMA_ERROR"
+    assert body["code"] == "PROVIDER_ERROR"
     assert body["message"] == "Unable to reach Ollama at http://localhost:11434."
     assert "request_id" in body
 
