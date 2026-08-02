@@ -61,10 +61,11 @@ These improvements were identified during Code Review and will be implemented in
 
 - **Request ID in logging** — Add `request_id` to RequestLoggingMiddleware log output (Sprint 2)
 - **Lifespan for init** — Move logging/DB/Redis initialization from `create_app()` to FastAPI `lifespan` context manager (Sprint 3+)
-- **Middleware exception logging** — Wrap `call_next(request)` in try/except so 500 errors are also logged (Done)
-- **Secret fields** — Add `openai_api_key` etc. with `.env` only, never committed to Git (Sprint 5+)
 - **dictConfig logging** — Upgrade `basicConfig()` to `logging.config.dictConfig()` for JSON/rotation/file handlers (Sprint 3+)
-- **Provider layer** — Extract HTTP logic from Service into `providers/` (Sprint 2)
+- **Secret fields** — Add `openai_api_key` etc. with `.env` only, never committed to Git (Sprint 5+)
+- **Shared HTTP client** — Use a single shared `httpx.AsyncClient` with connection pool instead of creating one per request (Sprint 3+)
+- **Provider layer** — Extract HTTP logic from Service into `providers/` (Sprint 2 Day 2)
+- **Unify _get_json/_post_json** — Refactor into a single `_request(method, path, ...)` method (Sprint 2 Day 2)
 
 ## Git and GitHub
 

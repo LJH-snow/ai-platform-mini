@@ -1,9 +1,13 @@
+import logging
 from typing import Any
 
 import httpx
 
 from app.core.settings import get_settings
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
+from app.schemas.models import ModelInfo, ModelsResponse
+
+logger = logging.getLogger(__name__)
 
 _VALID_ROLES = {"system", "user", "assistant"}
 
@@ -38,6 +42,10 @@ class OllamaService:
         data = await self._post_json("/api/chat", payload)
         return self._parse_chat_response(data)
 
+    async def list_models(self) -> ModelsResponse:
+        data = await self._get_json("/api/tags")
+        return self._parse_models_response(data)
+
     def _build_messages(self, request: ChatRequest) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
 
@@ -50,6 +58,42 @@ class OllamaService:
         )
         messages.append({"role": "user", "content": request.message})
         return messages
+
+    async def _get_json(self, path: str) -> dict[str, Any]:
+        try:
+            if self._http_client is not None:
+                response = await self._http_client.get(path)
+            else:
+                async with httpx.AsyncClient(
+                    base_url=self._base_url,
+                    timeout=self._timeout_seconds,
+                ) as client:
+                    response = await client.get(path)
+        except httpx.RequestError as exc:
+            raise OllamaServiceError(
+                f"Unable to reach Ollama at {self._base_url}. "
+                "Check that the Ollama service is running."
+            ) from exc
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise OllamaServiceError("Ollama returned invalid JSON.") from exc
+
+        if not isinstance(data, dict):
+            raise OllamaServiceError("Ollama returned an unexpected response shape.")
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            error_message = data.get("error")
+            if isinstance(error_message, str):
+                raise OllamaServiceError(error_message) from exc
+            raise OllamaServiceError(
+                f"Ollama request failed with status {response.status_code}."
+            ) from exc
+
+        return data
 
     async def _post_json(
         self,
@@ -130,6 +174,23 @@ class OllamaService:
             done=done,
             done_reason=done_reason,
         )
+
+    def _parse_models_response(self, data: dict[str, Any]) -> ModelsResponse:
+        raw_models = data.get("models")
+        if not isinstance(raw_models, list):
+            raise OllamaServiceError(
+                "Ollama response did not include a valid models list."
+            )
+
+        models: list[ModelInfo] = []
+        for item in raw_models:
+            if not isinstance(item, dict):
+                logger.warning("Skipping non-dict model entry in Ollama response.")
+                continue
+            name = item.get("name")
+            if isinstance(name, str):
+                models.append(ModelInfo(id=name))
+        return ModelsResponse(data=models)
 
 
 def get_ollama_service() -> OllamaService:

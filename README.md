@@ -35,6 +35,7 @@ pytest
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/models` | List available LLM models |
 | POST | `/api/v1/chat` | Generate a chat completion using the configured LLM provider |
 
 ### Chat request example
@@ -146,3 +147,11 @@ No code changes needed when switching environments or models.
 - Router simplified: removed try/except, exceptions handled globally
 - Logging middleware: 500 errors also logged with traceback via try/except/raise
 - Middleware order verified: RequestId → Logging → Router
+
+### Sprint 2 (Day 1)
+
+- Models API: `GET /api/v1/models` listing available LLM models
+- Protocol translation: Ollama `/api/tags` → unified `ModelsResponse` format
+- `ModelInfo` schema with `object="model"` for future OpenAI compatibility
+- `list_models()` + `_get_json()` in OllamaService
+- Warning log for skipped non-dict model entries
