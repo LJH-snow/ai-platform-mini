@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.exceptions.base import (
+    APIKeyNotFoundError,
     AuthenticationError,
     AuthorizationError,
     ConflictError,
@@ -112,6 +113,21 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=404,
             content=ErrorResponse(
                 code=ErrorCode.MODEL_NOT_FOUND,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(APIKeyNotFoundError)
+    async def handle_api_key_not_found(
+        request: Request, exc: APIKeyNotFoundError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s api_key_not_found %s", request_id, exc)
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                code=ErrorCode.API_KEY_NOT_FOUND,
                 message=str(exc),
                 request_id=request_id,
             ).model_dump(),

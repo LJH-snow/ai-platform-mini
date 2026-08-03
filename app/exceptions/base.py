@@ -18,6 +18,10 @@ class ValidationError(AppError):
     """Raised when request parameters fail validation."""
 
 
+class APIKeyNotFoundError(AppError):
+    """Raised when an API key cannot be found by the given identifier."""
+
+
 class RateLimitError(AppError):
     """Raised when the request rate exceeds the configured limit."""
 

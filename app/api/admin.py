@@ -7,7 +7,7 @@ from app.auth.dependencies import provide_api_key_service
 from app.auth.models import APIKey, APIKeyMetadata
 from app.auth.service import APIKeyService
 from app.core.context import RequestContext
-from app.exceptions.base import ModelNotFoundError
+from app.exceptions.base import APIKeyNotFoundError
 from app.ratelimit.dependencies import require_admin_rate_limit
 from app.schemas.admin import (
     APIKeyMetadataResponse,
@@ -85,7 +85,7 @@ async def revoke_api_key(
     target_hash = await service.find_hash_by_prefix(key_hash_prefix)
 
     if target_hash is None:
-        raise ModelNotFoundError(f"API key with prefix '{key_hash_prefix}' not found.")
+        raise APIKeyNotFoundError(f"API key with prefix '{key_hash_prefix}' not found.")
 
     revoked = await service.revoke_key(target_hash)
     logger.info(

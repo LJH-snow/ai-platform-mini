@@ -285,7 +285,7 @@ RATE_LIMIT_PER_MINUTE=60
 - `AuthenticationError(AppError)` → 401 + `WWW-Authenticate: Bearer`
 - `ErrorCode.AUTHENTICATION_ERROR`
 - `APIKeyService.validate()` raises `AuthenticationError` (unified exception hierarchy)
-- Tests: no key → 401, wrong key → 401, valid key → pass, no keys configured → anonymous, auth disabled → pass, health/ready bypass
+- Tests: no key → 401, wrong key → 401, valid key → pass, no keys configured → 401 (fail-closed), auth disabled → pass, health/ready bypass
 
 ### Sprint 3 (Day 2)
 
