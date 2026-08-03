@@ -1,6 +1,32 @@
-# ai-platform-mini
+# AI Platform Mini
 
-Minimal FastAPI scaffold for an AI platform backend.
+基于 FastAPI 的轻量级 LLM Gateway，提供 OpenAI-compatible Chat API、Provider
+抽象、API Key 鉴权、限流、Token 配额、Usage 统计和 SSE Streaming。
+
+## Current status
+
+- Current milestone: **Sprint 7.1 completed and approved; Sprint 7 in progress**
+- Version: `0.1.0`
+- Runtime: Python `3.12`–`3.14`（默认 `3.14`）
+- Active providers: Ollama（生产/本地）和 Mock（测试）
+- OpenAIProvider: 已实现并通过审查，ProviderRouter/DI 接入将在 Sprint 7.2–7.4 完成
+- Storage: Memory 或 PostgreSQL
+- Verification baseline（2026-08-03）:
+  - Default suite: `181 passed, 21 skipped`
+  - PostgreSQL integration suite: `160 passed`
+  - Ruff format/lint and mypy: passed
+
+## Core capabilities
+
+- OpenAI-compatible `POST /v1/chat/completions`，支持普通响应与 SSE 流式响应
+- 原生 Chat、Models、Health、Readiness 和 Usage API
+- 可替换的 `LLMProvider` Protocol、共享 HTTP 连接池和统一异常映射
+- 独立 OpenAIProvider，支持 Chat Completions、SSE、模型列表和严格协议校验
+- Bearer API Key 鉴权、Admin Key 管理及 SHA-256 哈希存储
+- 按 API Key 的滑动窗口限流，以及日/月 Token 配额
+- 配额预占、续租、结算和断连释放，支持并发及长时间流式请求
+- PostgreSQL Usage 聚合、API Key 持久化和 Testcontainers 集成测试
+- JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
 
 ## Project rules
 
@@ -13,13 +39,23 @@ Minimal FastAPI scaffold for an AI platform backend.
 
 ## Quick start
 
+前置条件：Python `3.14` 和一个可访问的 Ollama 实例。默认配置使用内存存储，
+无需 PostgreSQL。
+
 ```bash
 python3.14 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements-dev.txt
+cp .env.example .env
 uvicorn app.main:app --reload
 ```
+
+启动后可访问：
+
+- API documentation: `http://localhost:8000/docs`
+- Liveness: `http://localhost:8000/api/v1/health`
+- Readiness: `http://localhost:8000/api/v1/ready`
 
 ## Docker
 
@@ -33,6 +69,7 @@ docker compose up
 
 This starts the app on `:8000`, Ollama on `:11434`, and PostgreSQL on `:5432`.
 Both `INITIAL_API_KEY` and `ADMIN_API_KEYS` must be set (compose will refuse to start otherwise).
+Docker mode automatically uses PostgreSQL-backed authentication and persistence.
 
 ## Quality gate
 
@@ -90,10 +127,14 @@ INTEGRATION_TEST=1 pytest
                Client
                   │
                   ▼
-        ContextMiddleware (request_id + auth)
+        ContextMiddleware (request_id)
                   │
                   ▼
-       LoggingMiddleware
+       RequestLoggingMiddleware
+                  │
+                  ▼
+      Auth / Rate Limit / Quota
+          FastAPI dependencies
                   │
                   ▼
            FastAPI Router
@@ -138,9 +179,10 @@ app/
 - **Pydantic schemas** (`app/schemas/`) — typed request/response, no raw dicts
 - **Service layer** — Router never calls Ollama directly; swap provider by changing only the service
 - **Settings** (`app/core/settings.py`) — pydantic-settings reads `.env`, never hardcode configs
-- **Logging** (`app/core/logging.py`) — structured request logs with method, path, status, latency
+- **Logging** (`app/core/logging.py`) — dictConfig JSON logs with request ID, method, path, status, and latency
 - **Exception handlers** (`app/core/exceptions.py`) — global error handling, no try/except in Router
-- **Middleware** (`app/middleware/`) — request ID tracing, supports client-provided `X-Request-ID`
+- **Middleware** (`app/middleware/`) — full UUID4 request tracing, supports client-provided `X-Request-ID`
+- **Lifespan** (`app/main.py`) — initializes and closes Provider/PostgreSQL resources with startup rollback
 
 ## Configuration
 
@@ -154,6 +196,12 @@ LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_DEFAULT_MODEL=qwen3:4b
 OLLAMA_TIMEOUT_SECONDS=60
+
+# OpenAI Provider (routing integration is planned for Sprint 7.2-7.4)
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_DEFAULT_MODEL=gpt-4.1-mini
+OPENAI_TIMEOUT_SECONDS=60
 
 # Auth
 API_KEYS=sk-test-key-1:development,sk-admin-key-1:admin
@@ -187,8 +235,8 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 - `QUOTA_RESERVATION_RENEWAL_SECONDS`: reservation renewal interval; must be positive and shorter than its TTL
 - Quota uses a reserve/settle pattern: tokens are reserved before an LLM call and settled only after actual usage is persisted. `ReservationLifecycle` renews active reservations for both non-streaming and streaming requests, and releases them if renewal fails or a client disconnects.
 
+> [完整路线图](docs/superpowers/specs/2026-08-03-project-roadmap.md)
 
-> 📋 [完整路线图](docs/superpowers/specs/2026-08-03-project-roadmap.md)
 ## Sprint log
 
 ### Sprint 1 (Day 1–3)
@@ -397,3 +445,16 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 ### Sprint 6 学习总结
 
 防御性类型检查需要考虑 Python 类型继承关系，而不能只依赖直观语义。流式协议中的坏行可以跳过，但诊断日志必须同时控制敏感内容和放大风险。跨实例追踪标识符应按系统生命周期内的累计请求量评估碰撞概率，而不是只看单实例流量。
+
+### Sprint 7.1
+
+- 新增 OpenAIProvider，支持非流式 Chat Completions、SSE 流式响应和模型列表
+- OpenAI API Key 使用 `SecretStr`，共享 `httpx.AsyncClient` 负责连接复用和生命周期关闭
+- 新增 OpenAI 类型化异常，区分网络故障、模型不存在、HTTP 请求错误和协议错误
+- 流式解析使用显式终止状态，严格限制 terminal、usage-only、`[DONE]` 和 EOF 的顺序
+- 所有 usage token 字段统一执行非负整数校验，并按字段合并跨帧部分统计
+- Sprint 7.1 保持现有 DI、路由和公开 API 不变，ProviderRouter 将在 Sprint 7.2 实现
+
+### Sprint 7.1 学习总结
+
+OpenAI SSE 转换不仅需要字段映射，还需要状态机验证终止帧与 usage-only 帧的顺序。统一校验 token 字段可以阻止负数、布尔值和显式 `null` 污染用量与配额统计。部分 usage 必须逐字段合并，避免后续帧的字段缺失清除已有计数。将文本边界和类型化异常收敛在 Provider 层，可以让上游协议错误在进入业务层前被明确识别。
