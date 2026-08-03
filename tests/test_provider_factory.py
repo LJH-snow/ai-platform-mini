@@ -4,6 +4,7 @@ from app.core.container import provide_llm_provider
 from app.core.settings import get_settings
 from app.providers.mock import MockProvider
 from app.providers.ollama import OllamaProvider
+from app.providers.router import ProviderRouter
 
 
 def _clear_caches() -> None:
@@ -21,14 +22,15 @@ def test_factory_returns_mock_when_configured(monkeypatch: pytest.MonkeyPatch) -
     _clear_caches()
 
 
-def test_factory_returns_ollama_when_configured(
+def test_factory_returns_router_with_ollama_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     _clear_caches()
 
     provider = provide_llm_provider()
-    assert isinstance(provider, OllamaProvider)
+    assert isinstance(provider, ProviderRouter)
+    assert isinstance(provider.route_provider("qwen3:4b"), OllamaProvider)
 
     _clear_caches()
 

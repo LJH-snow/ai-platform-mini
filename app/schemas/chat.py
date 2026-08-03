@@ -14,7 +14,12 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, description="Latest user message.")
     model: str | None = Field(
         default=None,
-        description="Optional Ollama model name. Falls back to OLLAMA_MODEL.",
+        description=(
+            "Optional model name. The configured default model always uses the "
+            "default provider; remaining gpt-* models route to OpenAI, and all "
+            "other models use the default provider. Falls back to "
+            "OLLAMA_DEFAULT_MODEL."
+        ),
     )
     system_prompt: str | None = Field(
         default=None,

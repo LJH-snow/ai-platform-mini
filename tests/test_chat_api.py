@@ -12,6 +12,23 @@ client = TestClient(app)
 _AUTH_HEADERS = {"Authorization": "Bearer sk-test-integration"}
 
 
+def test_chat_openapi_documents_default_model_routing_priority() -> None:
+    operation = app.openapi()["paths"]["/api/v1/chat"]["post"]
+    description = operation["description"]
+
+    assert "default model always uses the default provider" in description
+    assert "Remaining gpt-* models route to OpenAI" in description
+
+
+def test_chat_request_model_schema_documents_default_model_priority() -> None:
+    model_schema = ChatRequest.model_json_schema()["properties"]["model"]
+    description = model_schema["description"]
+
+    assert "default model always uses the default provider" in description
+    assert "remaining gpt-* models route to OpenAI" in description
+    assert "OLLAMA_DEFAULT_MODEL" in description
+
+
 def test_generated_request_id_is_full_uuid4_hex() -> None:
     response = client.get("/api/v1/health")
 

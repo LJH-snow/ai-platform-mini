@@ -113,8 +113,9 @@ def route_provider(model: str) -> LLMProvider:
     """根据 model 名选择 Provider。
 
     路由规则（按优先级）：
-    1. model 以 "gpt-" 开头 → OpenAIProvider
-    2. 其他所有 → OllamaProvider（默认）
+    1. model 等于默认模型 → 默认 Provider（当前为 OllamaProvider）
+    2. 其余 model 以 "gpt-" 开头 → OpenAIProvider
+    3. 其他所有 → 默认 Provider（当前为 OllamaProvider）
     """
 ```
 
@@ -294,7 +295,7 @@ pytest                 ✅
 
 ### 8.3 Provider 路由按 model name 而非 API key
 
-模型名路由（`gpt-*` → OpenAI、其他 → Ollama）简单且符合 OpenAI Compatible API 的惯例。基于 API key 的路由（不同用户走不同 Provider）在企业场景中有价值但复杂度高，留给后续 Sprint。
+模型名路由（默认模型优先使用默认 Provider，其余 `gpt-*` → OpenAI、其他 → Ollama）简单且符合 OpenAI Compatible API 的惯例。基于 API key 的路由（不同用户走不同 Provider）在企业场景中有价值但复杂度高，留给后续 Sprint。
 
 ### 8.4 不做 Admin Dashboard 先行
 
