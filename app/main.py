@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
@@ -15,37 +16,46 @@ from app.core.logging import RequestLoggingMiddleware, setup_logging
 from app.core.settings import Settings, get_settings
 from app.middleware.context import ContextMiddleware
 
+if TYPE_CHECKING:
+    from app.providers.base import LLMProvider
+
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-    provider = provide_llm_provider()
+    provider: LLMProvider | None = None
+    db_initialized = False
 
     try:
+        provider = provide_llm_provider()
+
         if settings.auth_storage == "postgres":
             from app.db.init import init_db
 
-            await init_db(settings.database_url, echo=settings.debug)
+            await init_db(settings.database_url.get_secret_value(), echo=settings.debug)
+            db_initialized = True
             logger.info("PostgreSQL connection initialized.")
 
         await _bootstrap_keys(settings)
-
         yield
+    except Exception:
+        logger.exception("Application startup failed")
+        raise
     finally:
-        try:
-            await provider.close()
-        except Exception:
-            logger.exception("Failed to close LLM provider.")
-
-        if settings.auth_storage == "postgres":
-            from app.db.init import dispose_db
-
+        if db_initialized:
             try:
+                from app.db.init import dispose_db
+
                 await dispose_db()
             except Exception:
                 logger.exception("Failed to dispose database engine.")
+        if provider is not None:
+            try:
+                await provider.close()
+            except Exception:
+                logger.exception("Failed to close LLM provider.")
 
 
 async def _bootstrap_keys(settings: Settings) -> None:
@@ -53,11 +63,11 @@ async def _bootstrap_keys(settings: Settings) -> None:
 
     service = provide_api_key_service()
 
-    raw_key = settings.initial_api_key
+    raw_key = settings.initial_api_key.get_secret_value()
     if raw_key:
         await service.ensure_initial_key(raw_key, name="bootstrap-key")
 
-    for entry in _parse_admin_keys(settings.admin_api_keys):
+    for entry in _parse_admin_keys(settings.admin_api_keys.get_secret_value()):
         await service.ensure_initial_key(entry, name=f"admin-{entry[:8]}")
 
 
@@ -69,7 +79,7 @@ def _parse_admin_keys(raw: str) -> list[str]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, log_format=settings.log_format)
 
     app = FastAPI(
         title=settings.app_name,

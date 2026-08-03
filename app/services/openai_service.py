@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.core.container import provide_usage_service
+from app.core.container import provide_usage_collector
 from app.core.context import RequestContext
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.models import QuotaReservation
@@ -25,7 +25,6 @@ from app.schemas.openai import (
 )
 from app.services.chat_service import ChatService, get_chat_service
 from app.usage.collector import UsageCollector
-from app.usage.service import UsageService
 
 
 class OpenAIService:
@@ -202,9 +201,9 @@ class OpenAIService:
 
 def get_openai_service(
     chat_service: Annotated[ChatService, Depends(get_chat_service)],
-    usage_service: Annotated[UsageService, Depends(provide_usage_service)],
+    collector: Annotated[UsageCollector, Depends(provide_usage_collector)],
 ) -> OpenAIService:
     return OpenAIService(
         chat_service=chat_service,
-        usage_collector=UsageCollector(usage_service),
+        usage_collector=collector,
     )

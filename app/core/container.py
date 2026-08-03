@@ -12,6 +12,7 @@ from app.quota.service import QuotaService
 from app.ratelimit.base import RateLimiter
 from app.ratelimit.memory import MemorySlidingWindowLimiter
 from app.ratelimit.service import RateLimitService
+from app.usage.collector import UsageCollector
 from app.usage.memory_repository import InMemoryUsageRepository
 from app.usage.repository import UsageRepository
 from app.usage.service import UsageService
@@ -43,6 +44,11 @@ def provide_usage_repository() -> UsageRepository:
 @lru_cache
 def provide_usage_service() -> UsageService:
     return UsageService(repository=provide_usage_repository())
+
+
+@lru_cache
+def provide_usage_collector() -> UsageCollector:
+    return UsageCollector(provide_usage_service())
 
 
 @lru_cache

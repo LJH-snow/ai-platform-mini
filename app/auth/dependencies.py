@@ -29,14 +29,14 @@ def provide_api_key_service() -> APIKeyService:
         session_factory = create_async_session_factory()
         repository: APIKeyRepository = PostgresAPIKeyRepository(session_factory)
     else:
-        repository = create_in_memory_repository(settings.api_keys)
+        repository = create_in_memory_repository(settings.api_keys.get_secret_value())
     return APIKeyService(repository=repository)
 
 
 @lru_cache
 def _admin_key_hashes() -> frozenset[str]:
     settings = get_settings()
-    raw = settings.admin_api_keys
+    raw = settings.admin_api_keys.get_secret_value()
     if not raw:
         return frozenset()
     return frozenset(hash_api_key(k.strip()) for k in raw.split(",") if k.strip())

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     app_name: str = "AI Platform Mini"
     debug: bool = False
     log_level: str = "INFO"
+    log_format: str = "json"
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_default_model: str = "qwen3:4b"
@@ -22,11 +23,11 @@ class Settings(BaseSettings):
 
     llm_provider: str = "ollama"
 
-    api_keys: str = ""
-    admin_api_keys: str = ""
+    api_keys: SecretStr = SecretStr("")
+    admin_api_keys: SecretStr = SecretStr("")
     auth_enabled: bool = True
     auth_storage: Literal["memory", "postgres"] = "memory"
-    initial_api_key: str = ""
+    initial_api_key: SecretStr = SecretStr("")
 
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 60
@@ -36,7 +37,7 @@ class Settings(BaseSettings):
     quota_reservation_ttl_seconds: int = Field(default=600, gt=0)
     quota_reservation_renewal_seconds: int = Field(default=60, gt=0)
 
-    database_url: str = (
+    database_url: SecretStr = SecretStr(
         "postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform"
     )
 

@@ -1,3 +1,5 @@
+import uuid
+
 from fastapi.testclient import TestClient
 
 from app.api.chat import get_chat_service
@@ -8,6 +10,15 @@ from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 client = TestClient(app)
 
 _AUTH_HEADERS = {"Authorization": "Bearer sk-test-integration"}
+
+
+def test_generated_request_id_is_full_uuid4_hex() -> None:
+    response = client.get("/api/v1/health")
+
+    request_id = response.headers["X-Request-ID"]
+    parsed = uuid.UUID(hex=request_id)
+    assert parsed.version == 4
+    assert parsed.hex == request_id
 
 
 class SuccessfulChatService:

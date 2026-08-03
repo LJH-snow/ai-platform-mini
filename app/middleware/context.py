@@ -11,7 +11,7 @@ class ContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:8]
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
         request.state.context = RequestContext(request_id=request_id)
 
         response = await call_next(request)

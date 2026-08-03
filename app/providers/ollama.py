@@ -40,6 +40,10 @@ class OllamaProvider:
         self, payload: dict[str, Any]
     ) -> AsyncIterator[dict[str, Any]]:
         stream_payload = {**payload, "stream": True}
+        stream_model = stream_payload.get("model")
+        model = stream_model if isinstance(stream_model, str) else self._default_model
+        invalid_json_line_count = 0
+        max_invalid_json_line_length = 0
         try:
             async with self._client.stream(
                 "POST", "/api/chat", json=stream_payload
@@ -51,6 +55,11 @@ class OllamaProvider:
                     try:
                         data = json.loads(line)
                     except ValueError:
+                        invalid_json_line_count += 1
+                        max_invalid_json_line_length = max(
+                            max_invalid_json_line_length,
+                            len(line),
+                        )
                         continue
                     if isinstance(data, dict):
                         yield data
@@ -64,6 +73,16 @@ class OllamaProvider:
                 f"Unable to reach Ollama at {self._base_url}. "
                 "Check that the Ollama service is running."
             ) from exc
+        finally:
+            if invalid_json_line_count:
+                logger.warning(
+                    "ollama_stream_invalid_json",
+                    extra={
+                        "model": model,
+                        "invalid_json_line_count": invalid_json_line_count,
+                        "max_invalid_json_line_length": (max_invalid_json_line_length),
+                    },
+                )
 
     async def list_models(self) -> dict[str, Any]:
         return await self._request("GET", "/api/tags")

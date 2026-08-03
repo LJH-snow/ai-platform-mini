@@ -1,5 +1,6 @@
 import logging
 import secrets
+import time
 from datetime import UTC, datetime
 
 from app.auth.hash import hash_api_key
@@ -52,6 +53,7 @@ class APIKeyService:
         revoked = await self._repository.update_status(key_hash, "revoked")
         if revoked:
             logger.info("api_key_revoked hash=%s", key_hash[:12])
+        self._touch_cache.pop(key_hash, None)
         return revoked
 
     async def list_keys(self) -> list[APIKeyMetadata]:
@@ -95,8 +97,6 @@ class APIKeyService:
         return created
 
     async def _throttled_touch(self, key_hash: str) -> None:
-        import time
-
         now = time.monotonic()
         last = self._touch_cache.get(key_hash, 0)
         if now - last < _THROTTLE_SECONDS:

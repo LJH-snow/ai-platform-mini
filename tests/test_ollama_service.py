@@ -1,8 +1,10 @@
 import asyncio
 import json
+import logging
 from collections.abc import Callable
 
 import httpx
+import pytest
 
 from app.exceptions.ollama import OllamaModelNotFoundError
 from app.providers.ollama import OllamaProvider
@@ -129,3 +131,50 @@ def test_model_service_lists_models() -> None:
         ]
 
     asyncio.run(run_test())
+
+
+def test_chat_stream_summarizes_invalid_json_without_logging_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sensitive_line = "sk-secret-value"
+    long_invalid_line = "x" * 120
+    valid_chunk = {
+        "model": "llama3.2",
+        "message": {"role": "assistant", "content": "hello"},
+        "done": False,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        content = f"{sensitive_line}\n{long_invalid_line}\n{json.dumps(valid_chunk)}\n"
+        return httpx.Response(status_code=200, content=content)
+
+    async def run_test() -> list[dict[str, object]]:
+        provider = _make_provider_with_mock(handler)
+        try:
+            return [
+                chunk
+                async for chunk in provider.chat_stream(
+                    {"model": "llama3.2", "messages": []}
+                )
+            ]
+        finally:
+            await provider.close()
+
+    with caplog.at_level(logging.WARNING, logger="app.providers.ollama"):
+        chunks = asyncio.run(run_test())
+
+    assert chunks == [valid_chunk]
+    warnings = [
+        record
+        for record in caplog.records
+        if record.name == "app.providers.ollama" and record.levelno == logging.WARNING
+    ]
+    assert len(warnings) == 1
+    warning = warnings[0]
+    assert warning.getMessage() == "ollama_stream_invalid_json"
+    assert warning.__dict__["model"] == "llama3.2"
+    assert warning.__dict__["invalid_json_line_count"] == 2
+    assert warning.__dict__["max_invalid_json_line_length"] == 120
+    assert sensitive_line not in caplog.text
+    assert long_invalid_line not in caplog.text

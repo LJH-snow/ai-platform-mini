@@ -154,7 +154,7 @@ class ChatService:
     @staticmethod
     def _extract_int(data: dict[str, object], key: str) -> int | None:
         value = data.get(key)
-        return value if isinstance(value, int) else None
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def get_chat_service(

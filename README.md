@@ -187,6 +187,8 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 - `QUOTA_RESERVATION_RENEWAL_SECONDS`: reservation renewal interval; must be positive and shorter than its TTL
 - Quota uses a reserve/settle pattern: tokens are reserved before an LLM call and settled only after actual usage is persisted. `ReservationLifecycle` renews active reservations for both non-streaming and streaming requests, and releases them if renewal fails or a client disconnects.
 
+
+> 📋 [完整路线图](docs/superpowers/specs/2026-08-03-project-roadmap.md)
 ## Sprint log
 
 ### Sprint 1 (Day 1–3)
@@ -209,7 +211,7 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 
 - Global exception handlers: `register_exception_handlers()` with `@app.exception_handler`
 - Standard error response: `ErrorCode` (StrEnum) + `ErrorResponse` (Pydantic) in `schemas/error.py`
-- Request ID middleware: `X-Request-ID` header support, auto-generates 8-char ID
+- Request ID middleware: `X-Request-ID` header support, auto-generates full UUID4 hex
 - Router simplified: removed try/except, exceptions handled globally
 - Logging middleware: 500 errors also logged with traceback via try/except/raise
 - Middleware order verified: RequestId → Logging → Router
@@ -369,3 +371,29 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 ### Sprint 4 学习总结
 
 配额预留口径必须覆盖输入与最大输出，否则并发请求仍可突破按总 token 计费的限制。累计用量与在途预留应分开存储，但必须共享同一按 API Key 隔离的用量视图。异步生成器可能在 `yield` 后被调用方关闭，因此结算所需状态必须在交出结果前保存。将续租、取消、结算和释放集中在生命周期对象后，所有调用路径可以采用同一一致性规则。并发、事务和流式收尾逻辑需要通过真实 PostgreSQL 与服务层消费测试持续验证。
+
+### Sprint 5
+
+- 结构化日志：`dictConfig` + JSON Formatter，`RequestLogger` adapter 注入 `request_id`、`latency_ms`、`status_code` 为独立字段
+- 敏感信息保护：`api_keys`、`admin_api_keys`、`initial_api_key`、`database_url` 迁移为 `SecretStr`，所有调用点适配 `.get_secret_value()`
+- 生命周期加固：provider 在 try 块内赋值，`db_initialized` flag 守卫关闭顺序，启动失败正确回滚
+- Readiness 多资源检查：provider ping + PostgreSQL `SELECT 1`，返回 `{"status":"ready","checks":{"provider":"ok","database":"ok"}}`
+- 内存泄漏修复：`MemorySlidingWindowLimiter._queues` 旧 key 自然耗尽后删除条目；`APIKeyService._touch_cache` revoke 后清理
+- UsageCollector DI 统一：`provide_usage_collector()` 注入，消除 `chat.py` 中内联 `UsageCollector(usage_service)` 构造
+- `import time` 提升到模块级
+- 测试：新增 3 个 readiness probe 测试（provider OK / provider 失败 / memory 模式无 DB 检查）
+
+### Sprint 5 学习总结
+
+敏感配置使用 `SecretStr` 的代价是调用点需要适配 `.get_secret_value()`，但相比手写 `mask_secret` 函数的"依赖人记得调用"模式，编译器/类型检查器强制保护更可靠。结构化日志的价值不在于 JSON 格式本身，而在于让 `latency_ms`、`status_code` 成为独立可查询字段——这要求在 middleware 中使用 `extra={}` 而非字符串拼接。内存泄漏的修复陷阱在于：简单的 `del` 方案可能因为保留本地引用而导致新请求拿到全新计数器，正确做法是用 `is_new` 标志区分两条路径。
+
+### Sprint 6
+
+- Request ID 使用完整 UUID4 hex，避免大规模跨实例日志聚合中的实际碰撞风险
+- Token usage 解析显式拒绝布尔值，避免 Python `bool` 是 `int` 子类带来的错误计数
+- Ollama 流式响应将非 JSON 行按流汇总为单条 warning，仅记录模型、数量和最大行长度
+- 新增回归测试，覆盖完整 UUID4、公开 token 解析路径、日志限量和敏感内容保护
+
+### Sprint 6 学习总结
+
+防御性类型检查需要考虑 Python 类型继承关系，而不能只依赖直观语义。流式协议中的坏行可以跳过，但诊断日志必须同时控制敏感内容和放大风险。跨实例追踪标识符应按系统生命周期内的累计请求量评估碰撞概率，而不是只看单实例流量。

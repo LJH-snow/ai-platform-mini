@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from app.auth.dependencies import require_api_key
 from app.auth.models import APIKey
 from app.core.container import provide_llm_provider, provide_usage_service
+from app.core.settings import get_settings
 from app.exceptions.base import ProviderError
 from app.providers.base import LLMProvider
 from app.usage.models import UsageSummary
@@ -26,25 +27,47 @@ def health_check() -> dict[str, str]:
 async def readiness_check(
     provider: Annotated[LLMProvider, Depends(provide_llm_provider)],
 ) -> JSONResponse:
+    checks: dict[str, str] = {}
+    healthy = True
+
+    # Provider check
     try:
         await provider.list_models()
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "ready",
-                "provider": type(provider).__name__,
-                "model": provider.default_model,
-            },
-        )
-    except ProviderError as exc:
-        logger.warning("Readiness check failed: %s", exc)
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "not_ready",
-                "reason": str(exc),
-            },
-        )
+        checks["provider"] = "ok"
+    except ProviderError:
+        checks["provider"] = "failed"
+        healthy = False
+
+    # Database check (postgres mode only)
+    settings = get_settings()
+    if settings.auth_storage == "postgres":
+        try:
+            from sqlalchemy import text
+
+            from app.db.init import get_engine
+
+            engine = get_engine()
+            if engine is not None:
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                    await conn.commit()
+                checks["database"] = "ok"
+            else:
+                checks["database"] = "not_initialized"
+                healthy = False
+        except Exception as exc:
+            logger.warning("Database readiness check failed: %s", exc)
+            checks["database"] = "failed"
+            healthy = False
+
+    status_code = 200 if healthy else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "ready" if healthy else "not_ready",
+            "checks": checks,
+        },
+    )
 
 
 @router.get(
