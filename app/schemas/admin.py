@@ -25,3 +25,11 @@ class APIKeyMetadataResponse(BaseModel):
 class RevokeAPIKeyResponse(BaseModel):
     key_hash_prefix: str
     revoked: bool
+
+
+class UsageAggregationResponse(BaseModel):
+    model: str
+    request_count: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int

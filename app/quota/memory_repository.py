@@ -1,0 +1,118 @@
+import logging
+from datetime import UTC, datetime, timedelta
+
+from app.quota.models import ReservationResult
+from app.usage.repository import UsageRepository
+
+logger = logging.getLogger(__name__)
+
+
+class InMemoryQuotaRepository:
+    def __init__(self, usage_repository: UsageRepository) -> None:
+        self._usage_repo = usage_repository
+        self._reservations: dict[str, dict] = {}
+
+    async def create_reservation(
+        self,
+        reservation_id: str,
+        api_key_hash: str,
+        usage_date: str,
+        reserved_tokens: int,
+        daily_limit: int | None,
+        monthly_limit: int | None,
+        reservation_ttl_seconds: int,
+    ) -> ReservationResult:
+        self._purge_expired()
+
+        if daily_limit is not None:
+            daily_used = await self._usage_repo.get_total_tokens_for_key(
+                api_key_hash, usage_date
+            )
+            daily_reserved = await self.get_reserved_tokens_for_key(
+                api_key_hash, usage_date
+            )
+            if daily_used + daily_reserved + reserved_tokens > daily_limit:
+                return ReservationResult.DAILY_LIMIT
+
+        if monthly_limit is not None:
+            monthly_aggs = await self._usage_repo.get_monthly_usage(
+                api_key_hash, usage_date[:7]
+            )
+            monthly_used = sum(a.total_tokens for a in monthly_aggs)
+            monthly_reserved = await self.get_monthly_reserved_tokens_for_key(
+                api_key_hash, usage_date[:7]
+            )
+            if monthly_used + monthly_reserved + reserved_tokens > monthly_limit:
+                return ReservationResult.MONTHLY_LIMIT
+
+        now = datetime.now(UTC)
+        self._reservations[reservation_id] = {
+            "api_key_hash": api_key_hash,
+            "usage_date": usage_date,
+            "reserved_tokens": reserved_tokens,
+            "settled": False,
+            "expires_at": now + timedelta(seconds=reservation_ttl_seconds),
+        }
+        return ReservationResult.CREATED
+
+    async def settle_reservation(self, reservation_id: str) -> None:
+        self._reservations.pop(reservation_id, None)
+
+    async def release_reservation(self, reservation_id: str) -> None:
+        self._reservations.pop(reservation_id, None)
+
+    async def renew_reservation(
+        self, reservation_id: str, reservation_ttl_seconds: int
+    ) -> bool:
+        entry = self._reservations.get(reservation_id)
+        now = datetime.now(UTC)
+        if entry is None or entry["settled"] or entry["expires_at"] <= now:
+            return False
+
+        entry["expires_at"] = now + timedelta(seconds=reservation_ttl_seconds)
+        return True
+
+    async def get_reserved_tokens_for_key(
+        self, api_key_hash: str, usage_date: str
+    ) -> int:
+        now = datetime.now(UTC)
+        total = 0
+        for entry in self._reservations.values():
+            if (
+                entry["api_key_hash"] == api_key_hash
+                and entry["usage_date"] == usage_date
+                and not entry["settled"]
+                and entry["expires_at"] > now
+            ):
+                total += entry["reserved_tokens"]
+        return total
+
+    async def get_monthly_reserved_tokens_for_key(
+        self, api_key_hash: str, year_month: str
+    ) -> int:
+        now = datetime.now(UTC)
+        total = 0
+        for entry in self._reservations.values():
+            if (
+                entry["api_key_hash"] == api_key_hash
+                and entry["usage_date"][:7] == year_month
+                and not entry["settled"]
+                and entry["expires_at"] > now
+            ):
+                total += entry["reserved_tokens"]
+        return total
+
+    async def cleanup_expired(self) -> int:
+        before = len(self._reservations)
+        self._purge_expired()
+        return before - len(self._reservations)
+
+    def _purge_expired(self) -> None:
+        now = datetime.now(UTC)
+        expired_ids = [
+            rid
+            for rid, entry in self._reservations.items()
+            if entry["settled"] or entry["expires_at"] <= now
+        ]
+        for rid in expired_ids:
+            del self._reservations[rid]

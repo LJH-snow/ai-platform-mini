@@ -36,6 +36,8 @@ jobs:
         run: mypy app tests
 
       - name: Run tests
+        env:
+          INTEGRATION_TEST: "1"
         run: pytest
 
   compatibility-312:

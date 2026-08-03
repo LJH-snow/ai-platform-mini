@@ -10,6 +10,17 @@ class UsageRecord:
     total_tokens: int = 0
     latency_ms: float = 0.0
     api_key_name: str | None = None
+    api_key_hash: str | None = None
+    usage_date: str | None = None
+
+
+@dataclass
+class UsageAggregation:
+    model: str
+    request_count: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 @dataclass

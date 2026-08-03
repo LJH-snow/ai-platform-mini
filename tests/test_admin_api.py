@@ -142,3 +142,15 @@ def test_no_admin_configured_returns_403(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_missing_auth_returns_401() -> None:
     response = client.get("/admin/api-keys")
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize("month", ["2026-8", "1-08", "0000-01"])
+def test_monthly_usage_rejects_non_canonical_month(month: str) -> None:
+    response = client.get(
+        "/admin/usage/monthly",
+        params={"key_hash_prefix": hash_api_key(_REGULAR_KEY)[:8], "month": month},
+        headers={"Authorization": f"Bearer {_ADMIN_KEY}"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "VALIDATION_ERROR"

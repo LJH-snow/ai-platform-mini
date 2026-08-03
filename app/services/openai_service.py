@@ -1,6 +1,7 @@
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from datetime import datetime
 from typing import Annotated
 
@@ -8,6 +9,9 @@ from fastapi import Depends
 
 from app.core.container import provide_usage_service
 from app.core.context import RequestContext
+from app.quota.lifecycle import ReservationLifecycle
+from app.quota.models import QuotaReservation
+from app.quota.service import QuotaService
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.schemas.openai import (
     OpenAIChatMessage,
@@ -37,17 +41,20 @@ class OpenAIService:
         self,
         request: OpenAIChatRequest,
         context: RequestContext,
+        reservation: QuotaReservation | None = None,
+        quota_service: QuotaService | None = None,
     ) -> OpenAIChatResponse:
         chat_request = self._to_chat_request(request)
-        start = time.monotonic()
-        chat_response = await self._chat_service.chat(chat_request)
-        latency_ms = (time.monotonic() - start) * 1000
-
-        self._usage_collector.record_chat(
-            context=context,
-            response=chat_response,
-            latency_ms=latency_ms,
-        )
+        async with ReservationLifecycle(reservation, quota_service) as lifecycle:
+            start = time.monotonic()
+            chat_response = await lifecycle.run(self._chat_service.chat(chat_request))
+            latency_ms = (time.monotonic() - start) * 1000
+            await self._usage_collector.record_chat(
+                context=context,
+                response=chat_response,
+                latency_ms=latency_ms,
+            )
+            await lifecycle.settle()
 
         return self._to_openai_response(chat_response)
 
@@ -55,7 +62,9 @@ class OpenAIService:
         self,
         request: OpenAIChatRequest,
         context: RequestContext,
-    ) -> AsyncIterator[str]:
+        reservation: QuotaReservation | None = None,
+        quota_service: QuotaService | None = None,
+    ) -> AsyncGenerator[str, None]:
         chat_request = self._to_chat_request(request)
         model = chat_request.model or self._chat_service.default_model
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -69,41 +78,48 @@ class OpenAIService:
         )
 
         first_chunk_sent = False
-        async for result in tracked_stream:
-            if not first_chunk_sent:
-                role_chunk = OpenAIStreamChunk(
-                    id=completion_id,
-                    created=created,
-                    model=result.model,
-                    choices=[
-                        OpenAIStreamChoice(
-                            index=0,
-                            delta=OpenAIStreamDelta(role="assistant"),
+        async with ReservationLifecycle(reservation, quota_service) as lifecycle:
+            async with aclosing(tracked_stream):
+                while True:
+                    try:
+                        result = await lifecycle.run(anext(tracked_stream))
+                    except StopAsyncIteration:
+                        break
+                    if not first_chunk_sent:
+                        role_chunk = OpenAIStreamChunk(
+                            id=completion_id,
+                            created=created,
+                            model=result.model,
+                            choices=[
+                                OpenAIStreamChoice(
+                                    index=0,
+                                    delta=OpenAIStreamDelta(role="assistant"),
+                                )
+                            ],
                         )
-                    ],
-                )
-                yield f"data: {role_chunk.model_dump_json()}\n\n"
-                first_chunk_sent = True
+                        yield f"data: {role_chunk.model_dump_json()}\n\n"
+                        first_chunk_sent = True
 
-            delta = OpenAIStreamDelta(content=result.content)
-            finish_reason = result.done_reason if result.done else None
+                    delta = OpenAIStreamDelta(content=result.content)
+                    finish_reason = result.done_reason if result.done else None
 
-            chunk = OpenAIStreamChunk(
-                id=completion_id,
-                created=created,
-                model=result.model,
-                choices=[
-                    OpenAIStreamChoice(
-                        index=0,
-                        delta=delta,
-                        finish_reason=finish_reason,
+                    chunk = OpenAIStreamChunk(
+                        id=completion_id,
+                        created=created,
+                        model=result.model,
+                        choices=[
+                            OpenAIStreamChoice(
+                                index=0,
+                                delta=delta,
+                                finish_reason=finish_reason,
+                            )
+                        ],
                     )
-                ],
-            )
-            yield f"data: {chunk.model_dump_json()}\n\n"
+                    yield f"data: {chunk.model_dump_json()}\n\n"
 
-            if result.done:
-                break
+                    if result.done:
+                        break
+            await lifecycle.settle()
 
         if not first_chunk_sent:
             fallback_chunk = OpenAIStreamChunk(

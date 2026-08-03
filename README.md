@@ -41,6 +41,8 @@ ruff format --check .
 ruff check .
 mypy app tests
 pytest
+# Includes PostgreSQL integration tests (Docker required)
+INTEGRATION_TEST=1 pytest
 ```
 
 ## API
@@ -56,6 +58,8 @@ pytest
 | POST | `/admin/api-keys` | Create a new API key (admin only) |
 | GET | `/admin/api-keys` | List all API keys (admin only) |
 | DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only) |
+| GET | `/admin/usage/daily` | Get daily token usage for an API key (admin only) |
+| GET | `/admin/usage/monthly` | Get monthly token usage for an API key (admin only) |
 
 ### Chat request example
 
@@ -121,10 +125,11 @@ app/
 ├── exceptions/     # Provider-specific + domain exceptions
 ├── middleware/     # Context middleware (request_id)
 ├── providers/      # LLM Provider layer (Protocol + implementations)
+├── quota/          # Token quota (reserve/settle, repository, service)
 ├── ratelimit/      # Rate limiting (Protocol + memory impl + dependencies)
 ├── schemas/        # Pydantic request/response models
 ├── services/       # Business logic
-├── usage/          # Token usage tracking
+├── usage/          # Token usage tracking (repository, service, collector)
 └── main.py
 ```
 
@@ -163,6 +168,12 @@ DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform
 # Rate limiting
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_PER_MINUTE=60
+
+# Token quota (0 = disabled)
+QUOTA_DAILY_TOKENS=0
+QUOTA_MONTHLY_TOKENS=0
+QUOTA_RESERVATION_TTL_SECONDS=600
+QUOTA_RESERVATION_RENEWAL_SECONDS=60
 ```
 
 ### Key configuration notes
@@ -171,6 +182,10 @@ RATE_LIMIT_PER_MINUTE=60
 - `ADMIN_API_KEYS` must also be present in `API_KEYS` (or registered via bootstrap)
 - `INITIAL_API_KEY` auto-registers on startup (idempotent, `ON CONFLICT DO NOTHING`)
 - Docker Compose requires both `INITIAL_API_KEY` and `ADMIN_API_KEYS` to be set
+- `QUOTA_DAILY_TOKENS`/`QUOTA_MONTHLY_TOKENS`: set to `0` to disable, must be ≥ 0
+- `QUOTA_RESERVATION_TTL_SECONDS`: lifespan of an active quota reservation; must be positive
+- `QUOTA_RESERVATION_RENEWAL_SECONDS`: reservation renewal interval; must be positive and shorter than its TTL
+- Quota uses a reserve/settle pattern: tokens are reserved before an LLM call and settled only after actual usage is persisted. `ReservationLifecycle` renews active reservations for both non-streaming and streaming requests, and releases them if renewal fails or a client disconnects.
 
 ## Sprint log
 
@@ -324,3 +339,33 @@ RATE_LIMIT_PER_MINUTE=60
 - PostgreSQL integration test suite: create, find, ensure_key idempotency, revoke, prefix query, touch_last_used
 - `testcontainers` integration for real PostgreSQL verification
 - Configuration documentation in `.env.example` and README
+
+### Sprint 4 (Day 1)
+
+- Usage persistence: `UsageRepository` Protocol + `InMemoryUsageRepository` + `PostgresUsageRepository`
+- `DailyUsageTable` with `ON CONFLICT DO UPDATE` upsert (unique constraint on api_key_hash, usage_date, model)
+- `UsageService` refactored to accept `UsageRepository`, all methods now async
+- `UsageCollector.record_chat()` / `record_stream()` now async (await service.record)
+- Token quota: `QuotaConfig` (daily_token_limit, monthly_token_limit, default_reserve_tokens)
+- Independent `quota_reservations` table tracks active reservations separately from persisted `DailyUsageTable` usage
+- `QuotaService.reserve()`: atomic pre-check + token reservation before LLM calls in Chat/OpenAI routes
+- `QuotaService.settle()`: removes a reservation only after actual usage is persisted
+- `QuotaExceededError` with computed `retry_after`: daily → seconds until next UTC day, monthly → seconds until next month
+- Chat/OpenAI routes: Auth → RateLimit → route-level reservation before LLM call
+- `QUOTA_DAILY_TOKENS` / `QUOTA_MONTHLY_TOKENS` settings with `Field(ge=0)` validation
+- InMemory `_daily` cleanup: prunes entries older than 90 days
+- Usage query API: `GET /admin/usage/daily`, `GET /admin/usage/monthly` (admin only)
+
+### Sprint 4 (Day 2)
+
+- Shared `UsageRepository` singleton prevents memory-mode quota from losing persisted usage.
+- PostgreSQL reservation creation uses a same-API-key transaction advisory lock; CI runs its Testcontainers integration suite with `INTEGRATION_TEST=1`.
+- `ReservationLifecycle` renews reservations for native Chat, OpenAI non-streaming, and OpenAI streaming calls; renewal failure cancels the active operation and returns a 503 `QUOTA_UNAVAILABLE` error where an HTTP response is still possible.
+- Streaming usage is persisted before settling; client disconnects and renewal failures explicitly release the reservation.
+- Quota reservations include a conservative prompt-token estimate plus maximum completion tokens, and repositories report the exact daily or monthly limit that rejected a request.
+- Settled reservations are deleted, authenticated usage summaries are isolated by API key, and admin month parameters require canonical `YYYY-MM` values.
+- Request cancellation propagates to the active provider operation, while streaming model and token state is saved before yielding the final provider result.
+
+### Sprint 4 学习总结
+
+配额预留口径必须覆盖输入与最大输出，否则并发请求仍可突破按总 token 计费的限制。累计用量与在途预留应分开存储，但必须共享同一按 API Key 隔离的用量视图。异步生成器可能在 `yield` 后被调用方关闭，因此结算所需状态必须在交出结果前保存。将续租、取消、结算和释放集中在生命周期对象后，所有调用路径可以采用同一一致性规则。并发、事务和流式收尾逻辑需要通过真实 PostgreSQL 与服务层消费测试持续验证。

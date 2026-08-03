@@ -4,8 +4,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response
 
 from app.auth.models import APIKey
-from app.core.container import provide_usage_service
+from app.core.container import provide_quota_service, provide_usage_service
 from app.core.context import RequestContext
+from app.quota.lifecycle import ReservationLifecycle
+from app.quota.models import QuotaReservation
+from app.quota.service import QuotaService
+from app.quota.token_estimator import estimate_prompt_tokens
 from app.ratelimit.dependencies import require_rate_limit
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService, get_chat_service
@@ -29,16 +33,29 @@ async def create_chat_completion(
     service: Annotated[ChatService, Depends(get_chat_service)],
     _api_key: Annotated[APIKey, Depends(require_rate_limit)],
     usage_service: Annotated[UsageService, Depends(provide_usage_service)],
+    quota_service: Annotated[QuotaService, Depends(provide_quota_service)],
 ) -> ChatResponse:
     context: RequestContext = http_request.state.context
-    start = time.monotonic()
-    chat_response = await service.chat(request)
-    latency_ms = (time.monotonic() - start) * 1000
-
-    collector = UsageCollector(usage_service)
-    collector.record_chat(
-        context=context, response=chat_response, latency_ms=latency_ms
+    messages: list[tuple[str, str]] = []
+    if request.system_prompt:
+        messages.append(("system", request.system_prompt))
+    messages.extend((message.role, message.content) for message in request.history)
+    messages.append(("user", request.message))
+    reservation: QuotaReservation | None = await quota_service.reserve(
+        _api_key.key,
+        max_tokens=request.max_tokens,
+        prompt_tokens=estimate_prompt_tokens(messages),
     )
+
+    async with ReservationLifecycle(reservation, quota_service) as lifecycle:
+        start = time.monotonic()
+        chat_response = await lifecycle.run(service.chat(request))
+        latency_ms = (time.monotonic() - start) * 1000
+        collector = UsageCollector(usage_service)
+        await collector.record_chat(
+            context=context, response=chat_response, latency_ms=latency_ms
+        )
+        await lifecycle.settle()
 
     remaining = getattr(http_request.state, "rate_limit_remaining", None)
     limit = getattr(http_request.state, "rate_limit_limit", None)

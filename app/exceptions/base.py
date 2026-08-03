@@ -38,5 +38,17 @@ class ModelNotFoundError(ProviderError):
     """Raised when the requested model does not exist on the provider."""
 
 
+class QuotaExceededError(AppError):
+    """Raised when a token quota has been exceeded."""
+
+    def __init__(self, message: str, retry_after: int = 86400) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class QuotaReservationError(AppError):
+    """Raised when an active quota reservation cannot be maintained."""
+
+
 class ProviderRequestError(ProviderError):
     """Raised when the provider returns an unexpected error response."""

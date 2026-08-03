@@ -1,19 +1,22 @@
 import logging
-from collections import deque
+from datetime import UTC, datetime
 
-from app.usage.models import UsageRecord, UsageSummary
+from app.usage.models import UsageAggregation, UsageRecord, UsageSummary
+from app.usage.repository import UsageRepository
 
 logger = logging.getLogger(__name__)
 
-_MAX_RECORDS = 1000
-
 
 class UsageService:
-    def __init__(self) -> None:
-        self._records: deque[UsageRecord] = deque(maxlen=_MAX_RECORDS)
+    def __init__(self, repository: UsageRepository) -> None:
+        self._repository = repository
 
-    def record(self, usage: UsageRecord) -> None:
-        self._records.append(usage)
+    async def record(self, usage: UsageRecord) -> None:
+        if usage.usage_date is None:
+            usage.usage_date = datetime.now(UTC).strftime("%Y-%m-%d")
+        if usage.api_key_hash is None:
+            usage.api_key_hash = ""
+        await self._repository.record_usage(usage)
         logger.info(
             "request_id=%s model=%s prompt=%d completion=%d total=%d latency=%.1fms",
             usage.request_id,
@@ -24,23 +27,21 @@ class UsageService:
             usage.latency_ms,
         )
 
-    def get_summary(self) -> UsageSummary:
-        summary = UsageSummary()
-        summary.total_requests = len(self._records)
+    async def get_summary(self, api_key_hash: str) -> UsageSummary:
+        return await self._repository.get_summary_for_key(api_key_hash)
 
-        for record in self._records:
-            summary.total_prompt_tokens += record.prompt_tokens
-            summary.total_completion_tokens += record.completion_tokens
-            summary.total_tokens += record.total_tokens
+    async def get_all_summary(self) -> UsageSummary:
+        return await self._repository.get_all_summary()
 
-            model_stats = summary.by_model.setdefault(
-                record.model, {"requests": 0, "total_tokens": 0}
-            )
-            model_stats["requests"] += 1
-            model_stats["total_tokens"] += record.total_tokens
+    async def get_daily_usage(
+        self, api_key_hash: str, usage_date: str
+    ) -> list[UsageAggregation]:
+        return await self._repository.get_daily_usage(api_key_hash, usage_date)
 
-        return summary
+    async def get_monthly_usage(
+        self, api_key_hash: str, year_month: str
+    ) -> list[UsageAggregation]:
+        return await self._repository.get_monthly_usage(api_key_hash, year_month)
 
-    @property
-    def record_count(self) -> int:
-        return len(self._records)
+    async def get_daily_tokens(self, api_key_hash: str, usage_date: str) -> int:
+        return await self._repository.get_total_tokens_for_key(api_key_hash, usage_date)

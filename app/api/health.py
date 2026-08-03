@@ -49,11 +49,11 @@ async def readiness_check(
 
 @router.get(
     "/usage",
-    summary="Usage statistics",
-    description="Returns aggregated token usage statistics.",
+    summary="Usage statistics for the authenticated key",
+    description="Returns aggregated token usage for the authenticated API key only.",
 )
-def get_usage(
-    _api_key: Annotated[APIKey, Depends(require_api_key)],
+async def get_usage(
+    api_key: Annotated[APIKey, Depends(require_api_key)],
     usage_service: Annotated[UsageService, Depends(provide_usage_service)],
 ) -> UsageSummary:
-    return usage_service.get_summary()
+    return await usage_service.get_summary(api_key.key)

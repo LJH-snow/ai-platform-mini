@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 60
 
+    quota_daily_tokens: int = Field(default=0, ge=0)
+    quota_monthly_tokens: int = Field(default=0, ge=0)
+    quota_reservation_ttl_seconds: int = Field(default=600, gt=0)
+    quota_reservation_renewal_seconds: int = Field(default=60, gt=0)
+
     database_url: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform"
     )
@@ -42,6 +47,19 @@ class Settings(BaseSettings):
         if v not in allowed:
             raise ValueError(f"auth_storage must be one of {allowed}, got '{v}'")
         return v
+
+    @field_validator("quota_reservation_renewal_seconds")
+    @classmethod
+    def validate_reservation_renewal_seconds(
+        cls, value: int, info: ValidationInfo
+    ) -> int:
+        ttl_seconds = info.data.get("quota_reservation_ttl_seconds")
+        if ttl_seconds is not None and value >= ttl_seconds:
+            raise ValueError(
+                "quota_reservation_renewal_seconds must be less than "
+                "quota_reservation_ttl_seconds"
+            )
+        return value
 
 
 @lru_cache

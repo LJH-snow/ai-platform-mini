@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import BigInteger, Date, DateTime, String, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -19,4 +19,40 @@ class APIKeyTable(Base):
     )
     last_used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class DailyUsageTable(Base):
+    __tablename__ = "daily_usage"
+    __table_args__ = (
+        UniqueConstraint(
+            "api_key_hash", "usage_date", "model", name="uq_daily_usage_key_date_model"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    api_key_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    usage_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+
+class QuotaReservationTable(Base):
+    __tablename__ = "quota_reservations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    api_key_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    usage_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    settled: Mapped[bool] = mapped_column(default=False, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )

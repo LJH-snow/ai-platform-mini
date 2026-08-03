@@ -11,6 +11,8 @@ from app.exceptions.base import (
     ModelNotFoundError,
     ProviderError,
     ProviderUnavailableError,
+    QuotaExceededError,
+    QuotaReservationError,
     RateLimitError,
     ValidationError,
 )
@@ -101,6 +103,37 @@ def register_exception_handlers(app: FastAPI) -> None:
                 request_id=request_id,
             ).model_dump(),
             headers={"Retry-After": str(retry_after)},
+        )
+
+    @app.exception_handler(QuotaExceededError)
+    async def handle_quota_exceeded(
+        request: Request, exc: QuotaExceededError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s quota_exceeded %s", request_id, exc)
+        return JSONResponse(
+            status_code=429,
+            content=ErrorResponse(
+                code=ErrorCode.QUOTA_EXCEEDED,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+            headers={"Retry-After": str(exc.retry_after)},
+        )
+
+    @app.exception_handler(QuotaReservationError)
+    async def handle_quota_reservation_error(
+        request: Request, exc: QuotaReservationError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.error("request_id=%s quota_unavailable %s", request_id, exc)
+        return JSONResponse(
+            status_code=503,
+            content=ErrorResponse(
+                code=ErrorCode.QUOTA_UNAVAILABLE,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
         )
 
     @app.exception_handler(ModelNotFoundError)
