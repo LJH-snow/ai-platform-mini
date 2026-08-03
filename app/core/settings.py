@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     ollama_default_model: str = "qwen3:4b"
     ollama_timeout_seconds: float = 60.0
 
+    openai_api_key: SecretStr = SecretStr("")
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_default_model: str = "gpt-4.1-mini"
+    openai_timeout_seconds: float = 60.0
+
     llm_provider: str = "ollama"
 
     api_keys: SecretStr = SecretStr("")

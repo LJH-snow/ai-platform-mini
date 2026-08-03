@@ -25,8 +25,11 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
     "/chat",
     response_model=ChatResponse,
     summary="Generate a chat completion",
-    description="Native chat endpoint. "
-    "Uses the configured LLM provider (Ollama by default).",
+    description=(
+        "Native chat endpoint. The configured default model always uses the "
+        "default provider. Remaining gpt-* models route to OpenAI; all other "
+        "models use the default provider."
+    ),
 )
 async def create_chat_completion(
     request: ChatRequest,
