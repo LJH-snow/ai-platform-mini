@@ -8,6 +8,8 @@ from app.schemas.chat import ChatRequest, ChatResponse
 
 client = TestClient(app)
 
+_AUTH_HEADERS = {"Authorization": "Bearer sk-test-integration"}
+
 
 class UnavailableChatService:
     async def chat(self, request: ChatRequest) -> ChatResponse:
@@ -26,9 +28,13 @@ def test_provider_unavailable_returns_502() -> None:
     app.dependency_overrides[get_chat_service] = override
 
     try:
-        response = client.post("/api/v1/chat", json={"message": "Hi"})
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "Hi"},
+            headers=_AUTH_HEADERS,
+        )
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_chat_service, None)
 
     assert response.status_code == 502
     assert response.json()["code"] == "PROVIDER_UNAVAILABLE"
@@ -41,9 +47,13 @@ def test_provider_error_returns_502() -> None:
     app.dependency_overrides[get_chat_service] = override
 
     try:
-        response = client.post("/api/v1/chat", json={"message": "Hi"})
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "Hi"},
+            headers=_AUTH_HEADERS,
+        )
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_chat_service, None)
 
     assert response.status_code == 502
     assert response.json()["code"] == "PROVIDER_ERROR"
@@ -60,9 +70,13 @@ def test_model_not_found_returns_404() -> None:
     app.dependency_overrides[get_chat_service] = override
 
     try:
-        response = client.post("/api/v1/chat", json={"message": "Hi"})
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "Hi"},
+            headers=_AUTH_HEADERS,
+        )
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_chat_service, None)
 
     assert response.status_code == 404
     assert response.json()["code"] == "MODEL_NOT_FOUND"
@@ -75,6 +89,7 @@ def test_validation_error_on_invalid_temperature() -> None:
             "messages": [{"role": "user", "content": "Hi"}],
             "temperature": 999,
         },
+        headers=_AUTH_HEADERS,
     )
     assert response.status_code == 422
 
@@ -83,5 +98,6 @@ def test_validation_error_on_empty_messages() -> None:
     response = client.post(
         "/v1/chat/completions",
         json={"messages": []},
+        headers=_AUTH_HEADERS,
     )
     assert response.status_code == 422

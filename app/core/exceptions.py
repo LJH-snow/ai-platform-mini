@@ -5,10 +5,13 @@ from fastapi.responses import JSONResponse
 
 from app.exceptions.base import (
     AuthenticationError,
+    AuthorizationError,
+    ConflictError,
     ModelNotFoundError,
     ProviderError,
     ProviderUnavailableError,
     RateLimitError,
+    ValidationError,
 )
 from app.schemas.error import ErrorCode, ErrorResponse
 
@@ -35,6 +38,51 @@ def register_exception_handlers(app: FastAPI) -> None:
                 request_id=request_id,
             ).model_dump(),
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.exception_handler(AuthorizationError)
+    async def handle_authorization_error(
+        request: Request, exc: AuthorizationError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s authorization_error %s", request_id, exc)
+        return JSONResponse(
+            status_code=403,
+            content=ErrorResponse(
+                code=ErrorCode.AUTHORIZATION_ERROR,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(ValidationError)
+    async def handle_validation_error(
+        request: Request, exc: ValidationError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s validation_error %s", request_id, exc)
+        return JSONResponse(
+            status_code=422,
+            content=ErrorResponse(
+                code=ErrorCode.VALIDATION_ERROR,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(ConflictError)
+    async def handle_conflict_error(
+        request: Request, exc: ConflictError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s conflict_error %s", request_id, exc)
+        return JSONResponse(
+            status_code=409,
+            content=ErrorResponse(
+                code=ErrorCode.CONFLICT_ERROR,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
         )
 
     @app.exception_handler(RateLimitError)

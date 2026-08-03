@@ -1,5 +1,7 @@
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,10 +23,25 @@ class Settings(BaseSettings):
     llm_provider: str = "ollama"
 
     api_keys: str = ""
+    admin_api_keys: str = ""
     auth_enabled: bool = True
+    auth_storage: Literal["memory", "postgres"] = "memory"
+    initial_api_key: str = ""
 
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 60
+
+    database_url: str = (
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform"
+    )
+
+    @field_validator("auth_storage")
+    @classmethod
+    def validate_auth_storage(cls, v: str) -> str:
+        allowed = {"memory", "postgres"}
+        if v not in allowed:
+            raise ValueError(f"auth_storage must be one of {allowed}, got '{v}'")
+        return v
 
 
 @lru_cache

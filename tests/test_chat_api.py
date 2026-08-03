@@ -7,6 +7,8 @@ from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 
 client = TestClient(app)
 
+_AUTH_HEADERS = {"Authorization": "Bearer sk-test-integration"}
+
 
 class SuccessfulChatService:
     async def chat(self, request: ChatRequest) -> ChatResponse:
@@ -40,9 +42,10 @@ def test_chat_endpoint_returns_model_reply() -> None:
         response = client.post(
             "/api/v1/chat",
             json={"message": "Hello", "history": [{"role": "user", "content": "Hi"}]},
+            headers=_AUTH_HEADERS,
         )
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_chat_service, None)
 
     assert response.status_code == 200
     body = response.json()
@@ -60,9 +63,13 @@ def test_chat_endpoint_maps_ollama_errors_to_bad_gateway() -> None:
     app.dependency_overrides[get_chat_service] = override_service
 
     try:
-        response = client.post("/api/v1/chat", json={"message": "Hello"})
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "Hello"},
+            headers=_AUTH_HEADERS,
+        )
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_chat_service, None)
 
     assert response.status_code == 502
     body = response.json()
@@ -78,9 +85,13 @@ def test_chat_endpoint_maps_missing_model_to_not_found() -> None:
     app.dependency_overrides[get_chat_service] = override_service
 
     try:
-        response = client.post("/api/v1/chat", json={"message": "Hello"})
+        response = client.post(
+            "/api/v1/chat",
+            json={"message": "Hello"},
+            headers=_AUTH_HEADERS,
+        )
     finally:
-        app.dependency_overrides.clear()
+        app.dependency_overrides.pop(get_chat_service, None)
 
     assert response.status_code == 404
     body = response.json()

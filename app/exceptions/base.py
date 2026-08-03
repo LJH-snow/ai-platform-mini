@@ -6,6 +6,18 @@ class AuthenticationError(AppError):
     """Raised when authentication fails (invalid or missing API key)."""
 
 
+class AuthorizationError(AppError):
+    """Raised when an authenticated user lacks required permissions."""
+
+
+class ConflictError(AppError):
+    """Raised when a request conflicts with current state (e.g. duplicate)."""
+
+
+class ValidationError(AppError):
+    """Raised when request parameters fail validation."""
+
+
 class RateLimitError(AppError):
     """Raised when the request rate exceeds the configured limit."""
 

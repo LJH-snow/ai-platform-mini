@@ -1,8 +1,10 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.admin import router as admin_router
 from app.api.chat import router as chat_router
 from app.api.health import router as health_router
 from app.api.models import router as models_router
@@ -10,15 +12,59 @@ from app.api.openai import router as openai_router
 from app.core.container import provide_llm_provider
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, setup_logging
-from app.core.settings import get_settings
+from app.core.settings import Settings, get_settings
 from app.middleware.context import ContextMiddleware
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    yield
+    settings = get_settings()
     provider = provide_llm_provider()
-    await provider.close()
+
+    try:
+        if settings.auth_storage == "postgres":
+            from app.db.init import init_db
+
+            await init_db(settings.database_url, echo=settings.debug)
+            logger.info("PostgreSQL connection initialized.")
+
+        await _bootstrap_keys(settings)
+
+        yield
+    finally:
+        try:
+            await provider.close()
+        except Exception:
+            logger.exception("Failed to close LLM provider.")
+
+        if settings.auth_storage == "postgres":
+            from app.db.init import dispose_db
+
+            try:
+                await dispose_db()
+            except Exception:
+                logger.exception("Failed to dispose database engine.")
+
+
+async def _bootstrap_keys(settings: Settings) -> None:
+    from app.auth.dependencies import provide_api_key_service
+
+    service = provide_api_key_service()
+
+    raw_key = settings.initial_api_key
+    if raw_key:
+        await service.ensure_initial_key(raw_key, name="bootstrap-key")
+
+    for entry in _parse_admin_keys(settings.admin_api_keys):
+        await service.ensure_initial_key(entry, name=f"admin-{entry[:8]}")
+
+
+def _parse_admin_keys(raw: str) -> list[str]:
+    if not raw:
+        return []
+    return [k.strip() for k in raw.split(",") if k.strip()]
 
 
 def create_app() -> FastAPI:
@@ -38,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(models_router)
     app.include_router(chat_router)
     app.include_router(openai_router)
+    app.include_router(admin_router)
     return app
 
 

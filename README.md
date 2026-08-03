@@ -24,10 +24,15 @@ uvicorn app.main:app --reload
 ## Docker
 
 ```bash
+# Set required secrets first
+export INITIAL_API_KEY=sk-your-initial-key
+export ADMIN_API_KEYS=sk-your-admin-key
+
 docker compose up
 ```
 
-This starts the app on `:8000` and Ollama on `:11434`.
+This starts the app on `:8000`, Ollama on `:11434`, and PostgreSQL on `:5432`.
+Both `INITIAL_API_KEY` and `ADMIN_API_KEYS` must be set (compose will refuse to start otherwise).
 
 ## Quality gate
 
@@ -48,6 +53,9 @@ pytest
 | POST | `/v1/chat/completions` | OpenAI-compatible chat completions (supports SSE streaming) |
 | GET | `/api/v1/models` | List available LLM models |
 | POST | `/api/v1/chat` | Generate a chat completion using the configured LLM provider |
+| POST | `/admin/api-keys` | Create a new API key (admin only) |
+| GET | `/admin/api-keys` | List all API keys (admin only) |
+| DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only) |
 
 ### Chat request example
 
@@ -78,7 +86,7 @@ pytest
                Client
                   │
                   ▼
-        RequestIdMiddleware
+        ContextMiddleware (request_id + auth)
                   │
                   ▼
        LoggingMiddleware
@@ -86,29 +94,37 @@ pytest
                   ▼
            FastAPI Router
                   │
-                  ▼
-           Service Layer
-                  │
-                  ▼
-         LLMProvider Protocol
-             ┌────┴────┐
-        OllamaProvider  MockProvider
-             │
-             ▼
-         Ollama Server
+         ┌────────┼────────┐
+         ▼        ▼        ▼
+     Admin API  LLM API  Health
+         │        │
+         ▼        ▼
+     APIKeyService  ChatService / OpenAIService
+         │        │
+         ▼        ▼
+   APIKeyRepository  LLMProvider Protocol
+         │          ┌────┴────┐
+    InMemory/Postgres  OllamaProvider  MockProvider
+                        │
+                        ▼
+                    Ollama Server
 ```
 
 ### Directory structure
 
 ```
 app/
-├── api/            # Router layer
-├── core/           # Infrastructure (settings, logging, exceptions)
-├── exceptions/     # Provider-specific exceptions
-├── middleware/     # Request ID
+├── api/            # Router layer (chat, openai, admin, health, models)
+├── auth/           # Authentication & key management (service, repository, dependencies)
+├── core/           # Infrastructure (settings, logging, exceptions, container, context)
+├── db/             # Database (models, session, init)
+├── exceptions/     # Provider-specific + domain exceptions
+├── middleware/     # Context middleware (request_id)
 ├── providers/      # LLM Provider layer (Protocol + implementations)
+├── ratelimit/      # Rate limiting (Protocol + memory impl + dependencies)
 ├── schemas/        # Pydantic request/response models
 ├── services/       # Business logic
+├── usage/          # Token usage tracking
 └── main.py
 ```
 
@@ -133,9 +149,28 @@ LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_DEFAULT_MODEL=qwen3:4b
 OLLAMA_TIMEOUT_SECONDS=60
+
+# Auth
+API_KEYS=sk-test-key-1:development,sk-admin-key-1:admin
+ADMIN_API_KEYS=sk-admin-key-1
+AUTH_ENABLED=true
+AUTH_STORAGE=memory
+
+# Bootstrap (Docker/Postgres only)
+INITIAL_API_KEY=
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform
+
+# Rate limiting
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_PER_MINUTE=60
 ```
 
-No code changes needed when switching environments or models.
+### Key configuration notes
+
+- `API_KEYS` format: `sk-xxx:name,sk-yyy:name2` (comma-separated, name optional)
+- `ADMIN_API_KEYS` must also be present in `API_KEYS` (or registered via bootstrap)
+- `INITIAL_API_KEY` auto-registers on startup (idempotent, `ON CONFLICT DO NOTHING`)
+- Docker Compose requires both `INITIAL_API_KEY` and `ADMIN_API_KEYS` to be set
 
 ## Sprint log
 
@@ -263,3 +298,29 @@ No code changes needed when switching environments or models.
 - UsageService keeps last 1000 records in memory, aggregates by model
 - `GET /api/v1/usage` endpoint returns aggregated usage statistics (requires auth)
 - Router layer writes `request.state.usage_data` and `request.state.api_key_name` for middleware
+
+### Sprint 3 (Day 3)
+
+- API Key management: Admin CRUD for creating, listing, and revoking keys
+- `POST /admin/api-keys` — create key, raw_key returned only once
+- `GET /admin/api-keys` — list keys, returns `APIKeyMetadata` (no key_hash exposed)
+- `DELETE /admin/api-keys/{key_hash_prefix}` — revoke key (soft delete, status → "revoked")
+- Admin authentication: `ADMIN_API_KEYS` env var, `require_admin_key` dependency
+- `require_admin_rate_limit` — admin-specific rate limiting, no double auth validation
+- Bootstrap: `INITIAL_API_KEY` and `ADMIN_API_KEYS` auto-registered on startup via `ensure_initial_key()`
+- PostgreSQL upsert: `ON CONFLICT DO NOTHING` for concurrent-safe bootstrap
+- Prefix query safety: 8-char lowercase hex validation, conflict detection on multiple matches
+- Error responses: `ValidationError→422`, `ConflictError→409`, `AuthorizationError→403`, `AuthenticationError→401`
+- Docker Compose: `INITIAL_API_KEY` and `ADMIN_API_KEYS` required via `${VAR:?message}`
+- `APIKeyMetadata` public model with `key_hash_prefix` (never full hash)
+- `APIKeyRecord` audit record retained after revoke (status tracking)
+- 6 PostgreSQL integration tests (testcontainers, `INTEGRATION_TEST=1`)
+
+### Sprint 3 (Day 4)
+
+- Unified error protocol: `ValidationError(422)`, `ConflictError(409)` use `ErrorResponse` with `code` + `request_id`
+- Prefix validation consolidated into Service layer (`find_hash_by_prefix` raises domain exceptions)
+- Admin route simplified: no redundant regex validation, relies on Service exceptions
+- PostgreSQL integration test suite: create, find, ensure_key idempotency, revoke, prefix query, touch_last_used
+- `testcontainers` integration for real PostgreSQL verification
+- Configuration documentation in `.env.example` and README
