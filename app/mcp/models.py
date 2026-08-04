@@ -1,9 +1,78 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import cast
 
 from app.tools.models import JSONSchema, JSONValue, RiskLevel
+
+
+class MCPServerState(StrEnum):
+    """Lifecycle state exposed for one configured MCP Server."""
+
+    NOT_STARTED = "not_started"
+    STARTING = "starting"
+    READY = "ready"
+    FAILED = "failed"
+    CLOSED = "closed"
+
+
+class MCPReadinessState(StrEnum):
+    """Aggregate readiness state for the MCP integration boundary."""
+
+    DISABLED = "disabled"
+    STARTING = "starting"
+    READY = "ready"
+    DEGRADED = "degraded"
+    NOT_READY = "not_ready"
+    CLOSED = "closed"
+
+
+@dataclass(frozen=True)
+class MCPServerStatus:
+    """Safe lifecycle and discovery summary for one MCP Server."""
+
+    name: str
+    state: MCPServerState
+    tool_count: int = 0
+    error_code: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-safe representation for health endpoints."""
+
+        return {
+            "name": self.name,
+            "status": self.state.value,
+            "tool_count": self.tool_count,
+            "error_code": self.error_code,
+        }
+
+
+@dataclass(frozen=True)
+class MCPReadiness:
+    """Aggregate MCP readiness without performing an active server probe."""
+
+    state: MCPReadinessState
+    servers: tuple[MCPServerStatus, ...] = ()
+
+    @property
+    def is_ready(self) -> bool:
+        """Whether MCP can be used without blocking application readiness."""
+
+        return self.state in {
+            MCPReadinessState.DISABLED,
+            MCPReadinessState.READY,
+            MCPReadinessState.DEGRADED,
+        }
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-safe representation for health endpoints."""
+
+        return {
+            "status": self.state.value,
+            "ready": self.is_ready,
+            "servers": [server.to_dict() for server in self.servers],
+        }
 
 
 @dataclass(frozen=True)

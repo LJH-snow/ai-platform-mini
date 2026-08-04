@@ -14,13 +14,38 @@ from app.core.settings import Settings
 from app.mcp import (
     MCPClientError,
     MCPProcessClient,
+    MCPReadinessState,
     MCPServerConfig,
+    MCPServerState,
     MCPToolAdapter,
     MCPToolCallResult,
     MCPToolDefinition,
     MCPToolManager,
 )
-from app.tools import RiskLevel, ToolContext, ToolExecutor, ToolRegistry
+from app.tools import (
+    RiskLevel,
+    ToolContext,
+    ToolExecutionStatus,
+    ToolExecutor,
+    ToolRegistry,
+)
+
+_DEMO_SERVER = Path(__file__).parent / "fixtures" / "mcp_readonly_server.py"
+
+
+def _demo_config(
+    name: str,
+    mode: str,
+    allowed_tools: frozenset[str],
+) -> MCPServerConfig:
+    return MCPServerConfig(
+        name=name,
+        command=(sys.executable, "-u", str(_DEMO_SERVER)),
+        allowed_tools=allowed_tools,
+        startup_timeout_seconds=2,
+        request_timeout_seconds=2,
+        environment={"MCP_DEMO_MODE": mode},
+    )
 
 
 @dataclass
@@ -230,6 +255,12 @@ async def test_mcp_manager_isolates_discovery_when_client_close_fails() -> None:
 
     assert [tool.name for tool in tools] == ["mcp__healthy__read_health"]
     assert healthy_client.started
+    readiness = manager.readiness_status()
+    assert readiness.state is MCPReadinessState.DEGRADED
+    assert [status.state for status in readiness.servers] == [
+        MCPServerState.FAILED,
+        MCPServerState.READY,
+    ]
     assert manager.granted_permissions() == frozenset({"mcp:server:healthy"})
     await manager.close()
     assert healthy_client.closed
@@ -620,3 +651,109 @@ async def test_agent_runtime_calls_mcp_server_with_manager_grant(
         assert marker.read_text(encoding="utf-8") == "tools/call\n"
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_stdio_mcp_tool_failure_is_normalized_and_other_server_survives() -> None:
+    manager = MCPToolManager(
+        [
+            _demo_config("failure", "failure", frozenset({"fail_status"})),
+            _demo_config("healthy", "healthy", frozenset({"read_status"})),
+        ]
+    )
+
+    try:
+        tools = await manager.discover_tools()
+        executor = ToolExecutor(
+            ToolRegistry(list(tools)),
+            granted_permissions=manager.granted_permissions(),
+        )
+
+        failed = await executor.execute(
+            "mcp__failure__fail_status",
+            {},
+            ToolContext(run_id="run-failure", step_index=1),
+        )
+        healthy = await executor.execute(
+            "mcp__healthy__read_status",
+            {},
+            ToolContext(run_id="run-failure", step_index=2),
+        )
+
+        assert failed.status is ToolExecutionStatus.FAILED
+        assert failed.error_code == "tool_execution_failed"
+        assert failed.output == "Tool execution failed."
+        assert healthy.succeeded
+
+        model = ScriptedAgentModel(
+            [
+                AgentDecision(
+                    tool_calls=(
+                        ToolCall(
+                            call_id="failed-call",
+                            name="mcp__failure__fail_status",
+                            arguments={},
+                        ),
+                        ToolCall(
+                            call_id="healthy-call",
+                            name="mcp__healthy__read_status",
+                            arguments={},
+                        ),
+                    )
+                ),
+                AgentDecision(answer="The tool boundary stayed isolated."),
+            ]
+        )
+        run = await AgentRuntime(model, tool_executor=executor).run(
+            "verify tool isolation"
+        )
+
+        assert run.status is RunStatus.COMPLETED
+        assert run.state.steps[0].tool_results[0].error == "tool_execution_failed"
+        assert run.state.steps[0].tool_results[1].succeeded
+    finally:
+        await manager.close()
+
+    assert manager.readiness_status().state is MCPReadinessState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_stdio_mcp_runtime_disconnect_is_normalized_and_cleanup_is_safe() -> None:
+    manager = MCPToolManager(
+        [
+            _demo_config(
+                "disconnect",
+                "disconnect",
+                frozenset({"disconnect_status"}),
+            ),
+            _demo_config("healthy", "healthy", frozenset({"read_status"})),
+        ]
+    )
+
+    try:
+        tools = await manager.discover_tools()
+        executor = ToolExecutor(
+            ToolRegistry(list(tools)),
+            granted_permissions=manager.granted_permissions(),
+        )
+
+        disconnected = await executor.execute(
+            "mcp__disconnect__disconnect_status",
+            {},
+            ToolContext(run_id="run-disconnect", step_index=1),
+        )
+        healthy = await executor.execute(
+            "mcp__healthy__read_status",
+            {},
+            ToolContext(run_id="run-disconnect", step_index=2),
+        )
+
+        assert disconnected.status is ToolExecutionStatus.FAILED
+        assert disconnected.error_code == "tool_execution_failed"
+        assert healthy.succeeded
+    finally:
+        await manager.close()
+        await manager.close()
+
+    assert manager.granted_permissions() == frozenset()
+    assert manager.readiness_status().state is MCPReadinessState.CLOSED

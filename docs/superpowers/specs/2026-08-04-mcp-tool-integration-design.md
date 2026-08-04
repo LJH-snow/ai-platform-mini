@@ -1,8 +1,8 @@
 # Sprint 11 MCP Tool 接入设计说明
 
 - 对应路线图：Sprint 11：MCP 工具接入
-- 当前切片：MCP transport、工具发现、内部 Tool Adapter、权限授予和受控生命周期
-- 状态：开发中，等待 Code Review
+- 当前切片：MCP foundation 最小验收闭环
+- 状态：foundation 已完成；生产化切片未完成，等待 Code Review
 
 ## 目标
 
@@ -48,6 +48,34 @@ Adapter 将远端工具映射为内部 Tool：
 - FastAPI lifespan 启动阶段发现工具，关闭阶段释放 MCP 子进程；
 - 不可用 Server 被记录并隔离，不阻塞应用或其他 Server。
 
+### 5. Health / Readiness 边界
+
+`MCPToolManager.readiness_status()` 只报告本应用已知的生命周期和工具发现状态，
+不主动向远端 Server 发送 ping，也不承诺远端进程在两次调用之间持续可用。每个
+Server 的状态包括 `not_started`、`starting`、`ready`、`failed` 和 `closed`，聚合状态
+包括：
+
+- `disabled`：没有配置 MCP Server，或 MCP 功能关闭；
+- `starting`：应用尚未完成发现；
+- `ready`：所有配置的 Server 都完成发现；
+- `degraded`：至少一个 Server 可用，另一个 Server 发现失败；该状态仍允许应用继续服务；
+- `not_ready`：配置的 Server 均不可用，或尚未形成可用 Tool；
+- `closed`：应用关闭后，所有 MCP Client 已进入清理完成状态。
+
+现有 `/api/v1/health` liveness 接口保持不变。现有 `/api/v1/ready` 在 `MCP_ENABLED=true`
+时增加 `checks.mcp`，并复用上述聚合状态；新增 `/api/v1/health/mcp` 返回每个 Server 的
+脱敏状态、发现到的 Tool 数量和稳定错误码。该边界只描述生命周期/发现状态，不把一次
+运行时调用失败伪装成健康探针结果。
+
+### 6. 本次收口的验收证据
+
+- `tests/fixtures/mcp_readonly_server.py` 提供不依赖外网和第三方 SDK 的只读 stdio JSON-RPC
+  demo Server；它只在测试中显式启动，不注册到生产默认配置；
+- 测试覆盖发现完成后的 JSON-RPC Tool 错误和 Server 运行时断线；
+- 失败调用由 `ToolExecutor` 归一化为 `tool_execution_failed`，Agent Runtime 能继续处理
+  其他 Tool，并且 MCP Manager 仍可安全关闭；
+- 现有 allowlist、权限授予、未知风险 fail-closed、重复 Tool 隔离和子进程清理逻辑保持不变。
+
 ## 安全边界
 
 - 默认不信任未知 Server；
@@ -63,9 +91,14 @@ Adapter 将远端工具映射为内部 Tool：
 - 不自动从环境变量加载任意 Server 命令；
 - 不注册默认 MCP Server 到生产配置；
 - 不实现写入、文件、Shell 或高风险 MCP Tool。
+- 不实现远端主动 ping、重连、运行时能力缓存或 HTTP/SSE Transport。
 
 ## 后续切片
 
-1. 增加 Server health/readiness 信息与更细粒度的 Tool allowlist；
-2. 评估 HTTP Transport、重连和能力缓存；
-3. 补充生产部署策略与可观测性。
+1. 增加默认可复现 Demo Server、生产部署策略和 Server health/readiness 的主动探针；
+2. 在有明确需求和安全策略后评估 HTTP Transport、重连和能力缓存；
+3. 补充运行时调用失败的指标、日志和更完整的可观测性。
+
+## Sprint 11 学习总结
+
+本轮学习到，MCP foundation 的核心不是把外部协议带入 Agent Runtime，而是通过 Client、Manager 和 Adapter 将其收敛到现有内部 Tool Protocol 边界内。健康检查采用生命周期与工具发现状态，是因为本 Sprint 只需要表达应用已知的启动、可用、降级和关闭状态，避免主动探针引入网络副作用、重连语义和超出范围的生产承诺。实现过程中遇到的主要问题是 Server 在发现成功后仍可能运行时断线，最终通过不依赖外网的 stdio fixture 和确定性失败测试，让 ToolExecutor 统一归一化单次调用错误，同时保证其他 Tool 和应用关闭流程不受影响。

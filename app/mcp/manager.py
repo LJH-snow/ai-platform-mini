@@ -6,7 +6,13 @@ from collections.abc import Callable, Iterable
 
 from app.mcp.adapter import MCPToolAdapter
 from app.mcp.client import MCPProcessClient
-from app.mcp.models import MCPServerConfig
+from app.mcp.models import (
+    MCPReadiness,
+    MCPReadinessState,
+    MCPServerConfig,
+    MCPServerState,
+    MCPServerStatus,
+)
 from app.mcp.protocols import MCPClient
 from app.tools.models import RiskLevel
 from app.tools.protocols import Tool
@@ -29,6 +35,13 @@ class MCPToolManager:
         self._clients: dict[str, MCPClient] = {}
         self._discovered_tools: tuple[Tool, ...] = ()
         self._discovered = False
+        self._server_statuses: dict[str, MCPServerStatus] = {
+            config.name: MCPServerStatus(
+                name=config.name,
+                state=MCPServerState.NOT_STARTED,
+            )
+            for config in self._configs
+        }
 
     async def discover_tools(self) -> tuple[Tool, ...]:
         if self._discovered:
@@ -38,6 +51,10 @@ class MCPToolManager:
         for config in self._configs:
             if config.name in self._clients:
                 raise ValueError(f"MCP server already started: {config.name}")
+            self._server_statuses[config.name] = MCPServerStatus(
+                name=config.name,
+                state=MCPServerState.STARTING,
+            )
             client = self._client_factory(config)
             try:
                 await client.start()
@@ -69,12 +86,27 @@ class MCPToolManager:
                     ):
                         continue
                     server_tools.append(MCPToolAdapter(config.name, client, definition))
+                self._server_statuses[config.name] = MCPServerStatus(
+                    name=config.name,
+                    state=MCPServerState.READY,
+                    tool_count=len(server_tools),
+                )
             except asyncio.CancelledError:
                 self._clients.pop(config.name, None)
+                self._server_statuses[config.name] = MCPServerStatus(
+                    name=config.name,
+                    state=MCPServerState.CLOSED,
+                    error_code="discovery_cancelled",
+                )
                 await self._close_client_safely(config.name, client)
                 raise
             except Exception:
                 self._clients.pop(config.name, None)
+                self._server_statuses[config.name] = MCPServerStatus(
+                    name=config.name,
+                    state=MCPServerState.FAILED,
+                    error_code="discovery_failed",
+                )
                 logger.exception("MCP server discovery failed: %s", config.name)
                 cleanup_cancelled = await self._close_client_safely(config.name, client)
                 if cleanup_cancelled:
@@ -95,6 +127,32 @@ class MCPToolManager:
 
         return frozenset(f"mcp:server:{server_name}" for server_name in self._clients)
 
+    def server_statuses(self) -> tuple[MCPServerStatus, ...]:
+        """Return lifecycle status for every configured MCP Server."""
+
+        return tuple(self._server_statuses.values())
+
+    def readiness_status(self) -> MCPReadiness:
+        """Return lifecycle-based MCP readiness without probing remote servers."""
+
+        statuses = self.server_statuses()
+        if not statuses:
+            return MCPReadiness(MCPReadinessState.DISABLED)
+
+        state_values = {status.state for status in statuses}
+        if state_values == {MCPServerState.CLOSED}:
+            return MCPReadiness(MCPReadinessState.CLOSED, statuses)
+        if not self._discovered:
+            return MCPReadiness(MCPReadinessState.STARTING, statuses)
+
+        ready_count = sum(status.state is MCPServerState.READY for status in statuses)
+        failed_count = sum(status.state is MCPServerState.FAILED for status in statuses)
+        if ready_count and failed_count:
+            return MCPReadiness(MCPReadinessState.DEGRADED, statuses)
+        if ready_count == len(statuses):
+            return MCPReadiness(MCPReadinessState.READY, statuses)
+        return MCPReadiness(MCPReadinessState.NOT_READY, statuses)
+
     async def close(self) -> None:
         clients = tuple(self._clients.items())
         self._discovered_tools = ()
@@ -106,6 +164,13 @@ class MCPToolManager:
                 or cancellation_requested
             )
         self._clients.clear()
+        self._server_statuses = {
+            config.name: MCPServerStatus(
+                name=config.name,
+                state=MCPServerState.CLOSED,
+            )
+            for config in self._configs
+        }
         if cancellation_requested:
             raise asyncio.CancelledError
 
