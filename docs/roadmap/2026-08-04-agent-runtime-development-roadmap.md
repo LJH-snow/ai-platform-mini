@@ -250,6 +250,10 @@ app/
 - 首个只读 MCP 场景；
 - Server/Tool allowlist，默认拒绝未知高风险能力。
 
+### 当前开发切片
+
+当前已完成 MCP 的 transport、discovery、adapter、权限和受控生命周期边界：stdio JSON-RPC Client、工具发现管理器、内部 Tool Protocol 适配器、Settings allowlist、服务端 Server 权限授予、真实风险元数据 fail-closed 过滤、重复工具隔离以及 FastAPI lifespan 启停。默认 Server 注册、生产部署策略和 Server health/readiness 在后续切片中完成。
+
 ### 验收标准
 
 - Agent 不需要知道工具来自本地还是 MCP；

@@ -5,7 +5,7 @@
 
 ## Current status
 
-- Current milestone: **Sprint 10 completed and approved**
+- Current milestone: **Sprint 11 MCP foundation in progress**
 - Version: `0.1.0`
 - Runtime: Python `3.12`–`3.14`（默认 `3.14`）
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
@@ -33,6 +33,7 @@
 - Agent Runtime 核心状态、事件、Tool Protocol 和 `POST /api/v1/agent/runs` 应用层
 - Tool Registry/Executor：Schema 参数校验、超时、异常安全归一化、输出截断和工具 Schema 导出
 - RAG Tool：`knowledge_search` 复用 RAG prepare 阶段，返回带来源、距离和安全提示的结构化检索结果；Agent 可在回答前自主调用知识库
+- MCP foundation：提供 stdio JSON-RPC Client、工具发现、allowlist 和 `MCPToolAdapter`，暂未接入默认生产配置
 - Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
 
@@ -254,6 +255,10 @@ RAG_TOP_K=5
 RAG_MAX_CONTEXT_CHARS=10000
 RAG_MAX_DISTANCE=0.35
 RAG_EMBEDDING_TIMEOUT_SECONDS=60
+
+# MCP (disabled by default; JSON array of explicitly allowlisted servers)
+MCP_ENABLED=false
+MCP_SERVERS_JSON=
 ```
 
 ### Key configuration notes
@@ -276,6 +281,15 @@ RAG_EMBEDDING_TIMEOUT_SECONDS=60
 - `RAG_MAX_CONTEXT_CHARS` limits the total character length of injected context (max 100,000)
 - To ingest documents, run: `python scripts/ingest.py <path-to-txt-file>` (requires `RAG_ENABLED=true` and running Ollama)
 - Empty knowledge base → `KnowledgeBaseEmptyError` (404); all retrieved results exceeding `RAG_MAX_DISTANCE` → `NoRelevantContextError` (404)
+
+### MCP configuration notes
+
+- `MCP_ENABLED=false` keeps MCP disabled and does not parse `MCP_SERVERS_JSON`
+- `MCP_SERVERS_JSON` must be a JSON array; each entry requires `name` and a non-empty `command` array
+- Each server can configure `allowed_tools`, `max_risk_level`, startup/request timeouts and string environment variables
+- MCP tools are discovered during application startup and closed during shutdown; an unavailable server is isolated and does not block other configured servers
+- Discovered tools require the `mcp:server:<server_name>` permission; the application grants it only to the Agent runtime for successfully discovered, explicitly configured servers, never from model output or user input
+- Real stdio tools must provide explicit read-only/destructive annotations; unknown risk metadata is rejected (fail-closed), and duplicate tool names isolate the affected Server
 
 > [完整路线图](docs/roadmap/2026-08-04-agent-runtime-development-roadmap.md)
 > [Sprint 8 设计说明](docs/superpowers/specs/2026-08-04-agent-runtime-design.md)
@@ -594,6 +608,24 @@ Tool Registry 解决“有哪些工具”，Tool Executor 解决“能否安全�
 - 空知识库、无相关上下文、RAG 存储不可用和 embedding 失败映射为稳定错误码，未知异常仍由 ToolExecutor 安全归一化。
 - 容器仅在 RAG 服务可用时注册 `knowledge_search`；RAG 关闭时 Agent 继续保持 `calculator` 默认能力。
 - 新增普通 Agent + Knowledge Search 集成测试，并保留 `/api/v1/chat/rag` 兼容链路。
+
+
+### Sprint 11（进行中）
+
+本轮完成 MCP 接入的基础边界：
+
+- 增加基于 stdio 的 JSON-RPC MCP Client，支持 initialize、tools/list 和 tools/call；
+- 增加 `MCPToolManager`，负责 Server 生命周期、工具发现、allowlist 和不可用 Server 隔离；
+- 增加 `MCPToolAdapter`，将 MCP Tool 映射为现有内部 Tool Protocol；
+- 默认通过 `mcp:server:<server_name>` 权限拒绝未授权调用；应用容器仅向 Agent runtime 授予已发现 Server 的服务端权限；
+- 真实 stdio 工具必须声明只读/破坏性风险元数据，未知风险 fail-closed；重复工具名会隔离对应 Server；
+- 已覆盖 fake client、不可用 Server、权限边界、真实子进程协议和 Agent 端到端调用测试。
+
+本轮已完成受控 Settings 配置、FastAPI lifespan 接入和只读 MCP Agent 调用链，但尚未注册默认 MCP Server，也未制定生产部署策略；后续将补充可观测的 Server health/readiness 和生产部署策略。
+
+#### Sprint 11 当前切片学习总结
+
+MCP 接入的关键是把外部协议限制在 Client 和 Adapter 边界内，Agent Runtime 继续只依赖内部 Tool Protocol。配置采用显式 JSON allowlist，并在启动阶段发现工具、关闭阶段释放子进程，避免请求期间隐式启动任意命令。权限必须由服务端策略授予已发现的配置 Server，不能由模型或用户输入自助获得；真实 Server 的风险元数据缺失时应 fail-closed。通过真实子进程测试验证“发现工具—模型选择—执行—继续回答”的完整链路后，下一步重点转向健康状态和部署治理。
 
 ### Sprint 10 学习总结
 

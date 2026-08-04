@@ -236,6 +236,7 @@ class AgentService:
         usage_collector: UsageCollector,
         runtime_factory: AgentRuntimeFactory = AgentRuntime,
         tool_registry: ToolRegistry | None = None,
+        granted_permissions: frozenset[str] = frozenset(),
     ) -> None:
         self._chat_service = chat_service
         self._quota_service = quota_service
@@ -246,7 +247,11 @@ class AgentService:
             if tool_registry is not None
             else ToolRegistry([CalculatorTool()])
         )
-        self._tool_executor = ToolExecutor(self._tool_registry)
+        self._granted_permissions = frozenset(granted_permissions)
+        self._tool_executor = ToolExecutor(
+            self._tool_registry,
+            granted_permissions=self._granted_permissions,
+        )
 
     async def run(
         self,

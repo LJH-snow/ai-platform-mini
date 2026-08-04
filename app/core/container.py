@@ -21,6 +21,7 @@ from app.usage.repository import UsageRepository
 from app.usage.service import UsageService
 
 if TYPE_CHECKING:
+    from app.mcp.manager import MCPToolManager
     from app.rag.ollama_embedder import OllamaEmbedder
     from app.rag.pg_vector_store import PgVectorStore
     from app.rag.service import RAGService
@@ -153,6 +154,15 @@ def provide_rag_service() -> RAGService | None:
 
 
 @lru_cache
+def provide_mcp_manager() -> MCPToolManager:
+    """Build the MCP manager from the explicit application allowlist."""
+
+    from app.mcp.manager import MCPToolManager
+
+    return MCPToolManager(get_settings().get_mcp_server_configs())
+
+
+@lru_cache
 def provide_chat_service() -> ChatService:
     from app.services.chat_service import ChatService
 
@@ -166,18 +176,21 @@ def provide_agent_service() -> AgentService:
     from app.tools.protocols import Tool
     from app.tools.registry import ToolRegistry
 
+    mcp_manager = provide_mcp_manager()
     tools: list[Tool] = [CalculatorTool()]
     rag_service = provide_rag_service()
     if rag_service is not None:
         from app.tools.knowledge_search import KnowledgeSearchTool
 
         tools.append(KnowledgeSearchTool(rag_service=rag_service))
+    tools.extend(mcp_manager.list_tools())
 
     return AgentService(
         chat_service=provide_chat_service(),
         quota_service=provide_quota_service(),
         usage_collector=provide_usage_collector(),
         tool_registry=ToolRegistry(tools),
+        granted_permissions=mcp_manager.granted_permissions(),
     )
 
 
@@ -202,6 +215,7 @@ def clear_container_cache() -> None:
 
     # Clear in reverse dependency order: dependents before their deps.
     provide_agent_service.cache_clear()
+    provide_mcp_manager.cache_clear()
     provide_rag_service.cache_clear()
     provide_vector_store.cache_clear()
     provide_embedder.cache_clear()
