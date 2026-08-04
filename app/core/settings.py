@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from collections.abc import Mapping
 from functools import lru_cache
@@ -107,8 +109,6 @@ class Settings(BaseSettings):
 
     def get_mcp_server_configs(self) -> tuple[MCPServerConfig, ...]:
         """Parse the explicitly configured MCP server allowlist."""
-
-        from app.mcp.models import MCPServerConfig
 
         if not self.mcp_enabled or not self.mcp_servers_json.strip():
             return ()
