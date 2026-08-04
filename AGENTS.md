@@ -76,7 +76,7 @@
 - **Streaming usage 记录** — 通过 UsageCollector 在 Service 层记录流式请求的 token 用量（已完成）
 - **naive created_at UTC 规范化** — 将无时区 ISO 时间戳强制解释为 UTC，需独立评估非 UTC 部署兼容性（Sprint 8+）
 - **空流 fallback 模型字段** — `chat_completions_stream()` 空流 fallback 应使用已解析的 `model` 而非 `default_model`（Sprint 8+）
-- **ProviderRouter.close() BaseExceptionGroup 泄漏** — `CancelledError` 与普通异常并存时产生 `BaseExceptionGroup`，lifespan `except Exception` 无法捕获（Sprint 7.4）
+- **ProviderRouter.close() BaseExceptionGroup 泄漏** — `CancelledError` 与普通异常并存时产生 `BaseExceptionGroup`，lifespan `except Exception` 无法捕获（Sprint 7.4，已完成）
 
 ## Git 和 GitHub
 

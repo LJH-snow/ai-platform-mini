@@ -242,7 +242,7 @@ async def test_close_attempts_all_providers_before_reraising_cancellation() -> N
         openai_provider=openai_provider,
     )
 
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(RuntimeError, match="cancelled"):
         await router.close()
 
     assert default_provider.close_count == 1
@@ -261,12 +261,13 @@ async def test_close_preserves_cancellation_and_provider_failure() -> None:
         openai_provider=openai_provider,
     )
 
-    with pytest.raises(BaseExceptionGroup) as exc_info:
+    with pytest.raises(ExceptionGroup) as exc_info:
         await router.close()
 
     errors = exc_info.value.exceptions
     assert len(errors) == 2
-    assert isinstance(errors[0], asyncio.CancelledError)
+    assert isinstance(errors[0], RuntimeError)
+    assert "cancelled" in str(errors[0])
     assert isinstance(errors[1], RuntimeError)
     assert str(errors[1]) == "openai close failed"
     assert default_provider.close_count == 1
@@ -294,6 +295,69 @@ async def test_close_reports_all_provider_failures() -> None:
     ]
     assert default_provider.close_count == 1
     assert openai_provider.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_close_wraps_multiple_cancellations_as_exception_group() -> None:
+    default_provider = CancelledCloseProvider("qwen3:4b")
+    openai_provider = CancelledCloseProvider("gpt-4.1-mini")
+    router = ProviderRouter(
+        default_provider=default_provider,
+        openai_provider=openai_provider,
+    )
+
+    with pytest.raises(ExceptionGroup) as exc_info:
+        await router.close()
+
+    errors = exc_info.value.exceptions
+    assert len(errors) == 2
+    assert all(isinstance(e, RuntimeError) for e in errors)
+    assert all("cancelled" in str(e) for e in errors)
+    assert default_provider.close_count == 1
+    assert openai_provider.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_close_can_be_called_twice_without_crashing() -> None:
+    router, default_provider, openai_provider = make_router()
+
+    await router.close()
+    await router.close()
+
+    assert default_provider.close_count == 2
+    assert openai_provider.close_count == 2
+
+
+@pytest.mark.asyncio
+async def test_close_propagates_external_cancellation() -> None:
+    closed_providers: list[str] = []
+    first_close_event = asyncio.Event()
+
+    class SlowCloseProvider(RecordingProvider):
+        async def close(self) -> None:
+            self.close_count += 1
+            closed_providers.append(self._default_model)
+            if not first_close_event.is_set():
+                first_close_event.set()
+                await asyncio.sleep(10)
+
+    default_provider = SlowCloseProvider("qwen3:4b")
+    openai_provider = SlowCloseProvider("gpt-4.1-mini")
+    router = ProviderRouter(
+        default_provider=default_provider,
+        openai_provider=openai_provider,
+    )
+
+    task = asyncio.create_task(router.close())
+    await first_close_event.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert task.cancelled()
+    assert "qwen3:4b" in closed_providers
+    assert "gpt-4.1-mini" in closed_providers
 
 
 def test_router_satisfies_provider_protocol() -> None:

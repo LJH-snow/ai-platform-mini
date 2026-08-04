@@ -77,3 +77,24 @@ class TestLifespanErrorHandling:
 
         mock_dispose.assert_not_called()
         mock_provider.close.assert_awaited_once()
+
+    def test_lifespan_catches_exception_group_from_provider_close(self) -> None:
+        mock_provider = AsyncMock()
+        mock_provider.close = AsyncMock(
+            side_effect=ExceptionGroup(
+                "close failures",
+                [RuntimeError("provider A failed"), RuntimeError("provider B failed")],
+            )
+        )
+        with (
+            patch(
+                "app.main.provide_llm_provider",
+                return_value=mock_provider,
+            ),
+        ):
+            from app.main import app
+
+            client = TestClient(app)
+            with client:
+                response = client.get("/api/v1/health")
+                assert response.status_code == 200

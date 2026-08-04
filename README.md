@@ -5,14 +5,14 @@
 
 ## Current status
 
-- Current milestone: **Sprint 7.3 implemented**
+- Current milestone: **Sprint 7.4 implemented**
 - Version: `0.1.0`
 - Runtime: Python `3.12`–`3.14`（默认 `3.14`）
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
 - OpenAIProvider: 已接入 ProviderRouter、DI 和应用生命周期
 - Storage: Memory 或 PostgreSQL
 - Verification baseline（2026-08-03）:
-  - Default suite: `217 passed, 21 skipped`
+  - Default suite: `221 passed, 21 skipped`
   - PostgreSQL integration suite: `160 passed`
   - Ruff format/lint and mypy: passed
 
@@ -494,3 +494,16 @@ OpenAI SSE 转换不仅需要字段映射，还需要状态机验证终止帧与
 ### Sprint 7.3 学习总结
 
 纯职责提取必须严格保持既有行为，即使是"改进"也应拆分为独立 Sprint。本次最初将 naive `created_at` 强制解释为 UTC，改变了非 UTC 部署环境的公开 API 输出，违反了"重构不改变行为"原则。`BaseExceptionGroup` 在混合 `CancelledError` 时不会降级为 `ExceptionGroup`，lifespan 的 `except Exception` 无法捕获——但用 `except BaseException` 修复会吞掉取消信号，破坏编排平台的取消传播语义。正确的做法是保持 `except Exception`，将 `BaseExceptionGroup` 泄漏问题留给专门的生命周期修复 Sprint。
+
+### Sprint 7.4
+
+- 修复 `ProviderRouter.close()` 的 `BaseExceptionGroup` 泄漏：Provider 内部 `CancelledError` 包装为 `RuntimeError`，确保所有非外部取消异常都是 `Exception` 子类
+- 区分外部取消和 Provider 内部取消：通过 `current_task().cancelling() > 0` 检测外部取消，保存原始 `CancelledError` 并在所有 Provider 关闭后重新抛出
+- 外部取消信号继续传播到 Uvicorn/编排平台，不被 `except Exception` 吞掉
+- Provider 内部取消与普通关闭异常并存时，外部取消优先传播，其他异常记入日志
+- 新增外部取消回归测试：真实 `task.cancel()` 场景验证取消传播和 Provider 全部关闭
+- 新增双 CancelledError Provider 测试、重复关闭测试、lifespan 捕获 ExceptionGroup 回归测试
+
+### Sprint 7.4 学习总结
+
+`asyncio.CancelledError` 既是 Provider 可能主动抛出的异常，也是外部任务取消的信号，两种来源不能无差别处理。`current_task().cancelling()` 是 Python 3.11+ 提供的可靠方式区分当前任务是否正在被外部取消。资源清理代码必须尝试关闭所有组件，但外部取消应优先传播，其他关闭异常至少通过日志保留。`BaseExceptionGroup` 在全部子异常都是 `Exception` 时自动降级为 `ExceptionGroup`，混合 `CancelledError` 时则不会降级——包装为 `RuntimeError` 可以避免类型泄漏。
