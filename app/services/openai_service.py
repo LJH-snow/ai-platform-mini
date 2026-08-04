@@ -2,26 +2,22 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends
 
+from app.adapters.openai_adapter import OpenAIAdapter
 from app.core.container import provide_usage_collector
 from app.core.context import RequestContext
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.models import QuotaReservation
 from app.quota.service import QuotaService
-from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.schemas.openai import (
-    OpenAIChatMessage,
     OpenAIChatRequest,
     OpenAIChatResponse,
-    OpenAIChoice,
     OpenAIStreamChoice,
     OpenAIStreamChunk,
     OpenAIStreamDelta,
-    OpenAIUsage,
 )
 from app.services.chat_service import ChatService, get_chat_service
 from app.usage.collector import UsageCollector
@@ -32,9 +28,11 @@ class OpenAIService:
         self,
         chat_service: ChatService,
         usage_collector: UsageCollector,
+        adapter: OpenAIAdapter,
     ) -> None:
         self._chat_service = chat_service
         self._usage_collector = usage_collector
+        self._adapter = adapter
 
     async def chat_completions(
         self,
@@ -43,7 +41,7 @@ class OpenAIService:
         reservation: QuotaReservation | None = None,
         quota_service: QuotaService | None = None,
     ) -> OpenAIChatResponse:
-        chat_request = self._to_chat_request(request)
+        chat_request = self._adapter.to_chat_request(request)
         async with ReservationLifecycle(reservation, quota_service) as lifecycle:
             start = time.monotonic()
             chat_response = await lifecycle.run(self._chat_service.chat(chat_request))
@@ -55,7 +53,13 @@ class OpenAIService:
             )
             await lifecycle.settle()
 
-        return self._to_openai_response(chat_response)
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+        fallback_created = int(time.time())
+        return self._adapter.to_chat_response(
+            chat_response,
+            completion_id=completion_id,
+            fallback_created=fallback_created,
+        )
 
     async def chat_completions_stream(
         self,
@@ -64,7 +68,7 @@ class OpenAIService:
         reservation: QuotaReservation | None = None,
         quota_service: QuotaService | None = None,
     ) -> AsyncGenerator[str, None]:
-        chat_request = self._to_chat_request(request)
+        chat_request = self._adapter.to_chat_request(request)
         model = chat_request.model or self._chat_service.default_model
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         created = int(time.time())
@@ -137,67 +141,6 @@ class OpenAIService:
 
         yield "data: [DONE]\n\n"
 
-    def _to_chat_request(self, request: OpenAIChatRequest) -> ChatRequest:
-        last_message = request.messages[-1]
-        system_prompt: str | None = None
-        history: list[ChatMessage] = []
-
-        for msg in request.messages[:-1]:
-            if msg.role == "system" and system_prompt is None:
-                system_prompt = msg.content
-            else:
-                history.append(ChatMessage(role=msg.role, content=msg.content))
-
-        return ChatRequest(
-            message=last_message.content,
-            model=request.model,
-            system_prompt=system_prompt,
-            history=history,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-        )
-
-    def _to_openai_response(self, chat_response: ChatResponse) -> OpenAIChatResponse:
-        created = self._parse_created_at(chat_response.created_at)
-        has_usage = (
-            chat_response.prompt_tokens is not None
-            or chat_response.completion_tokens is not None
-        )
-        usage: OpenAIUsage | None = None
-        if has_usage:
-            prompt = chat_response.prompt_tokens or 0
-            completion = chat_response.completion_tokens or 0
-            usage = OpenAIUsage(
-                prompt_tokens=prompt,
-                completion_tokens=completion,
-                total_tokens=prompt + completion,
-            )
-        return OpenAIChatResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex[:12]}",
-            created=created,
-            model=chat_response.model,
-            choices=[
-                OpenAIChoice(
-                    index=0,
-                    message=OpenAIChatMessage(
-                        role=chat_response.message.role,
-                        content=chat_response.message.content,
-                    ),
-                    finish_reason=chat_response.done_reason or "stop",
-                )
-            ],
-            usage=usage,
-        )
-
-    def _parse_created_at(self, created_at: str | None) -> int:
-        if created_at is None:
-            return int(time.time())
-        try:
-            dt = datetime.fromisoformat(created_at)
-            return int(dt.timestamp())
-        except (ValueError, TypeError):
-            return int(time.time())
-
 
 def get_openai_service(
     chat_service: Annotated[ChatService, Depends(get_chat_service)],
@@ -206,4 +149,5 @@ def get_openai_service(
     return OpenAIService(
         chat_service=chat_service,
         usage_collector=collector,
+        adapter=OpenAIAdapter(),
     )
