@@ -1,0 +1,374 @@
+from __future__ import annotations
+
+import json
+import logging
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Protocol, cast
+
+from app.agents import (
+    AgentDecision,
+    AgentMessage,
+    AgentModel,
+    AgentRunResult,
+    AgentRuntime,
+    AgentState,
+    AgentTool,
+    ToolCall,
+)
+from app.auth.models import APIKey
+from app.core.context import RequestContext
+from app.exceptions.base import ProviderError, QuotaExceededError
+from app.quota.lifecycle import ReservationLifecycle
+from app.quota.service import QuotaService
+from app.quota.token_estimator import estimate_prompt_tokens
+from app.schemas.agent import AgentRunRequest
+from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
+from app.services.chat_service import ChatService
+from app.tools import CalculatorTool, ToolExecutor, ToolRegistry
+from app.usage.collector import UsageCollector
+
+logger = logging.getLogger(__name__)
+
+_AGENT_PROTOCOL_PROMPT = """
+You are the decision model for a bounded agent runtime. Return JSON only.
+Use exactly one of these shapes:
+{"type":"final_answer","answer":"non-empty answer"}
+{"type":"tool_call","call_id":"unique-id","name":"tool-name","arguments":{}}
+Do not use Markdown fences or add explanatory text outside the JSON object.
+Only call a tool that appears in the available tools list, and use a JSON object
+that matches its parameters schema.
+""".strip()
+
+
+@dataclass(frozen=True)
+class AgentRunOutcome:
+    """Application result plus usage data needed by the HTTP boundary."""
+
+    result: AgentRunResult
+    model: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    estimated_usage: bool
+
+
+class AgentRuntimeFactory(Protocol):
+    """Factory boundary that keeps AgentService easy to test."""
+
+    def __call__(
+        self,
+        model: AgentModel,
+        tools: Mapping[str, AgentTool] | None,
+        *,
+        tool_executor: ToolExecutor | None = None,
+    ) -> AgentRuntime: ...
+
+
+class _ChatServiceAgentModel:
+    """Adapt ChatService's text response to the current Runtime protocol."""
+
+    def __init__(
+        self,
+        chat_service: ChatService,
+        request: AgentRunRequest,
+        tool_schemas: Sequence[Mapping[str, object]] = (),
+    ) -> None:
+        self._chat_service = chat_service
+        self._request = request
+        self._tool_schemas = tuple(tool_schemas)
+        self.prompt_tokens: int | None = 0
+        self.completion_tokens: int | None = 0
+        self.actual_model = request.model or chat_service.default_model
+        self._model_call_count = 0
+        self._usage_complete = True
+        self._prompt_reservation_guard: Callable[[int], Awaitable[None]] | None = None
+
+    def set_prompt_reservation_guard(
+        self, guard: Callable[[int], Awaitable[None]] | None
+    ) -> None:
+        """Set a callback that reserves any newly observed prompt tokens."""
+        self._prompt_reservation_guard = guard
+
+    def estimate_prompt_tokens_for_state(self, state: AgentState) -> int:
+        """Estimate the exact prompt shape sent for the current agent state."""
+        return estimate_prompt_tokens(
+            [
+                ("system", self._build_system_prompt()),
+                ("user", self._build_transcript(state)),
+            ]
+        )
+
+    async def decide(self, state: AgentState) -> AgentDecision:
+        transcript = self._build_transcript(state)
+        system_prompt = self._build_system_prompt()
+        if self._prompt_reservation_guard is not None:
+            await self._prompt_reservation_guard(
+                estimate_prompt_tokens(
+                    [("system", system_prompt), ("user", transcript)]
+                )
+            )
+        chat_request = ChatRequest(
+            message=transcript,
+            model=self._request.model,
+            system_prompt=system_prompt,
+            history=[],
+            max_tokens=self._remaining_max_tokens(),
+        )
+        response = await self._chat_service.chat(chat_request)
+        self._model_call_count += 1
+        self.actual_model = response.model
+        self._usage_complete = self._usage_complete and (
+            response.prompt_tokens is not None
+            and response.completion_tokens is not None
+        )
+        if response.prompt_tokens is None:
+            self.prompt_tokens = None
+        elif self.prompt_tokens is not None:
+            self.prompt_tokens += response.prompt_tokens
+        if response.completion_tokens is None:
+            self.completion_tokens = None
+        elif self.completion_tokens is not None:
+            self.completion_tokens += response.completion_tokens
+        token_usage = None
+        if (
+            response.prompt_tokens is not None
+            and response.completion_tokens is not None
+        ):
+            token_usage = response.prompt_tokens + response.completion_tokens
+        decision = self._parse_decision(response.message.content)
+        return AgentDecision(
+            answer=decision.answer,
+            tool_calls=decision.tool_calls,
+            token_usage=token_usage,
+            usage_complete=self._usage_complete,
+        )
+
+    @property
+    def has_model_call(self) -> bool:
+        """Whether at least one provider call returned a response."""
+
+        return self._model_call_count > 0
+
+    def _build_system_prompt(self) -> str:
+        tools_prompt = "\n\nAvailable tools:\n" + json.dumps(
+            list(self._tool_schemas), ensure_ascii=False, sort_keys=True
+        )
+        if self._request.system_prompt:
+            return (
+                f"{self._request.system_prompt}\n\n{_AGENT_PROTOCOL_PROMPT}"
+                f"{tools_prompt}"
+            )
+        return f"{_AGENT_PROTOCOL_PROMPT}{tools_prompt}"
+
+    def _build_transcript(self, state: AgentState) -> str:
+        history = "\n".join(
+            f"{message.role}: {message.content}" for message in self._request.history
+        )
+        current = "\n".join(
+            f"{message.role}: {message.content}" for message in state.messages
+        )
+        sections = [
+            "Conversation history:",
+            history or "(none)",
+            "Agent state:",
+            current,
+        ]
+        return "\n".join(sections)
+
+    def _remaining_max_tokens(self) -> int:
+        """Limit each provider call to the unconsumed run token budget."""
+        observed = 0
+        if self.prompt_tokens is not None:
+            observed += self.prompt_tokens
+        if self.completion_tokens is not None:
+            observed += self.completion_tokens
+        return max(self._request.token_budget - observed, 1)
+
+    @staticmethod
+    def _parse_decision(content: str) -> AgentDecision:
+        try:
+            decoded = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise ValueError("model decision was not valid JSON") from exc
+
+        if not isinstance(decoded, dict):
+            raise ValueError("model decision must be a JSON object")
+
+        decision_type = decoded.get("type")
+        if decision_type == "final_answer":
+            answer = decoded.get("answer")
+            if not isinstance(answer, str) or not answer.strip():
+                raise ValueError("final_answer decision requires a non-empty answer")
+            return AgentDecision(answer=answer)
+
+        if decision_type == "tool_call":
+            call_id = decoded.get("call_id")
+            name = decoded.get("name")
+            arguments = decoded.get("arguments", {})
+            if not isinstance(call_id, str) or not call_id.strip():
+                raise ValueError("tool_call decision requires a call_id")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("tool_call decision requires a tool name")
+            if not isinstance(arguments, dict):
+                raise ValueError("tool_call arguments must be a JSON object")
+            safe_arguments = cast(Mapping[str, object], arguments)
+            return AgentDecision(
+                tool_calls=(
+                    ToolCall(
+                        call_id=call_id,
+                        name=name,
+                        arguments=safe_arguments,
+                    ),
+                )
+            )
+
+        raise ValueError("model decision contains an unknown type")
+
+
+class AgentService:
+    """Application service connecting the Agent Runtime to platform boundaries."""
+
+    def __init__(
+        self,
+        chat_service: ChatService,
+        quota_service: QuotaService,
+        usage_collector: UsageCollector,
+        runtime_factory: AgentRuntimeFactory = AgentRuntime,
+        tool_registry: ToolRegistry | None = None,
+    ) -> None:
+        self._chat_service = chat_service
+        self._quota_service = quota_service
+        self._usage_collector = usage_collector
+        self._runtime_factory = runtime_factory
+        self._tool_registry = (
+            tool_registry
+            if tool_registry is not None
+            else ToolRegistry([CalculatorTool()])
+        )
+        self._tool_executor = ToolExecutor(self._tool_registry)
+
+    async def run(
+        self,
+        request: AgentRunRequest,
+        *,
+        context: RequestContext,
+        api_key: APIKey,
+    ) -> AgentRunOutcome:
+        """Run an Agent request and settle platform quota and usage boundaries."""
+        model = _ChatServiceAgentModel(
+            self._chat_service,
+            request,
+            self._tool_registry.export_schemas(),
+        )
+        initial_state = AgentState(
+            run_id="quota-estimate",
+            user_input=request.message,
+            messages=[AgentMessage(role="user", content=request.message)],
+        )
+        reserved_prompt_tokens = model.estimate_prompt_tokens_for_state(initial_state)
+        reservation = await self._quota_service.reserve(
+            api_key.key,
+            max_tokens=request.token_budget,
+            prompt_tokens=reserved_prompt_tokens,
+        )
+
+        async def ensure_prompt_reservation(prompt_tokens: int) -> None:
+            nonlocal reserved_prompt_tokens
+            additional_tokens = prompt_tokens - reserved_prompt_tokens
+            if reservation is None or additional_tokens <= 0:
+                return
+            await self._quota_service.extend(
+                reservation.reservation_id, additional_tokens
+            )
+            reserved_prompt_tokens = prompt_tokens
+
+        model.set_prompt_reservation_guard(ensure_prompt_reservation)
+        runtime = self._runtime_factory(
+            model,
+            None,
+            tool_executor=self._tool_executor,
+        )
+        started = time.monotonic()
+
+        async with ReservationLifecycle(reservation, self._quota_service) as lifecycle:
+            try:
+                result = await lifecycle.run(
+                    runtime.run(
+                        request.message,
+                        max_steps=request.max_steps,
+                        timeout=request.timeout_seconds,
+                        token_budget=request.token_budget,
+                    )
+                )
+            except QuotaExceededError:
+                if model.has_model_call:
+                    elapsed_ms = (time.monotonic() - started) * 1000
+                    await self._record_usage(
+                        context=context,
+                        model=model,
+                        answer=None,
+                        stop_reason="quota_exceeded",
+                        latency_ms=elapsed_ms,
+                    )
+                raise
+
+            elapsed_ms = (time.monotonic() - started) * 1000
+            await self._record_usage(
+                context=context,
+                model=model,
+                answer=result.answer,
+                stop_reason=result.stop_reason.value,
+                latency_ms=elapsed_ms,
+            )
+            await lifecycle.settle()
+
+        if result.status.value == "failed":
+            raise self._map_runtime_failure(result)
+
+        return AgentRunOutcome(
+            result=result,
+            model=model.actual_model,
+            prompt_tokens=model.prompt_tokens,
+            completion_tokens=model.completion_tokens,
+            estimated_usage=(
+                model.prompt_tokens is None or model.completion_tokens is None
+            ),
+        )
+
+    async def _record_usage(
+        self,
+        *,
+        context: RequestContext,
+        model: _ChatServiceAgentModel,
+        answer: str | None,
+        stop_reason: str,
+        latency_ms: float,
+    ) -> None:
+        content = answer or "Agent run stopped before producing a final answer."
+        usage_response = ChatResponse(
+            model=model.actual_model,
+            message=ChatMessage(role="assistant", content=content),
+            done=True,
+            done_reason=stop_reason,
+            prompt_tokens=model.prompt_tokens,
+            completion_tokens=model.completion_tokens,
+        )
+        await self._usage_collector.record_chat(
+            context=context,
+            response=usage_response,
+            latency_ms=latency_ms,
+        )
+
+    @staticmethod
+    def _map_runtime_failure(result: AgentRunResult) -> ProviderError:
+        if result.stop_reason.value == "invalid_decision":
+            return ProviderError("Agent model returned an invalid decision.")
+        return ProviderError("Agent model failed to complete the run.")
+
+
+def get_agent_service() -> AgentService:
+    """Return the cached application service for FastAPI dependency injection."""
+    from app.core.container import provide_agent_service
+
+    return provide_agent_service()

@@ -66,6 +66,30 @@ class QuotaService:
             return
         await self._quota_repo.settle_reservation(reservation_id)
 
+    async def extend(self, reservation_id: str, additional_tokens: int) -> None:
+        """Atomically extend an active reservation for a later model prompt."""
+        if not self._config.enabled or additional_tokens <= 0:
+            return
+        result = await self._quota_repo.extend_reservation(
+            reservation_id=reservation_id,
+            additional_tokens=additional_tokens,
+            daily_limit=self._config.daily_token_limit,
+            monthly_limit=self._config.monthly_token_limit,
+        )
+        now = datetime.now(UTC)
+        if result is ReservationResult.DAILY_LIMIT:
+            raise QuotaExceededError(
+                "Daily token quota exceeded.",
+                retry_after=self._seconds_until_next_day(now),
+            )
+        if result is ReservationResult.MONTHLY_LIMIT:
+            raise QuotaExceededError(
+                "Monthly token quota exceeded.",
+                retry_after=self._seconds_until_next_month(now),
+            )
+        if result is ReservationResult.NOT_FOUND:
+            raise QuotaExceededError("Quota reservation is no longer active.")
+
     async def release(self, reservation_id: str) -> None:
         if not self._config.enabled:
             return

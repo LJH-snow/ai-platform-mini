@@ -58,6 +58,45 @@ class InMemoryQuotaRepository:
     async def settle_reservation(self, reservation_id: str) -> None:
         self._reservations.pop(reservation_id, None)
 
+    async def extend_reservation(
+        self,
+        reservation_id: str,
+        additional_tokens: int,
+        daily_limit: int | None,
+        monthly_limit: int | None,
+    ) -> ReservationResult:
+        self._purge_expired()
+        entry = self._reservations.get(reservation_id)
+        if entry is None or entry["settled"]:
+            return ReservationResult.NOT_FOUND
+
+        api_key_hash = entry["api_key_hash"]
+        usage_date = entry["usage_date"]
+        current_reserved = entry["reserved_tokens"]
+        if daily_limit is not None:
+            daily_used = await self._usage_repo.get_total_tokens_for_key(
+                api_key_hash, usage_date
+            )
+            daily_reserved = await self.get_reserved_tokens_for_key(
+                api_key_hash, usage_date
+            )
+            if daily_used + daily_reserved + additional_tokens > daily_limit:
+                return ReservationResult.DAILY_LIMIT
+
+        if monthly_limit is not None:
+            monthly_aggs = await self._usage_repo.get_monthly_usage(
+                api_key_hash, usage_date[:7]
+            )
+            monthly_used = sum(a.total_tokens for a in monthly_aggs)
+            monthly_reserved = await self.get_monthly_reserved_tokens_for_key(
+                api_key_hash, usage_date[:7]
+            )
+            if monthly_used + monthly_reserved + additional_tokens > monthly_limit:
+                return ReservationResult.MONTHLY_LIMIT
+
+        entry["reserved_tokens"] = current_reserved + additional_tokens
+        return ReservationResult.CREATED
+
     async def release_reservation(self, reservation_id: str) -> None:
         self._reservations.pop(reservation_id, None)
 

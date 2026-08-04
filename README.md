@@ -5,16 +5,19 @@
 
 ## Current status
 
-- Current milestone: **Sprint 7.4 implemented**
+- Current milestone: **Sprint 10 completed and approved**
 - Version: `0.1.0`
 - Runtime: Python `3.12`–`3.14`（默认 `3.14`）
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
 - OpenAIProvider: 已接入 ProviderRouter、DI 和应用生命周期
 - Storage: Memory 或 PostgreSQL
-- Verification baseline（2026-08-03）:
-  - Default suite: `221 passed, 21 skipped`
-  - PostgreSQL integration suite: `160 passed`
-  - Ruff format/lint and mypy: passed
+- RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
+- Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
+- Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
+- Verification baseline（2026-08-04）：
+  - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
+  - PostgreSQL/pgvector integration suite：通过
+  - Ruff format/lint、mypy 和 Uvicorn 启动检查：通过
 
 ## Core capabilities
 
@@ -27,6 +30,10 @@
 - 按 API Key 的滑动窗口限流，以及日/月 Token 配额
 - 配额预占、续租、结算和断连释放，支持并发及长时间流式请求
 - PostgreSQL Usage 聚合、API Key 持久化和 Testcontainers 集成测试
+- Agent Runtime 核心状态、事件、Tool Protocol 和 `POST /api/v1/agent/runs` 应用层
+- Tool Registry/Executor：Schema 参数校验、超时、异常安全归一化、输出截断和工具 Schema 导出
+- RAG Tool：`knowledge_search` 复用 RAG prepare 阶段，返回带来源、距离和安全提示的结构化检索结果；Agent 可在回答前自主调用知识库
+- Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
 
 ## Project rules
@@ -93,6 +100,8 @@ INTEGRATION_TEST=1 pytest
 | POST | `/v1/chat/completions` | OpenAI-compatible chat completions (supports SSE streaming) |
 | GET | `/api/v1/models` | List available LLM models |
 | POST | `/api/v1/chat` | Generate a chat completion with model-based provider routing |
+| POST | `/api/v1/chat/rag` | RAG-enhanced chat completion (requires `RAG_ENABLED=true`) |
+| POST | `/api/v1/agent/runs` | Bounded Agent Runtime run (model decision and controlled tool loop) |
 | POST | `/admin/api-keys` | Create a new API key (admin only) |
 | GET | `/admin/api-keys` | List all API keys (admin only) |
 | DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only) |
@@ -166,7 +175,9 @@ INTEGRATION_TEST=1 pytest
 ```
 app/
 ├── adapters/        # Protocol adaptation (OpenAI-compatible request/response mapping)
-├── api/            # Router layer (chat, openai, admin, health, models)
+├── agents/         # Framework-independent Agent Runtime (state, protocols, loop, events)
+├── tools/          # Tool Protocol, Registry, Executor and safe built-in tools
+├── api/            # Router layer (chat, agent, openai, admin, health, models)
 ├── auth/           # Authentication & key management (service, repository, dependencies)
 ├── core/           # Infrastructure (settings, logging, exceptions, container, context)
 ├── db/             # Database (models, session, init)
@@ -174,6 +185,7 @@ app/
 ├── middleware/     # Context middleware (request_id)
 ├── providers/      # LLM Provider layer (Protocol + implementations)
 ├── quota/          # Token quota (reserve/settle, repository, service)
+├── rag/            # Retrieval-Augmented Generation (embedder, vector store, chunker, service)
 ├── ratelimit/      # Rate limiting (Protocol + memory impl + dependencies)
 ├── schemas/        # Pydantic request/response models
 ├── services/       # Business logic
@@ -185,6 +197,7 @@ app/
 
 - **Pydantic schemas** (`app/schemas/`) — typed request/response, no raw dicts
 - **Service layer** — Router never calls Ollama directly; swap provider by changing only the service
+- **Agent boundary** — `AgentRuntime` only depends on typed domain models and Protocols; `AgentService` owns Chat/Quota/Usage integration
 - **Adapter layer** — stateless protocol conversion between public API schemas and internal schemas
 - **Settings** (`app/core/settings.py`) — pydantic-settings reads `.env`, never hardcode configs
 - **Logging** (`app/core/logging.py`) — dictConfig JSON logs with request ID, method, path, status, and latency
@@ -230,6 +243,17 @@ QUOTA_DAILY_TOKENS=0
 QUOTA_MONTHLY_TOKENS=0
 QUOTA_RESERVATION_TTL_SECONDS=600
 QUOTA_RESERVATION_RENEWAL_SECONDS=60
+
+# RAG (Retrieval-Augmented Generation)
+RAG_ENABLED=false
+RAG_EMBEDDING_MODEL=nomic-embed-text
+RAG_EMBEDDING_DIMENSIONS=768
+RAG_CHUNK_SIZE=500
+RAG_CHUNK_OVERLAP=50
+RAG_TOP_K=5
+RAG_MAX_CONTEXT_CHARS=10000
+RAG_MAX_DISTANCE=0.35
+RAG_EMBEDDING_TIMEOUT_SECONDS=60
 ```
 
 ### Key configuration notes
@@ -243,7 +267,18 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 - `QUOTA_RESERVATION_RENEWAL_SECONDS`: reservation renewal interval; must be positive and shorter than its TTL
 - Quota uses a reserve/settle pattern: tokens are reserved before an LLM call and settled only after actual usage is persisted. `ReservationLifecycle` renews active reservations for both non-streaming and streaming requests, and releases them if renewal fails or a client disconnects.
 
-> [完整路线图](docs/superpowers/specs/2026-08-03-project-roadmap.md)
+### RAG configuration notes
+
+- `RAG_ENABLED=true` **requires** PostgreSQL with the `pgvector` extension and an accessible Ollama instance for embeddings
+- `RAG_EMBEDDING_DIMENSIONS` is currently locked to `768` (MVP fixed schema); changing it requires a database migration
+- `RAG_MAX_DISTANCE` uses cosine distance (0 = identical, 2 = opposite); results with distance > threshold are excluded
+- `RAG_TOP_K` controls how many candidate chunks are retrieved before distance filtering (max 50)
+- `RAG_MAX_CONTEXT_CHARS` limits the total character length of injected context (max 100,000)
+- To ingest documents, run: `python scripts/ingest.py <path-to-txt-file>` (requires `RAG_ENABLED=true` and running Ollama)
+- Empty knowledge base → `KnowledgeBaseEmptyError` (404); all retrieved results exceeding `RAG_MAX_DISTANCE` → `NoRelevantContextError` (404)
+
+> [完整路线图](docs/roadmap/2026-08-04-agent-runtime-development-roadmap.md)
+> [Sprint 8 设计说明](docs/superpowers/specs/2026-08-04-agent-runtime-design.md)
 
 ## Sprint log
 
@@ -507,3 +542,61 @@ OpenAI SSE 转换不仅需要字段映射，还需要状态机验证终止帧与
 ### Sprint 7.4 学习总结
 
 `asyncio.CancelledError` 既是 Provider 可能主动抛出的异常，也是外部任务取消的信号，两种来源不能无差别处理。`current_task().cancelling()` 是 Python 3.11+ 提供的可靠方式区分当前任务是否正在被外部取消。资源清理代码必须尝试关闭所有组件，但外部取消应优先传播，其他关闭异常至少通过日志保留。`BaseExceptionGroup` 在全部子异常都是 `Exception` 时自动降级为 `ExceptionGroup`，混合 `CancelledError` 时则不会降级——包装为 `RuntimeError` 可以避免类型泄漏。
+
+### Sprint 7.5
+
+- RAG MVP：检索增强生成端点 `POST /api/v1/chat/rag`
+- `app/rag/` 模块：OllamaEmbedder（调用 Ollama `/api/embed`）、PgVectorStore（pgvector 余弦距离检索）、Chunker（固定窗口 + 重叠切分）、RAGService（两阶段 prepare/answer）
+- 相似度阈值 `RAG_MAX_DISTANCE`：过滤余弦距离超过阈值的检索结果，区分空知识库（`KnowledgeBaseEmptyError`）与全部不相关（`NoRelevantContextError`）
+- 上下文注入使用随机 UUID 边界标记 + 内容净化，防止恶意文档伪造边界或注入指令
+- 配置上限：`RAG_TOP_K ≤ 50`、`RAG_MAX_CONTEXT_CHARS ≤ 100000`、`RAG_MAX_DISTANCE ≤ 2.0`
+- `scripts/ingest.py`：离线文档摄入脚本，支持 SHA-256 去重、同路径文档替代、事务级 advisory lock
+- 数据库模型：`rag_documents`（文档元信息）+ `rag_document_chunks`（分块 + pgvector embedding 列）
+- RAG 路由：认证→限流→RAG 服务→配额预占→LLM 调用→结算，配额估算包含 RAG 上下文 token
+- `RAG_ENABLED=false` 时 RAG 端点返回 503，不暴露给未认证调用者
+
+### Sprint 7.5 学习总结
+
+RAG 两阶段设计（prepare/answer）将检索与生成解耦，允许在配额预占前获得完整的 token 估算——包括注入的上下文。余弦距离阈值需要区分两种"无结果"语义：知识库为空 vs 全部不相关，否则调用方无法判断是应该补充文档还是调整查询。pgvector 检索不应在 SQL 层硬编码距离上限，应返回原始距离交给服务层按配置阈值过滤，否则阈值变更需要同时修改应用代码和 SQL 查询。
+
+### Sprint 8
+
+- 新增 `app/agents/` 领域层：`AgentState`、`AgentDecision`、`AgentStep`、`AgentEvent`、`AgentRunResult` 及 `AgentModel`/`AgentTool` Protocol
+- 实现独立于 FastAPI 的有界 Agent Runtime：模型决策、Tool 调用、结果回填和多步循环
+- 支持 `max_steps`、deadline/timeout、外部取消和 provider-reported Token budget；未知 Token 用量不会被伪装成 0
+- 新增 `POST /api/v1/agent/runs`，通过 `AgentService` 复用现有 ChatService、鉴权、限流、Quota、Usage 和统一异常边界
+- API 只返回步骤和事件摘要，不暴露工具参数、工具输出或 Provider 原始响应
+- 本 Sprint 不声称已经完成通用 Tool Registry、RAG Tool、MCP、Memory、Multi-Agent、Agent SSE 或前端 Agent UI
+
+### Sprint 8 学习总结
+
+Agent Runtime 不应直接依赖 FastAPI 或具体模型客户端，而应通过 `AgentModel` 和 `AgentTool` Protocol 保持领域层可独立测试。应用层适配现有 `ChatService` 时，模型输出采用受限 JSON 决策协议，解析失败必须进入受控失败路径。Token 用量缺失时保留 `None` 并显式标记估算状态，避免把未知数据误报为精确统计。最大步数、deadline、取消和工具输出边界共同保证 Agent 不会以不可观测的无限循环运行。
+
+### Sprint 9
+
+- 新增 `app/tools/`，建立 `Tool` Protocol、`ToolDescriptor`、`ToolRegistry` 和 `ToolExecutor`。
+- `ToolRegistry` 负责工具注册、重名拒绝、查询和稳定的模型函数 Schema 导出。
+- `ToolExecutor` 在工具实现前执行对象 Schema 校验，并统一处理超时、普通异常、未知工具和输出截断。
+- `AgentService` 默认只注册低风险 `calculator`，`AgentRuntime` 支持 `ToolExecutor` 注入，同时保留 Sprint 8 的 Mapping 工具兼容路径。
+- `calculator` 使用 AST 白名单实现 `+ - * / % **`，不提供任意文件、网络、Shell、MCP 或 RAG Tool。
+
+### Sprint 9 学习总结
+
+Tool Registry 解决“有哪些工具”，Tool Executor 解决“能否安全执行”，Agent Runtime 继续负责 Run/Step 循环，三者分工比把所有逻辑塞进 Chat API 更容易测试和演进。参数 Schema 必须在工具实现前校验，异常和输出也要经过统一边界，避免把内部细节直接暴露给模型。Calculator 使用 AST 白名单而不是 `eval()`，在保留演示价值的同时把执行面控制在低风险范围内。通过保留原有 Mapping 工具注入路径，本 Sprint 可以增量引入治理能力而不破坏 Sprint 8 Runtime。
+
+> [Sprint 9 Tool System 设计说明](docs/superpowers/specs/2026-08-04-tool-system-design.md)
+
+### Sprint 10
+
+- 新增 `KnowledgeSearchTool`，通过现有 `ToolRegistry`/`ToolExecutor` 接入 Agent Runtime。
+- Tool 只调用 `RAGService.prepare`，不直接依赖 Agent Runtime，也不重复实现 embedding、pgvector 检索、距离过滤或上下文截断。
+- `PreparedRAGRequest` 新增结构化 `RAGReference`，向 Agent 返回实际纳入上下文的内容、文档/分块来源、距离和不可信内容提示。
+- 空知识库、无相关上下文、RAG 存储不可用和 embedding 失败映射为稳定错误码，未知异常仍由 ToolExecutor 安全归一化。
+- 容器仅在 RAG 服务可用时注册 `knowledge_search`；RAG 关闭时 Agent 继续保持 `calculator` 默认能力。
+- 新增普通 Agent + Knowledge Search 集成测试，并保留 `/api/v1/chat/rag` 兼容链路。
+
+### Sprint 10 学习总结
+
+RAG Tool 化的关键不是复制一套检索代码，而是把现有 `RAGService.prepare` 作为唯一检索入口，再通过结构化引用把结果交给 Agent。将来源、距离和清洗后的内容一起返回，既便于模型使用，也为后续引用展示和评测保留证据。容器根据 RAG 能力是否可用动态注册工具，使功能开关不会改变默认 Agent 的安全边界。通过区分可预期的知识库、存储和 embedding 错误与未知异常，Tool 层可以给模型稳定反馈，同时避免暴露内部实现细节。
+
+> [Sprint 10 RAG Tool 化设计说明](docs/superpowers/specs/2026-08-04-rag-tool-design.md)

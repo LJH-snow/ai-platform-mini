@@ -52,3 +52,23 @@ class QuotaReservationError(AppError):
 
 class ProviderRequestError(ProviderError):
     """Raised when the provider returns an unexpected error response."""
+
+
+class RAGError(AppError):
+    """Raised when the RAG subsystem cannot satisfy a request."""
+
+
+class RAGUnavailableError(RAGError):
+    """Raised when RAG is not enabled or the embedding service is unreachable."""
+
+
+class KnowledgeBaseEmptyError(RAGError):
+    """Raised when the knowledge base has no indexed documents."""
+
+
+class NoRelevantContextError(RAGError):
+    """Raised when no retrieved chunk passes the relevance threshold."""
+
+
+class RAGStorageUnavailableError(RAGError):
+    """Raised when the RAG storage backend (e.g. pgvector) is unreachable."""

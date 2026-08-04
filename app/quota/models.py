@@ -6,6 +6,7 @@ class ReservationResult(StrEnum):
     CREATED = "created"
     DAILY_LIMIT = "daily_limit"
     MONTHLY_LIMIT = "monthly_limit"
+    NOT_FOUND = "not_found"
 
 
 @dataclass(frozen=True)
