@@ -16,6 +16,7 @@ from app.agents import (
     ToolCall,
     ToolContext,
 )
+from app.tools import CalculatorTool, ToolExecutor, ToolRegistry
 
 
 @dataclass
@@ -125,6 +126,31 @@ async def test_single_tool_call_is_fed_back_before_final_answer() -> None:
     assert len(tool.calls) == 1
     assert tool.calls[0][1].step_index == 1
     assert [step.index for step in result.state.steps] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_runtime_can_execute_tools_through_registry_and_executor() -> None:
+    model = ScriptedModel(
+        [
+            AgentDecision(
+                tool_calls=(
+                    ToolCall(
+                        call_id="call-calculator",
+                        name="calculator",
+                        arguments={"expression": "2 + 3"},
+                    ),
+                )
+            ),
+            AgentDecision(answer="5"),
+        ]
+    )
+    executor = ToolExecutor(ToolRegistry([CalculatorTool()]))
+
+    result = await AgentRuntime(model, tool_executor=executor).run("calculate 2 + 3")
+
+    assert result.answer == "5"
+    assert result.state.steps[0].tool_results[0].succeeded is True
+    assert result.state.messages[-2].content == "5"
 
 
 @pytest.mark.asyncio

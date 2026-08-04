@@ -5,7 +5,7 @@
 
 ## Current status
 
-- Current milestone: **Sprint 8 implemented, pending Code Review**
+- Current milestone: **Sprint 9 implemented, pending Code Review**
 - Version: `0.1.0`
 - Runtime: Python `3.12`–`3.14`（默认 `3.14`）
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
@@ -13,6 +13,7 @@
 - Storage: Memory 或 PostgreSQL
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
+- Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
   - PostgreSQL/pgvector integration suite：通过
@@ -30,6 +31,8 @@
 - 配额预占、续租、结算和断连释放，支持并发及长时间流式请求
 - PostgreSQL Usage 聚合、API Key 持久化和 Testcontainers 集成测试
 - Agent Runtime 核心状态、事件、Tool Protocol 和 `POST /api/v1/agent/runs` 应用层
+- Tool Registry/Executor：Schema 参数校验、超时、异常安全归一化、输出截断和工具 Schema 导出
+- Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
 
 ## Project rules
@@ -172,6 +175,7 @@ INTEGRATION_TEST=1 pytest
 app/
 ├── adapters/        # Protocol adaptation (OpenAI-compatible request/response mapping)
 ├── agents/         # Framework-independent Agent Runtime (state, protocols, loop, events)
+├── tools/          # Tool Protocol, Registry, Executor and safe built-in tools
 ├── api/            # Router layer (chat, agent, openai, admin, health, models)
 ├── auth/           # Authentication & key management (service, repository, dependencies)
 ├── core/           # Infrastructure (settings, logging, exceptions, container, context)
@@ -566,3 +570,17 @@ RAG 两阶段设计（prepare/answer）将检索与生成解耦，允许在配�
 ### Sprint 8 学习总结
 
 Agent Runtime 不应直接依赖 FastAPI 或具体模型客户端，而应通过 `AgentModel` 和 `AgentTool` Protocol 保持领域层可独立测试。应用层适配现有 `ChatService` 时，模型输出采用受限 JSON 决策协议，解析失败必须进入受控失败路径。Token 用量缺失时保留 `None` 并显式标记估算状态，避免把未知数据误报为精确统计。最大步数、deadline、取消和工具输出边界共同保证 Agent 不会以不可观测的无限循环运行。
+
+### Sprint 9
+
+- 新增 `app/tools/`，建立 `Tool` Protocol、`ToolDescriptor`、`ToolRegistry` 和 `ToolExecutor`。
+- `ToolRegistry` 负责工具注册、重名拒绝、查询和稳定的模型函数 Schema 导出。
+- `ToolExecutor` 在工具实现前执行对象 Schema 校验，并统一处理超时、普通异常、未知工具和输出截断。
+- `AgentService` 默认只注册低风险 `calculator`，`AgentRuntime` 支持 `ToolExecutor` 注入，同时保留 Sprint 8 的 Mapping 工具兼容路径。
+- `calculator` 使用 AST 白名单实现 `+ - * / % **`，不提供任意文件、网络、Shell、MCP 或 RAG Tool。
+
+### Sprint 9 学习总结
+
+Tool Registry 解决“有哪些工具”，Tool Executor 解决“能否安全执行”，Agent Runtime 继续负责 Run/Step 循环，三者分工比把所有逻辑塞进 Chat API 更容易测试和演进。参数 Schema 必须在工具实现前校验，异常和输出也要经过统一边界，避免把内部细节直接暴露给模型。Calculator 使用 AST 白名单而不是 `eval()`，在保留演示价值的同时把执行面控制在低风险范围内。通过保留原有 Mapping 工具注入路径，本 Sprint 可以增量引入治理能力而不破坏 Sprint 8 Runtime。
+
+> [Sprint 9 Tool System 设计说明](docs/superpowers/specs/2026-08-04-tool-system-design.md)

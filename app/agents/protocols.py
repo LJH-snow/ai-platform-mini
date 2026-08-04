@@ -1,18 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from app.agents.models import AgentDecision, AgentState
-
-
-@dataclass(frozen=True)
-class ToolContext:
-    """Context supplied to a tool without coupling it to FastAPI or storage."""
-
-    run_id: str
-    step_index: int
+from app.agents.models import AgentDecision, AgentState, ToolContext
 
 
 @runtime_checkable

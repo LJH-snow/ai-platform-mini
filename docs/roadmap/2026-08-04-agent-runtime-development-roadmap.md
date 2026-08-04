@@ -196,6 +196,10 @@ app/
 
 不提供无限制终端、任意写文件和任意网络访问。
 
+### 实际状态
+
+已实现，等待 Code Review。Tool Registry、Tool Executor、Calculator 及 Agent Runtime/Service 集成已经落地，完整质量门禁通过后停在本 Sprint，待用户批准再提交。
+
 ---
 
 ## Sprint 10：RAG Tool 化与当前 MVP 收口（2026-08-18—2026-08-24）

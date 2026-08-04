@@ -54,6 +54,16 @@ class AgentMessage:
 
 
 @dataclass(frozen=True)
+class ToolContext:
+    """Context supplied to a tool without coupling it to FastAPI or storage."""
+
+    run_id: str
+    step_index: int
+    request_id: str | None = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ToolCall:
     """A model-requested tool invocation."""
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Protocol, cast
 
 from app.agents import (
     AgentDecision,
@@ -25,6 +25,7 @@ from app.quota.token_estimator import estimate_prompt_tokens
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
+from app.tools import CalculatorTool, ToolExecutor, ToolRegistry
 from app.usage.collector import UsageCollector
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,8 @@ Use exactly one of these shapes:
 {"type":"final_answer","answer":"non-empty answer"}
 {"type":"tool_call","call_id":"unique-id","name":"tool-name","arguments":{}}
 Do not use Markdown fences or add explanatory text outside the JSON object.
-No tools are currently available unless the system explicitly provides them.
+Only call a tool that appears in the available tools list, and use a JSON object
+that matches its parameters schema.
 """.strip()
 
 
@@ -50,15 +52,30 @@ class AgentRunOutcome:
     estimated_usage: bool
 
 
-AgentRuntimeFactory = Callable[[AgentModel, Mapping[str, AgentTool]], AgentRuntime]
+class AgentRuntimeFactory(Protocol):
+    """Factory boundary that keeps AgentService easy to test."""
+
+    def __call__(
+        self,
+        model: AgentModel,
+        tools: Mapping[str, AgentTool] | None,
+        *,
+        tool_executor: ToolExecutor | None = None,
+    ) -> AgentRuntime: ...
 
 
 class _ChatServiceAgentModel:
     """Adapt ChatService's text response to the current Runtime protocol."""
 
-    def __init__(self, chat_service: ChatService, request: AgentRunRequest) -> None:
+    def __init__(
+        self,
+        chat_service: ChatService,
+        request: AgentRunRequest,
+        tool_schemas: Sequence[Mapping[str, object]] = (),
+    ) -> None:
         self._chat_service = chat_service
         self._request = request
+        self._tool_schemas = tuple(tool_schemas)
         self.prompt_tokens: int | None = 0
         self.completion_tokens: int | None = 0
         self.actual_model = request.model or chat_service.default_model
@@ -96,9 +113,15 @@ class _ChatServiceAgentModel:
         )
 
     def _build_system_prompt(self) -> str:
+        tools_prompt = "\n\nAvailable tools:\n" + json.dumps(
+            list(self._tool_schemas), ensure_ascii=False, sort_keys=True
+        )
         if self._request.system_prompt:
-            return f"{self._request.system_prompt}\n\n{_AGENT_PROTOCOL_PROMPT}"
-        return _AGENT_PROTOCOL_PROMPT
+            return (
+                f"{self._request.system_prompt}\n\n{_AGENT_PROTOCOL_PROMPT}"
+                f"{tools_prompt}"
+            )
+        return f"{_AGENT_PROTOCOL_PROMPT}{tools_prompt}"
 
     def _build_transcript(self, state: AgentState) -> str:
         history = "\n".join(
@@ -165,11 +188,18 @@ class AgentService:
         quota_service: QuotaService,
         usage_collector: UsageCollector,
         runtime_factory: AgentRuntimeFactory = AgentRuntime,
+        tool_registry: ToolRegistry | None = None,
     ) -> None:
         self._chat_service = chat_service
         self._quota_service = quota_service
         self._usage_collector = usage_collector
         self._runtime_factory = runtime_factory
+        self._tool_registry = (
+            tool_registry
+            if tool_registry is not None
+            else ToolRegistry([CalculatorTool()])
+        )
+        self._tool_executor = ToolExecutor(self._tool_registry)
 
     async def run(
         self,
@@ -185,8 +215,16 @@ class AgentService:
             max_tokens=request.token_budget,
             prompt_tokens=estimate_prompt_tokens(prompt_messages),
         )
-        model = _ChatServiceAgentModel(self._chat_service, request)
-        runtime = self._runtime_factory(model, {})
+        model = _ChatServiceAgentModel(
+            self._chat_service,
+            request,
+            self._tool_registry.export_schemas(),
+        )
+        runtime = self._runtime_factory(
+            model,
+            None,
+            tool_executor=self._tool_executor,
+        )
         started = time.monotonic()
 
         async with ReservationLifecycle(reservation, self._quota_service) as lifecycle:

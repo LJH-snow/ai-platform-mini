@@ -20,6 +20,7 @@ from app.agents.models import (
     ToolResult,
 )
 from app.agents.protocols import AgentModel, AgentTool, ToolContext
+from app.tools.executor import ToolExecutor
 
 _T = TypeVar("_T")
 _DEFAULT_TOOL_OUTPUT_MAX_CHARS = 8_192
@@ -37,12 +38,16 @@ class AgentRuntime:
         model: AgentModel,
         tools: Mapping[str, AgentTool] | None = None,
         *,
+        tool_executor: ToolExecutor | None = None,
         tool_output_max_chars: int = _DEFAULT_TOOL_OUTPUT_MAX_CHARS,
     ) -> None:
+        if tools is not None and tool_executor is not None:
+            raise ValueError("provide tools or tool_executor, not both")
         if tool_output_max_chars < 1:
             raise ValueError("tool_output_max_chars must be greater than zero")
         self._model = model
         self._tools = dict(tools or {})
+        self._tool_executor = tool_executor
         self._tool_output_max_chars = tool_output_max_chars
 
     async def run(
@@ -267,6 +272,27 @@ class AgentRuntime:
         effective_deadline: float | None,
         cancel_event: asyncio.Event | None,
     ) -> ToolResult:
+        if self._tool_executor is not None:
+            remaining = self._remaining(effective_deadline)
+            execution = await self._await_controlled(
+                self._tool_executor.execute(
+                    tool_call.name,
+                    tool_call.arguments,
+                    ToolContext(run_id=run_id, step_index=step_index),
+                    timeout_seconds=remaining,
+                ),
+                effective_deadline=effective_deadline,
+                cancel_event=cancel_event,
+            )
+            return ToolResult(
+                call_id=tool_call.call_id,
+                name=tool_call.name,
+                content=execution.output,
+                succeeded=execution.succeeded,
+                error=execution.error_code,
+                truncated=execution.truncated,
+            )
+
         tool = self._tools.get(tool_call.name)
         if tool is None:
             return ToolResult(
