@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -6,11 +7,17 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from app.api.admin import router as admin_router
+from app.api.agent import router as agent_router
 from app.api.chat import router as chat_router
 from app.api.health import router as health_router
 from app.api.models import router as models_router
 from app.api.openai import router as openai_router
-from app.core.container import provide_llm_provider
+from app.api.rag import router as rag_router
+from app.core.container import (
+    clear_container_cache,
+    provide_embedder,
+    provide_llm_provider,
+)
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, setup_logging
 from app.core.settings import Settings, get_settings
@@ -18,6 +25,7 @@ from app.middleware.context import ContextMiddleware
 
 if TYPE_CHECKING:
     from app.providers.base import LLMProvider
+    from app.rag.ollama_embedder import OllamaEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -26,17 +34,38 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     provider: LLMProvider | None = None
+    embedder: OllamaEmbedder | None = None
     db_initialized = False
 
     try:
         provider = provide_llm_provider()
 
-        if settings.auth_storage == "postgres":
+        if settings.rag_enabled:
+            database_url = settings.database_url.get_secret_value()
+            if not database_url.startswith("postgresql+asyncpg://"):
+                raise ValueError(
+                    "RAG_ENABLED=true requires a PostgreSQL asyncpg database_url"
+                )
+
+        if settings.auth_storage == "postgres" or settings.rag_enabled:
             from app.db.init import init_db
 
-            await init_db(settings.database_url.get_secret_value(), echo=settings.debug)
+            await init_db(
+                settings.database_url.get_secret_value(),
+                echo=settings.debug,
+                include_rag=settings.rag_enabled,
+            )
             db_initialized = True
             logger.info("PostgreSQL connection initialized.")
+
+        if settings.rag_enabled:
+            embedder = provide_embedder()
+            if embedder is not None:
+                logger.info(
+                    "RAG enabled: model=%s, dimensions=%d",
+                    settings.rag_embedding_model,
+                    settings.rag_embedding_dimensions,
+                )
 
         await _bootstrap_keys(settings)
         yield
@@ -44,18 +73,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.exception("Application startup failed")
         raise
     finally:
-        if db_initialized:
-            try:
-                from app.db.init import dispose_db
+        # clear_container_cache MUST always run, even if resource
+        # closing is interrupted by CancelledError or other
+        # BaseException.  Use a nested try/finally to guarantee it.
+        cancellation: asyncio.CancelledError | None = None
+        try:
+            if embedder is not None:
+                try:
+                    await embedder.close()
+                except asyncio.CancelledError as exc:
+                    cancellation = exc
+                    logger.warning("RAG embedder close was cancelled.")
+                except Exception:
+                    logger.exception("Failed to close RAG embedder.")
+            if db_initialized:
+                try:
+                    from app.db.init import dispose_db
 
-                await dispose_db()
-            except Exception:
-                logger.exception("Failed to dispose database engine.")
-        if provider is not None:
-            try:
-                await provider.close()
-            except Exception:
-                logger.exception("Failed to close LLM provider.")
+                    await dispose_db()
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                    logger.warning("Database disposal was cancelled.")
+                except Exception:
+                    logger.exception("Failed to dispose database engine.")
+            if provider is not None:
+                try:
+                    await provider.close()
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                    logger.warning("LLM provider close was cancelled.")
+                except Exception:
+                    logger.exception("Failed to close LLM provider.")
+        finally:
+            clear_container_cache()
+        if cancellation is not None:
+            raise cancellation
 
 
 async def _bootstrap_keys(settings: Settings) -> None:
@@ -93,7 +145,9 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(models_router)
     app.include_router(chat_router)
+    app.include_router(agent_router)
     app.include_router(openai_router)
+    app.include_router(rag_router)
     app.include_router(admin_router)
     return app
 

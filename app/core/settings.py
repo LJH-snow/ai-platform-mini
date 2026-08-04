@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+RAG_EMBEDDING_DIMENSIONS = 768
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -45,6 +47,34 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr(
         "postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform"
     )
+
+    rag_enabled: bool = False
+    rag_embedding_model: str = "nomic-embed-text"
+    rag_embedding_dimensions: int = Field(default=RAG_EMBEDDING_DIMENSIONS)
+    rag_chunk_size: int = Field(default=500, gt=0)
+    rag_chunk_overlap: int = Field(default=50, ge=0)
+    rag_top_k: int = Field(default=5, gt=0, le=50)
+    rag_max_context_chars: int = Field(default=10000, gt=0, le=100000)
+    rag_max_distance: float = Field(default=0.35, ge=0, le=2)
+    rag_embedding_timeout_seconds: float = Field(default=60.0, gt=0)
+
+    @field_validator("rag_embedding_dimensions")
+    @classmethod
+    def validate_embedding_dimensions(cls, v: int) -> int:
+        if v != RAG_EMBEDDING_DIMENSIONS:
+            raise ValueError(
+                f"rag_embedding_dimensions must be {RAG_EMBEDDING_DIMENSIONS} "
+                "(MVP fixed schema)"
+            )
+        return v
+
+    @field_validator("rag_chunk_overlap")
+    @classmethod
+    def validate_chunk_overlap(cls, v: int, info: ValidationInfo) -> int:
+        chunk_size = info.data.get("rag_chunk_size")
+        if chunk_size is not None and v >= chunk_size:
+            raise ValueError("rag_chunk_overlap must be less than rag_chunk_size")
+        return v
 
     @field_validator("auth_storage")
     @classmethod

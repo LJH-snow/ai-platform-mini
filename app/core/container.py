@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.settings import get_settings
+from app.core.settings import RAG_EMBEDDING_DIMENSIONS, get_settings
 from app.providers.base import LLMProvider
 from app.providers.factory import create_llm_provider
 from app.quota.memory_repository import InMemoryQuotaRepository
@@ -16,6 +19,13 @@ from app.usage.collector import UsageCollector
 from app.usage.memory_repository import InMemoryUsageRepository
 from app.usage.repository import UsageRepository
 from app.usage.service import UsageService
+
+if TYPE_CHECKING:
+    from app.rag.ollama_embedder import OllamaEmbedder
+    from app.rag.pg_vector_store import PgVectorStore
+    from app.rag.service import RAGService
+    from app.services.agent_service import AgentService
+    from app.services.chat_service import ChatService
 
 
 @lru_cache
@@ -90,3 +100,117 @@ def provide_quota_service() -> QuotaService:
         quota_repository=quota_repo,
         config=config,
     )
+
+
+@lru_cache
+def provide_embedder() -> OllamaEmbedder | None:
+    from app.rag.ollama_embedder import OllamaEmbedder
+
+    settings = get_settings()
+    if not settings.rag_enabled:
+        return None
+    return OllamaEmbedder(
+        base_url=settings.ollama_base_url,
+        model=settings.rag_embedding_model,
+        dimensions=settings.rag_embedding_dimensions,
+        timeout_seconds=settings.rag_embedding_timeout_seconds,
+    )
+
+
+@lru_cache
+def provide_vector_store() -> PgVectorStore | None:
+    from app.rag.pg_vector_store import PgVectorStore
+
+    settings = get_settings()
+    if not settings.rag_enabled:
+        return None
+    session_factory = provide_session_factory()
+    return PgVectorStore(
+        session_factory=session_factory,
+        embedding_model=settings.rag_embedding_model,
+        embedding_dimensions=RAG_EMBEDDING_DIMENSIONS,
+    )
+
+
+@lru_cache
+def provide_rag_service() -> RAGService | None:
+    from app.rag.service import RAGService
+
+    embedder = provide_embedder()
+    vector_store = provide_vector_store()
+    if embedder is None or vector_store is None:
+        return None
+    settings = get_settings()
+    chat_service = provide_chat_service()
+    return RAGService(
+        embedder=embedder,
+        vector_store=vector_store,
+        chat_service=chat_service,
+        top_k=settings.rag_top_k,
+        max_context_chars=settings.rag_max_context_chars,
+        max_distance=settings.rag_max_distance,
+    )
+
+
+@lru_cache
+def provide_chat_service() -> ChatService:
+    from app.services.chat_service import ChatService
+
+    return ChatService(provider=provide_llm_provider())
+
+
+@lru_cache
+def provide_agent_service() -> AgentService:
+    from app.services.agent_service import AgentService
+
+    return AgentService(
+        chat_service=provide_chat_service(),
+        quota_service=provide_quota_service(),
+        usage_collector=provide_usage_collector(),
+    )
+
+
+def clear_container_cache() -> None:
+    """Clear all lru_cache'd provider factories across the application.
+
+    Must be called after closing resources (embedder, provider, db)
+    during lifespan shutdown to prevent a subsequent lifespan from
+    reusing stale, already-closed objects.
+
+    Clears caches in both ``app.core.container`` and
+    ``app.auth.dependencies`` to ensure that services holding
+    database session factories (e.g. APIKeyService in PostgreSQL
+    mode) are not reused after the engine has been disposed.
+    """
+    from app.auth.dependencies import (
+        _admin_key_hashes as auth_admin_key_hashes,
+    )
+    from app.auth.dependencies import (
+        provide_api_key_service as auth_provide_api_key_service,
+    )
+
+    # Clear in reverse dependency order: dependents before their deps.
+    provide_agent_service.cache_clear()
+    provide_rag_service.cache_clear()
+    provide_vector_store.cache_clear()
+    provide_embedder.cache_clear()
+    provide_chat_service.cache_clear()
+    provide_quota_service.cache_clear()
+    provide_rate_limit_service.cache_clear()
+    provide_rate_limiter.cache_clear()
+    provide_usage_collector.cache_clear()
+    provide_usage_service.cache_clear()
+    provide_usage_repository.cache_clear()
+    provide_session_factory.cache_clear()
+    provide_llm_provider.cache_clear()
+    # Auth module caches — may hold stale session factories after
+    # dispose_db() in PostgreSQL mode.  Guard against None (e.g. if
+    # the module was patched during testing).
+    auth_provide_api_key_service_cache = getattr(
+        auth_provide_api_key_service, "cache_clear", None
+    )
+    if auth_provide_api_key_service_cache is not None:
+        auth_provide_api_key_service_cache()
+    auth_admin_key_hashes_cache = getattr(auth_admin_key_hashes, "cache_clear", None)
+    if auth_admin_key_hashes_cache is not None:
+        auth_admin_key_hashes_cache()

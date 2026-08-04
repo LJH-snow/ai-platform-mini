@@ -8,11 +8,15 @@ from app.exceptions.base import (
     AuthenticationError,
     AuthorizationError,
     ConflictError,
+    KnowledgeBaseEmptyError,
     ModelNotFoundError,
+    NoRelevantContextError,
     ProviderError,
     ProviderUnavailableError,
     QuotaExceededError,
     QuotaReservationError,
+    RAGStorageUnavailableError,
+    RAGUnavailableError,
     RateLimitError,
     ValidationError,
 )
@@ -192,6 +196,66 @@ def register_exception_handlers(app: FastAPI) -> None:
             content=ErrorResponse(
                 code=ErrorCode.PROVIDER_ERROR,
                 message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(RAGUnavailableError)
+    async def handle_rag_unavailable(
+        request: Request, exc: RAGUnavailableError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.error("request_id=%s rag_unavailable %s", request_id, exc)
+        return JSONResponse(
+            status_code=503,
+            content=ErrorResponse(
+                code=ErrorCode.RAG_UNAVAILABLE,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(KnowledgeBaseEmptyError)
+    async def handle_knowledge_base_empty(
+        request: Request, exc: KnowledgeBaseEmptyError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s knowledge_base_empty %s", request_id, exc)
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                code=ErrorCode.KNOWLEDGE_BASE_EMPTY,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(NoRelevantContextError)
+    async def handle_no_relevant_context(
+        request: Request, exc: NoRelevantContextError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s no_relevant_context %s", request_id, exc)
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                code=ErrorCode.NO_RELEVANT_CONTEXT,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(RAGStorageUnavailableError)
+    async def handle_rag_storage_unavailable(
+        request: Request, exc: RAGStorageUnavailableError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.error("request_id=%s rag_storage_unavailable %s", request_id, exc)
+        return JSONResponse(
+            status_code=503,
+            content=ErrorResponse(
+                code=ErrorCode.RAG_STORAGE_UNAVAILABLE,
+                message="RAG storage is temporarily unavailable",
                 request_id=request_id,
             ).model_dump(),
         )

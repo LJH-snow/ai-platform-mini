@@ -1,10 +1,7 @@
 import logging
 from collections.abc import AsyncIterator
-from typing import Annotated, cast
+from typing import cast
 
-from fastapi import Depends
-
-from app.core.container import provide_llm_provider
 from app.exceptions.ollama import OllamaServiceError
 from app.providers.base import LLMProvider
 from app.providers.results import ProviderChatResult
@@ -157,7 +154,7 @@ class ChatService:
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def get_chat_service(
-    provider: Annotated[LLMProvider, Depends(provide_llm_provider)],
-) -> ChatService:
-    return ChatService(provider)
+def get_chat_service() -> "ChatService":
+    from app.core.container import provide_chat_service
+
+    return provide_chat_service()
