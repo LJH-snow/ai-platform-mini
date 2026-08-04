@@ -71,9 +71,12 @@
 - **共享 HTTP 客户端** — 使用单个共享 `httpx.AsyncClient` 连接池，而非每次请求创建新实例（已完成）
 - **Provider 层** — 从 Service 中提取 HTTP 逻辑到 `providers/`（已完成）
 - **统一 _get_json/_post_json** — 重构为单一 `_request(method, path, ...)` 方法（已完成）
-- **Adapter 层** — 从 OpenAIService 提取协议转换到 `adapters/`（Sprint 3+）
+- **Adapter 层** — 从 OpenAIService 提取协议转换到 `adapters/`（Sprint 7.3，已完成）
 - **Usage token 追踪** — 从 Ollama `prompt_eval_count`/`eval_count` 填充 `prompt_tokens`/`completion_tokens`（已完成）
 - **Streaming usage 记录** — 通过 UsageCollector 在 Service 层记录流式请求的 token 用量（已完成）
+- **naive created_at UTC 规范化** — 将无时区 ISO 时间戳强制解释为 UTC，需独立评估非 UTC 部署兼容性（Sprint 8+）
+- **空流 fallback 模型字段** — `chat_completions_stream()` 空流 fallback 应使用已解析的 `model` 而非 `default_model`（Sprint 8+）
+- **ProviderRouter.close() BaseExceptionGroup 泄漏** — `CancelledError` 与普通异常并存时产生 `BaseExceptionGroup`，lifespan `except Exception` 无法捕获（Sprint 7.4，已完成）
 
 ## Git 和 GitHub
 

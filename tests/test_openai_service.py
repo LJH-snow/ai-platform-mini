@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from app.adapters.openai_adapter import OpenAIAdapter
 from app.core.context import RequestContext
 from app.exceptions.base import QuotaReservationError
 from app.providers.mock import MockProvider
@@ -25,6 +26,7 @@ def openai_service() -> OpenAIService:
     return OpenAIService(
         chat_service=ChatService(provider=MockProvider()),
         usage_collector=UsageCollector(usage_service),
+        adapter=OpenAIAdapter(),
     )
 
 
@@ -68,7 +70,11 @@ async def test_non_stream_extracts_system_prompt(
 
 
 @pytest.mark.asyncio
-async def test_stream_yields_sse_chunks(openai_service: OpenAIService) -> None:
+async def test_stream_yields_complete_sse_sequence(
+    openai_service: OpenAIService,
+) -> None:
+    import json
+
     request = OpenAIChatRequest(
         messages=[OpenAIChatMessage(role="user", content="Hi")],
         stream=True,
@@ -80,17 +86,38 @@ async def test_stream_yields_sse_chunks(openai_service: OpenAIService) -> None:
         )
     ]
 
-    assert chunks[0].startswith("data: ")
+    assert len(chunks) == 7
     assert chunks[-1] == "data: [DONE]\n\n"
 
-    import json
+    shared_id: str | None = None
+    shared_created: int | None = None
+    shared_model: str | None = None
+
+    for _, chunk in enumerate(chunks[:-1]):
+        assert chunk.startswith("data: ")
+        data = json.loads(chunk[6:].strip())
+        assert data["object"] == "chat.completion.chunk"
+
+        if shared_id is None:
+            shared_id = data["id"]
+            shared_created = data["created"]
+            shared_model = data["model"]
+        else:
+            assert data["id"] == shared_id
+            assert data["created"] == shared_created
+            assert data["model"] == shared_model
 
     first_data = json.loads(chunks[0][6:].strip())
-    assert first_data["object"] == "chat.completion.chunk"
     assert first_data["choices"][0]["delta"]["role"] == "assistant"
+    assert first_data["choices"][0]["finish_reason"] is None
 
-    second_data = json.loads(chunks[1][6:].strip())
-    assert "content" in second_data["choices"][0]["delta"]
+    for i in range(1, 5):
+        content_data = json.loads(chunks[i][6:].strip())
+        assert "content" in content_data["choices"][0]["delta"]
+        assert content_data["choices"][0]["finish_reason"] is None
+
+    final_data = json.loads(chunks[5][6:].strip())
+    assert final_data["choices"][0]["finish_reason"] == "stop"
 
 
 @pytest.mark.asyncio
@@ -110,6 +137,38 @@ async def test_stream_finish_reason(openai_service: OpenAIService) -> None:
 
     last_data = json.loads(chunks[-2][6:].strip())
     assert last_data["choices"][0]["finish_reason"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_stream_empty_provider_yields_fallback_chunk() -> None:
+    import json
+
+    service = OpenAIService(
+        chat_service=ChatService(provider=_EmptyStreamProvider()),
+        usage_collector=UsageCollector(
+            UsageService(repository=InMemoryUsageRepository())
+        ),
+        adapter=OpenAIAdapter(),
+    )
+    request = OpenAIChatRequest(
+        messages=[OpenAIChatMessage(role="user", content="Hi")],
+        stream=True,
+    )
+    chunks = [
+        chunk
+        async for chunk in service.chat_completions_stream(
+            request, context=_test_context
+        )
+    ]
+
+    assert len(chunks) == 2
+
+    data = json.loads(chunks[0][6:].strip())
+    assert data["object"] == "chat.completion.chunk"
+    assert data["choices"][0]["delta"]["role"] == "assistant"
+    assert data["choices"][0]["finish_reason"] == "stop"
+
+    assert chunks[1] == "data: [DONE]\n\n"
 
 
 class _UsageAssertingQuotaService(QuotaService):
@@ -144,6 +203,14 @@ class _SlowMockProvider(MockProvider):
     async def chat(self, payload: dict[str, object]) -> dict[str, object]:
         await asyncio.sleep(2.1)
         return await super().chat(payload)
+
+
+class _EmptyStreamProvider(MockProvider):
+    async def chat_stream(
+        self, payload: dict[str, object]
+    ) -> AsyncIterator[dict[str, object]]:
+        return
+        yield
 
 
 class _TokenUsageMockProvider(MockProvider):
@@ -181,6 +248,7 @@ async def test_stream_records_final_token_usage_through_openai_service() -> None
         usage_collector=UsageCollector(
             UsageService(repository=usage_repository),
         ),
+        adapter=OpenAIAdapter(),
     )
     request = OpenAIChatRequest(
         messages=[OpenAIChatMessage(role="user", content="Hi")],
@@ -209,6 +277,7 @@ async def test_stream_settles_reservation_after_usage_is_recorded() -> None:
     service = OpenAIService(
         chat_service=ChatService(provider=MockProvider()),
         usage_collector=UsageCollector(usage_service),
+        adapter=OpenAIAdapter(),
     )
     quota_service = _UsageAssertingQuotaService(usage_repository)
     reservation = await quota_service.reserve("hash1", max_tokens=50)
@@ -249,6 +318,7 @@ async def test_non_stream_renews_reservation_past_initial_ttl() -> None:
     service = OpenAIService(
         chat_service=ChatService(provider=_SlowMockProvider()),
         usage_collector=UsageCollector(UsageService(repository=usage_repository)),
+        adapter=OpenAIAdapter(),
     )
     request = OpenAIChatRequest(
         messages=[OpenAIChatMessage(role="user", content="Hi")],
@@ -278,6 +348,7 @@ async def test_stream_renewal_failure_stops_stream_and_releases_reservation() ->
     service = OpenAIService(
         chat_service=ChatService(provider=MockProvider()),
         usage_collector=UsageCollector(UsageService(repository=usage_repository)),
+        adapter=OpenAIAdapter(),
     )
     request = OpenAIChatRequest(
         messages=[OpenAIChatMessage(role="user", content="Hi")],
@@ -318,6 +389,7 @@ async def test_stream_disconnect_records_usage_and_releases_reservation() -> Non
     service = OpenAIService(
         chat_service=ChatService(provider=MockProvider()),
         usage_collector=UsageCollector(UsageService(repository=usage_repository)),
+        adapter=OpenAIAdapter(),
     )
     request = OpenAIChatRequest(
         messages=[OpenAIChatMessage(role="user", content="Hi")],
