@@ -5,14 +5,14 @@
 
 ## Current status
 
-- Current milestone: **Sprint 7.2 implemented; awaiting Code Review**
+- Current milestone: **Sprint 7.3 implemented**
 - Version: `0.1.0`
 - Runtime: Python `3.12`–`3.14`（默认 `3.14`）
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
 - OpenAIProvider: 已接入 ProviderRouter、DI 和应用生命周期
 - Storage: Memory 或 PostgreSQL
 - Verification baseline（2026-08-03）:
-  - Default suite: `198 passed, 21 skipped`
+  - Default suite: `217 passed, 21 skipped`
   - PostgreSQL integration suite: `160 passed`
   - Ruff format/lint and mypy: passed
 
@@ -22,6 +22,7 @@
 - 原生 Chat、Models、Health、Readiness 和 Usage API
 - 可替换的 `LLMProvider` Protocol、共享 HTTP 连接池和统一异常映射
 - ProviderRouter 按模型自动选择 OpenAI 或 Ollama，Service 和公开端点无需感知 Provider
+- OpenAIAdapter 无状态协议转换，将请求和非流式响应映射从 Service 提取到独立 Adapter
 - Bearer API Key 鉴权、Admin Key 管理及 SHA-256 哈希存储
 - 按 API Key 的滑动窗口限流，以及日/月 Token 配额
 - 配额预占、续租、结算和断连释放，支持并发及长时间流式请求
@@ -144,12 +145,12 @@ INTEGRATION_TEST=1 pytest
      Admin API  LLM API  Health
          │        │
          ▼        ▼
-     APIKeyService  ChatService / OpenAIService
-         │        │
-         ▼        ▼
-   APIKeyRepository  LLMProvider Protocol
-         │                  │
-    InMemory/Postgres  ProviderRouter
+      APIKeyService  ChatService / OpenAIService
+          │        │              │
+          ▼        ▼              ▼
+    APIKeyRepository  LLMProvider Protocol  OpenAIAdapter
+          │                  │
+     InMemory/Postgres  ProviderRouter
                          ┌───┴────┐
                          ▼        ▼
                   OpenAIProvider  OllamaProvider
@@ -164,6 +165,7 @@ INTEGRATION_TEST=1 pytest
 
 ```
 app/
+├── adapters/        # Protocol adaptation (OpenAI-compatible request/response mapping)
 ├── api/            # Router layer (chat, openai, admin, health, models)
 ├── auth/           # Authentication & key management (service, repository, dependencies)
 ├── core/           # Infrastructure (settings, logging, exceptions, container, context)
@@ -183,6 +185,7 @@ app/
 
 - **Pydantic schemas** (`app/schemas/`) — typed request/response, no raw dicts
 - **Service layer** — Router never calls Ollama directly; swap provider by changing only the service
+- **Adapter layer** — stateless protocol conversion between public API schemas and internal schemas
 - **Settings** (`app/core/settings.py`) — pydantic-settings reads `.env`, never hardcode configs
 - **Logging** (`app/core/logging.py`) — dictConfig JSON logs with request ID, method, path, status, and latency
 - **Exception handlers** (`app/core/exceptions.py`) — global error handling, no try/except in Router
@@ -476,3 +479,18 @@ OpenAI SSE 转换不仅需要字段映射，还需要状态机验证终止帧与
 ### Sprint 7.2 学习总结
 
 将路由实现为 `LLMProvider` 可以在不修改 Service 和端点的情况下接入多模型选择。默认模型的精确匹配必须优先于名称前缀，避免本地模型名触发意外外部请求。生命周期聚合对象必须在异常或取消时继续清理全部资源，并保留所有关闭故障。通过 Factory 返回 Router，现有缓存和 FastAPI 依赖注入边界可以保持稳定。
+
+### Sprint 7.3
+
+- 新增 `app/adapters/openai_adapter.py`，将请求转换和非流式响应转换从 `OpenAIService` 提取到无状态 `OpenAIAdapter`
+- Adapter 不持有运行时依赖：`completion_id` 和 `fallback_created` 由 Service 生成并显式传入
+- `OpenAIService` 通过构造函数注入 Adapter，`get_openai_service()` 负责创建和注入
+- 流式 SSE 组装和上游 `OpenAIProvider` 状态机保持原位，不在本次提取范围内
+- 新增 18 个 Adapter 单元测试，覆盖请求映射、响应映射、usage 边界和时间解析
+- 增强流式回归测试：完整 SSE 帧序列验证、公共字段一致性、空流 fallback
+- 增强 history 顺序测试：多前置消息断言完整 role/content 顺序
+- 三轮 Code Review 发现并修正了时间戳语义变更和取消信号泄漏问题
+
+### Sprint 7.3 学习总结
+
+纯职责提取必须严格保持既有行为，即使是"改进"也应拆分为独立 Sprint。本次最初将 naive `created_at` 强制解释为 UTC，改变了非 UTC 部署环境的公开 API 输出，违反了"重构不改变行为"原则。`BaseExceptionGroup` 在混合 `CancelledError` 时不会降级为 `ExceptionGroup`，lifespan 的 `except Exception` 无法捕获——但用 `except BaseException` 修复会吞掉取消信号，破坏编排平台的取消传播语义。正确的做法是保持 `except Exception`，将 `BaseExceptionGroup` 泄漏问题留给专门的生命周期修复 Sprint。
