@@ -2,6 +2,7 @@
 
 from app.tools.calculator import CalculatorTool
 from app.tools.executor import ToolExecutor
+from app.tools.knowledge_search import KnowledgeSearchTool
 from app.tools.models import (
     RiskLevel,
     ToolContext,
@@ -19,6 +20,7 @@ from app.tools.registry import (
 
 __all__ = [
     "CalculatorTool",
+    "KnowledgeSearchTool",
     "DuplicateToolError",
     "RiskLevel",
     "Tool",

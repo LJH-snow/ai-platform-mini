@@ -345,3 +345,47 @@ async def test_daily_limit_counts_usage_plus_reserved() -> None:
     ) as exc_info:
         await service.reserve("hash1", max_tokens=50)
     assert exc_info.value.retry_after > 0
+
+
+@pytest.mark.asyncio
+async def test_extend_reservation_increases_reserved_tokens() -> None:
+    service, _, quota_repo = _make_service(daily=200)
+    reservation = await service.reserve("hash1", max_tokens=100)
+    assert reservation is not None
+
+    await service.extend(reservation.reservation_id, 50)
+
+    reserved = await quota_repo.get_reserved_tokens_for_key(
+        "hash1", reservation.usage_date
+    )
+    assert reserved == 150
+
+
+@pytest.mark.asyncio
+async def test_extend_reservation_rejects_daily_limit_without_mutation() -> None:
+    service, _, quota_repo = _make_service(daily=100)
+    reservation = await service.reserve("hash1", max_tokens=80)
+    assert reservation is not None
+
+    with pytest.raises(QuotaExceededError, match="Daily token quota exceeded"):
+        await service.extend(reservation.reservation_id, 21)
+
+    reserved = await quota_repo.get_reserved_tokens_for_key(
+        "hash1", reservation.usage_date
+    )
+    assert reserved == 80
+
+
+@pytest.mark.asyncio
+async def test_extend_reservation_rejects_monthly_limit_without_mutation() -> None:
+    service, _, quota_repo = _make_service(monthly=100)
+    reservation = await service.reserve("hash1", max_tokens=80)
+    assert reservation is not None
+
+    with pytest.raises(QuotaExceededError, match="Monthly token quota exceeded"):
+        await service.extend(reservation.reservation_id, 21)
+
+    reserved = await quota_repo.get_monthly_reserved_tokens_for_key(
+        "hash1", reservation.usage_date[:7]
+    )
+    assert reserved == 80

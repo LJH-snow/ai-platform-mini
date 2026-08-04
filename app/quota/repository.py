@@ -18,6 +18,14 @@ class QuotaRepository(Protocol):
 
     async def settle_reservation(self, reservation_id: str) -> None: ...
 
+    async def extend_reservation(
+        self,
+        reservation_id: str,
+        additional_tokens: int,
+        daily_limit: int | None,
+        monthly_limit: int | None,
+    ) -> ReservationResult: ...
+
     async def release_reservation(self, reservation_id: str) -> None: ...
 
     async def renew_reservation(

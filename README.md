@@ -5,7 +5,7 @@
 
 ## Current status
 
-- Current milestone: **Sprint 9 implemented, pending Code Review**
+- Current milestone: **Sprint 10 completed and approved**
 - Version: `0.1.0`
 - Runtime: Python `3.12`–`3.14`（默认 `3.14`）
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
@@ -13,7 +13,7 @@
 - Storage: Memory 或 PostgreSQL
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
-- Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`，默认不开放任意文件、网络或 Shell 能力
+- Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
   - PostgreSQL/pgvector integration suite：通过
@@ -32,6 +32,7 @@
 - PostgreSQL Usage 聚合、API Key 持久化和 Testcontainers 集成测试
 - Agent Runtime 核心状态、事件、Tool Protocol 和 `POST /api/v1/agent/runs` 应用层
 - Tool Registry/Executor：Schema 参数校验、超时、异常安全归一化、输出截断和工具 Schema 导出
+- RAG Tool：`knowledge_search` 复用 RAG prepare 阶段，返回带来源、距离和安全提示的结构化检索结果；Agent 可在回答前自主调用知识库
 - Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
 
@@ -584,3 +585,18 @@ Agent Runtime 不应直接依赖 FastAPI 或具体模型客户端，而应通过
 Tool Registry 解决“有哪些工具”，Tool Executor 解决“能否安全执行”，Agent Runtime 继续负责 Run/Step 循环，三者分工比把所有逻辑塞进 Chat API 更容易测试和演进。参数 Schema 必须在工具实现前校验，异常和输出也要经过统一边界，避免把内部细节直接暴露给模型。Calculator 使用 AST 白名单而不是 `eval()`，在保留演示价值的同时把执行面控制在低风险范围内。通过保留原有 Mapping 工具注入路径，本 Sprint 可以增量引入治理能力而不破坏 Sprint 8 Runtime。
 
 > [Sprint 9 Tool System 设计说明](docs/superpowers/specs/2026-08-04-tool-system-design.md)
+
+### Sprint 10
+
+- 新增 `KnowledgeSearchTool`，通过现有 `ToolRegistry`/`ToolExecutor` 接入 Agent Runtime。
+- Tool 只调用 `RAGService.prepare`，不直接依赖 Agent Runtime，也不重复实现 embedding、pgvector 检索、距离过滤或上下文截断。
+- `PreparedRAGRequest` 新增结构化 `RAGReference`，向 Agent 返回实际纳入上下文的内容、文档/分块来源、距离和不可信内容提示。
+- 空知识库、无相关上下文、RAG 存储不可用和 embedding 失败映射为稳定错误码，未知异常仍由 ToolExecutor 安全归一化。
+- 容器仅在 RAG 服务可用时注册 `knowledge_search`；RAG 关闭时 Agent 继续保持 `calculator` 默认能力。
+- 新增普通 Agent + Knowledge Search 集成测试，并保留 `/api/v1/chat/rag` 兼容链路。
+
+### Sprint 10 学习总结
+
+RAG Tool 化的关键不是复制一套检索代码，而是把现有 `RAGService.prepare` 作为唯一检索入口，再通过结构化引用把结果交给 Agent。将来源、距离和清洗后的内容一起返回，既便于模型使用，也为后续引用展示和评测保留证据。容器根据 RAG 能力是否可用动态注册工具，使功能开关不会改变默认 Agent 的安全边界。通过区分可预期的知识库、存储和 embedding 错误与未知异常，Tool 层可以给模型稳定反馈，同时避免暴露内部实现细节。
+
+> [Sprint 10 RAG Tool 化设计说明](docs/superpowers/specs/2026-08-04-rag-tool-design.md)

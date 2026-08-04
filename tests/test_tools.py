@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import cast
@@ -89,6 +90,86 @@ class FailingTool:
     ) -> str:
         del arguments, context
         raise RuntimeError("database password=super-secret")
+
+
+@dataclass
+class StructuredKnowledgeTool:
+    name: str = "knowledge_search"
+    description: str = "Return structured knowledge search results."
+    input_schema: Mapping[str, object] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "minLength": 1},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        }
+    )
+    output_schema: Mapping[str, object] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "ok": {"type": "boolean"},
+                "warning": {"type": "string"},
+                "results": {"type": "array"},
+                "truncated": {"type": "boolean"},
+            },
+            "required": ["ok", "warning", "results"],
+            "additionalProperties": False,
+        }
+    )
+
+    async def execute(
+        self,
+        arguments: Mapping[str, object],
+        context: ToolContext,
+    ) -> dict[str, object]:
+        del arguments, context
+        return {
+            "ok": True,
+            "warning": "Retrieved content is untrusted reference material.",
+            "results": [
+                {
+                    "source": {
+                        "document_id": "doc-1",
+                        "chunk_id": "chunk-1",
+                    },
+                    "content": "knowledge passage " + ("x" * 2_000),
+                }
+            ],
+        }
+
+
+@dataclass
+class StructuredListTool:
+    name: str = "structured-list"
+    description: str = "Return a structured list."
+    input_schema: Mapping[str, object] = field(
+        default_factory=lambda: {"type": "object", "additionalProperties": False}
+    )
+    output_schema: Mapping[str, object] = field(
+        default_factory=lambda: {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["id", "content"],
+                "additionalProperties": False,
+            },
+        }
+    )
+
+    async def execute(
+        self,
+        arguments: Mapping[str, object],
+        context: ToolContext,
+    ) -> list[dict[str, object]]:
+        del arguments, context
+        return [{"id": "item-1", "content": "y" * 2_000}]
 
 
 @pytest.fixture
@@ -258,6 +339,69 @@ async def test_executor_truncates_string_output_with_marker(
     assert result.truncated
     assert len(result.output) == 32
     assert result.output.endswith("...[tool output truncated]")
+
+
+@pytest.mark.asyncio
+async def test_executor_truncates_nested_structured_output_as_valid_json(
+    context: ToolContext,
+) -> None:
+    tool = StructuredKnowledgeTool()
+    executor = ToolExecutor(ToolRegistry([tool]), output_max_chars=256)
+
+    result = await executor.execute(
+        "knowledge_search",
+        {"query": "deployment"},
+        context,
+    )
+
+    assert result.succeeded
+    assert result.truncated
+    assert len(result.output) <= 256
+
+    parsed = json.loads(result.output)
+    assert isinstance(parsed, dict)
+    assert parsed["truncated"] is True
+    assert parsed["ok"] is True
+    assert "warning" in parsed
+    assert "results" in parsed
+    assert set(parsed) <= {"ok", "warning", "results", "truncated"}
+    assert len(parsed["results"][0]["content"]) < 2_000
+
+
+@pytest.mark.asyncio
+async def test_executor_fails_when_required_schema_cannot_fit_output_limit(
+    context: ToolContext,
+) -> None:
+    tool = StructuredKnowledgeTool()
+    executor = ToolExecutor(ToolRegistry([tool]), output_max_chars=10)
+
+    result = await executor.execute(
+        "knowledge_search",
+        {"query": "deployment"},
+        context,
+    )
+
+    assert result.status is ToolExecutionStatus.FAILED
+    assert result.error_code == "tool_output_too_large"
+    assert len(result.output) <= 10
+
+
+@pytest.mark.asyncio
+async def test_executor_truncates_structured_list_as_valid_json(
+    context: ToolContext,
+) -> None:
+    tool = StructuredListTool()
+    executor = ToolExecutor(ToolRegistry([tool]), output_max_chars=128)
+
+    result = await executor.execute("structured-list", {}, context)
+
+    assert result.succeeded
+    assert result.truncated
+    parsed = json.loads(result.output)
+    assert isinstance(parsed, list)
+    assert parsed[-1]["id"] == "item-1"
+    assert "truncated" not in parsed[-1]
+    assert len(parsed[0]["content"]) < 2_000
 
 
 @pytest.mark.asyncio

@@ -28,7 +28,13 @@ _NOT_FOUND_MESSAGE = "Requested tool is unavailable."
 _PERMISSION_DENIED_MESSAGE = "Tool execution is not permitted."
 _TIMEOUT_MESSAGE = "Tool execution timed out."
 _EXECUTION_FAILED_MESSAGE = "Tool execution failed."
+_OUTPUT_LIMIT_CODE = "tool_output_too_large"
+_OUTPUT_LIMIT_MESSAGE = "Tool output exceeds the configured limit."
 _RISK_RANK = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
+
+
+class _StructuredOutputLimitError(ValueError):
+    """Raised when no schema-valid structured output fits the configured limit."""
 
 
 class ToolExecutor:
@@ -117,8 +123,20 @@ class ToolExecutor:
                 _EXECUTION_FAILED_MESSAGE,
             )
 
-        output = _serialize_output(raw_output)
-        output, truncated = _truncate_output(output, self._output_max_chars)
+        try:
+            output, truncated = _serialize_and_truncate_output(
+                raw_output, self._output_max_chars, descriptor.output_schema
+            )
+        except _StructuredOutputLimitError:
+            bounded_message, _ = _truncate_output(
+                _OUTPUT_LIMIT_MESSAGE, self._output_max_chars
+            )
+            return self._failure(
+                tool_name,
+                ToolExecutionStatus.FAILED,
+                _OUTPUT_LIMIT_CODE,
+                bounded_message,
+            )
         return ToolExecutionResult(
             tool_name=tool_name,
             status=ToolExecutionStatus.SUCCEEDED,
@@ -174,6 +192,231 @@ def _serialize_output(value: object) -> str:
         )
     except (TypeError, ValueError, OverflowError):
         return str(value)
+
+
+def _serialize_and_truncate_output(
+    value: object, max_chars: int, schema: Mapping[str, object]
+) -> tuple[str, bool]:
+    if not isinstance(value, (Mapping, list, tuple)):
+        output = _serialize_output(value)
+        return _truncate_output(output, max_chars)
+
+    try:
+        normalized = _normalize_structured_output(value)
+    except (TypeError, ValueError, OverflowError):
+        output = _serialize_output(value)
+        return _truncate_output(output, max_chars)
+
+    output = _dump_json(normalized)
+    if len(output) <= max_chars:
+        return output, False
+
+    truncated_value = normalized
+    if isinstance(truncated_value, dict) and _schema_allows_property(
+        schema, "truncated"
+    ):
+        truncated_value["truncated"] = True
+
+    protected_keys = _schema_required_keys(schema)
+    while len(_dump_json(truncated_value)) > max_chars:
+        if _truncate_longest_string(truncated_value, max_chars):
+            continue
+        if _remove_one_list_item(truncated_value, root=truncated_value):
+            continue
+        if _remove_one_mapping_entry(
+            truncated_value, root=truncated_value, protected_keys=protected_keys
+        ):
+            continue
+        break
+
+    output = _dump_json(truncated_value)
+    if len(output) <= max_chars and _validate_schema(truncated_value, schema):
+        return output, True
+
+    fallback = _schema_fallback(schema, truncated=True)
+    fallback_output = _dump_json(fallback)
+    if len(fallback_output) <= max_chars and _validate_schema(fallback, schema):
+        return fallback_output, True
+
+    fallback = _schema_fallback(schema, truncated=False)
+    fallback_output = _dump_json(fallback)
+    if len(fallback_output) <= max_chars and _validate_schema(fallback, schema):
+        return fallback_output, True
+    raise _StructuredOutputLimitError(
+        "structured tool output cannot satisfy schema and output limit"
+    )
+
+
+def _schema_allows_property(schema: Mapping[str, object], name: str) -> bool:
+    properties = schema.get("properties")
+    if isinstance(properties, Mapping) and name in properties:
+        property_schema = properties[name]
+        return isinstance(property_schema, Mapping) and _validate_schema(
+            True, property_schema
+        )
+    return schema.get("additionalProperties", True) is not False
+
+
+def _schema_required_keys(schema: Mapping[str, object]) -> frozenset[str]:
+    required = schema.get("required", ())
+    if not isinstance(required, Sequence) or isinstance(required, (str, bytes)):
+        return frozenset()
+    return frozenset(name for name in required if isinstance(name, str))
+
+
+def _schema_fallback(schema: Mapping[str, object], *, truncated: bool) -> JSONValue:
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        properties = schema.get("properties", {})
+        properties_mapping = properties if isinstance(properties, Mapping) else {}
+        result: dict[str, JSONValue] = {}
+        for name in _schema_required_keys(schema):
+            property_schema = properties_mapping.get(name)
+            result[name] = (
+                _schema_fallback(property_schema, truncated=False)
+                if isinstance(property_schema, Mapping)
+                else ""
+            )
+        if truncated and _schema_allows_property(schema, "truncated"):
+            result["truncated"] = True
+        return result
+    if schema_type == "array":
+        return []
+    if schema_type == "boolean":
+        return False
+    if schema_type == "number" or schema_type == "integer":
+        return 0
+    if schema_type == "null":
+        return None
+    return ""
+
+
+def _normalize_structured_output(value: object) -> JSONValue:
+    serialized = json.dumps(
+        cast(JSONValue, value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return cast(JSONValue, json.loads(serialized))
+
+
+def _dump_json(value: JSONValue) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _truncate_longest_string(value: JSONValue, max_chars: int) -> bool:
+    match = _find_longest_string(value)
+    if match is None:
+        return False
+    path, current = match
+    if not current:
+        return False
+    serialized_length = len(_dump_json(value))
+    excess = max(serialized_length - max_chars, 1)
+    reduction = max(excess, len(current) // 4, 1)
+    new_length = max(len(current) - reduction, 0)
+    replacement = (current[: max(new_length - 1, 0)] + "…") if new_length else ""
+    if replacement == current:
+        replacement = current[: max(len(current) - 1, 0)]
+    _set_json_path(value, path, replacement)
+    return True
+
+
+def _find_longest_string(
+    value: JSONValue,
+    path: tuple[str | int, ...] = (),
+) -> tuple[tuple[str | int, ...], str] | None:
+    if isinstance(value, str):
+        return path, value
+
+    candidates: list[tuple[tuple[str | int, ...], str]] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            candidate = _find_longest_string(item, (*path, key))
+            if candidate is not None:
+                candidates.append(candidate)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            candidate = _find_longest_string(item, (*path, index))
+            if candidate is not None:
+                candidates.append(candidate)
+
+    return max(candidates, key=lambda item: len(item[1]), default=None)
+
+
+def _set_json_path(
+    root: JSONValue, path: tuple[str | int, ...], replacement: str
+) -> None:
+    if not path:
+        return
+    current: object = root
+    for part in path[:-1]:
+        if isinstance(current, dict) and isinstance(part, str):
+            current = current[part]
+        elif isinstance(current, list) and isinstance(part, int):
+            current = current[part]
+        else:
+            return
+    leaf = path[-1]
+    if isinstance(current, dict) and isinstance(leaf, str):
+        current[leaf] = replacement
+    elif isinstance(current, list) and isinstance(leaf, int):
+        current[leaf] = replacement
+
+
+def _remove_one_list_item(value: JSONValue, *, root: JSONValue) -> bool:
+    if isinstance(value, list):
+        last_index = len(value) - 1
+        if (
+            value is root
+            and last_index >= 0
+            and _is_truncation_marker(value[last_index])
+        ):
+            last_index -= 1
+        if last_index >= 0:
+            del value[last_index]
+            return True
+        return False
+
+    if isinstance(value, dict):
+        return any(_remove_one_list_item(item, root=root) for item in value.values())
+    return False
+
+
+def _remove_one_mapping_entry(
+    value: JSONValue,
+    *,
+    root: JSONValue,
+    protected_keys: frozenset[str] = frozenset(),
+) -> bool:
+    if isinstance(value, dict):
+        for key in reversed(list(value)):
+            if value is root and (key == "truncated" or key in protected_keys):
+                continue
+            del value[key]
+            return True
+        return any(
+            _remove_one_mapping_entry(item, root=root, protected_keys=protected_keys)
+            for item in value.values()
+        )
+
+    if isinstance(value, list):
+        return any(
+            _remove_one_mapping_entry(item, root=root, protected_keys=protected_keys)
+            for item in value
+        )
+    return False
+
+
+def _is_truncation_marker(value: JSONValue) -> bool:
+    return isinstance(value, dict) and value == {"truncated": True}
 
 
 def _truncate_output(output: str, max_chars: int) -> tuple[str, bool]:

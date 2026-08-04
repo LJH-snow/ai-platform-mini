@@ -79,6 +79,7 @@ class AgentDecision:
     answer: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
     token_usage: int | None = None
+    usage_complete: bool = True
 
 
 @dataclass(frozen=True)

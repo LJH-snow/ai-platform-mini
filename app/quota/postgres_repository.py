@@ -95,6 +95,73 @@ class PostgresQuotaRepository:
             )
             await session.commit()
 
+    async def extend_reservation(
+        self,
+        reservation_id: str,
+        additional_tokens: int,
+        daily_limit: int | None,
+        monthly_limit: int | None,
+    ) -> ReservationResult:
+        async with self._session_factory() as session:
+            reservation_key = await session.execute(
+                text("SELECT api_key_hash FROM quota_reservations WHERE id = :id"),
+                {"id": reservation_id},
+            )
+            reservation_key_value = reservation_key.scalar_one_or_none()
+            if reservation_key_value is None:
+                return ReservationResult.NOT_FOUND
+            await session.execute(
+                text("SELECT pg_advisory_xact_lock(:lock)"),
+                {"lock": _advisory_lock_int(str(reservation_key_value))},
+            )
+            reservation_result = await session.execute(
+                text(
+                    "SELECT api_key_hash, usage_date, reserved_tokens "
+                    "FROM quota_reservations "
+                    "WHERE id = :id AND settled = false AND expires_at > now() "
+                    "FOR UPDATE"
+                ),
+                {"id": reservation_id},
+            )
+            reservation = reservation_result.mappings().first()
+            if reservation is None:
+                return ReservationResult.NOT_FOUND
+
+            api_key_hash = str(reservation["api_key_hash"])
+            usage_date = reservation["usage_date"].isoformat()
+            if daily_limit is not None:
+                daily_used = await self._usage_repo.get_total_tokens_for_key(
+                    api_key_hash, usage_date
+                )
+                daily_reserved = await self._get_daily_reserved(
+                    session, api_key_hash, usage_date
+                )
+                if daily_used + daily_reserved + additional_tokens > daily_limit:
+                    return ReservationResult.DAILY_LIMIT
+
+            if monthly_limit is not None:
+                year_month = usage_date[:7]
+                monthly_aggs = await self._usage_repo.get_monthly_usage(
+                    api_key_hash, year_month
+                )
+                monthly_used = sum(a.total_tokens for a in monthly_aggs)
+                monthly_reserved = await self._get_monthly_reserved(
+                    session, api_key_hash, year_month
+                )
+                if monthly_used + monthly_reserved + additional_tokens > monthly_limit:
+                    return ReservationResult.MONTHLY_LIMIT
+
+            await session.execute(
+                text(
+                    "UPDATE quota_reservations "
+                    "SET reserved_tokens = reserved_tokens + :additional "
+                    "WHERE id = :id"
+                ),
+                {"id": reservation_id, "additional": additional_tokens},
+            )
+            await session.commit()
+            return ReservationResult.CREATED
+
     async def release_reservation(self, reservation_id: str) -> None:
         async with self._session_factory() as session:
             await session.execute(

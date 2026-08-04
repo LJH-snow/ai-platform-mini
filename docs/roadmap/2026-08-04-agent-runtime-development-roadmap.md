@@ -198,7 +198,7 @@ app/
 
 ### 实际状态
 
-已实现，等待 Code Review。Tool Registry、Tool Executor、Calculator 及 Agent Runtime/Service 集成已经落地，完整质量门禁通过后停在本 Sprint，待用户批准再提交。
+已实现并通过 Code Review。Tool Registry、Tool Executor、Calculator 及 Agent Runtime/Service 集成已提交，commit 为 `50af61e`。
 
 ---
 
@@ -224,6 +224,10 @@ app/
 - Agent 能完成“提问 → 调用知识库 → 回填上下文 → 回答”；
 - 一份 TXT 文档可以完成 ingest、检索和回答；
 - 不在本 Sprint 同时引入 FAISS、Qdrant、Rerank 或复杂文档平台。
+
+### 实际状态
+
+已实现并通过第三轮 Code Review。`KnowledgeSearchTool`、`RAGReference`、容器注册和 Agent 集成测试已经落地；完整质量门禁及 Uvicorn 启动检查全部通过。
 
 ### 简历价值
 

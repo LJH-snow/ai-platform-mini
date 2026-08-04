@@ -292,6 +292,35 @@ async def test_token_budget_exceeded_after_accumulation_stops_before_answer() ->
 
 
 @pytest.mark.asyncio
+async def test_unknown_token_usage_stops_before_a_tool_round() -> None:
+    tool = EchoTool()
+    model = ScriptedModel(
+        [
+            AgentDecision(
+                tool_calls=(
+                    ToolCall(
+                        call_id="call-unknown",
+                        name="echo",
+                        arguments={"value": "should not run"},
+                    ),
+                ),
+                usage_complete=False,
+            ),
+            AgentDecision(answer="must not be requested"),
+        ]
+    )
+    runtime = AgentRuntime(model, tools={"echo": tool})
+
+    result = await runtime.run("unknown usage", token_budget=100)
+
+    assert result.status is RunStatus.STOPPED
+    assert result.stop_reason is StopReason.TOKEN_BUDGET_EXCEEDED
+    assert result.answer is None
+    assert tool.calls == []
+    assert len(model.seen_states) == 1
+
+
+@pytest.mark.asyncio
 async def test_unknown_token_usage_does_not_trigger_budget_stop() -> None:
     model = ScriptedModel([AgentDecision(answer="usage unavailable")])
     runtime = AgentRuntime(model)

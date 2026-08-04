@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.exceptions.base import KnowledgeBaseEmptyError, NoRelevantContextError
-from app.rag.service import PreparedRAGRequest, RAGService
+from app.rag.service import PreparedRAGRequest, RAGReference, RAGService
 from app.rag.vector_store import SearchResult
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 
@@ -92,6 +92,15 @@ class TestRAGServicePrepare:
         assert isinstance(prepared, PreparedRAGRequest)
         assert len(prepared.chunk_ids) == 1
         assert prepared.chunk_ids[0] == "c1"
+        assert prepared.references == (
+            RAGReference(
+                document_id="d1",
+                chunk_id="c1",
+                chunk_index=0,
+                content="Paris is the capital of France.",
+                distance=0.1,
+            ),
+        )
         # System prompt should contain context with boundary markers
         assert prepared.enhanced_request.system_prompt is not None
         import re
@@ -144,6 +153,106 @@ class TestRAGServicePrepare:
 
         # Context should be truncated — not all chunks included
         assert len(prepared.chunk_ids) < 5
+
+    @pytest.mark.asyncio
+    async def test_prepare_reference_matches_truncated_first_entry(
+        self,
+        mock_embedder: AsyncMock,
+        mock_vector_store: AsyncMock,
+        mock_chat_service: AsyncMock,
+    ) -> None:
+        prefix = "[Reference 1]\n"
+        service = RAGService(
+            embedder=mock_embedder,
+            vector_store=mock_vector_store,
+            chat_service=mock_chat_service,
+            max_context_chars=len(prefix) + 5,
+        )
+        mock_vector_store.search = AsyncMock(
+            return_value=[
+                _make_search_result(
+                    chunk_id="long-chunk",
+                    content="1234567890",
+                    chunk_index=0,
+                )
+            ]
+        )
+
+        prepared = await service.prepare(ChatRequest(message="test"))
+
+        assert prepared.references[0].content == "12345"
+        assert prepared.chunk_ids == ("long-chunk",)
+        assert prepared.enhanced_request.system_prompt is not None
+        assert f"{prefix}12345" in prepared.enhanced_request.system_prompt
+        assert f"{prefix}1234567890" not in prepared.enhanced_request.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_prepare_references_match_all_normal_context_entries(
+        self,
+        mock_embedder: AsyncMock,
+        mock_vector_store: AsyncMock,
+        mock_chat_service: AsyncMock,
+    ) -> None:
+        service = RAGService(
+            embedder=mock_embedder,
+            vector_store=mock_vector_store,
+            chat_service=mock_chat_service,
+            max_context_chars=1000,
+        )
+        mock_vector_store.search = AsyncMock(
+            return_value=[
+                _make_search_result(
+                    chunk_id="c1", content="First context", chunk_index=0
+                ),
+                _make_search_result(
+                    chunk_id="c2", content="Second context", chunk_index=1
+                ),
+            ]
+        )
+
+        prepared = await service.prepare(ChatRequest(message="test"))
+
+        assert [reference.content for reference in prepared.references] == [
+            "First context",
+            "Second context",
+        ]
+        assert prepared.chunk_ids == ("c1", "c2")
+
+    @pytest.mark.asyncio
+    async def test_prepare_reference_matches_exact_context_boundary(
+        self,
+        mock_embedder: AsyncMock,
+        mock_vector_store: AsyncMock,
+        mock_chat_service: AsyncMock,
+    ) -> None:
+        prefix = "[Reference 1]\n"
+        content = "Exact boundary"
+        service = RAGService(
+            embedder=mock_embedder,
+            vector_store=mock_vector_store,
+            chat_service=mock_chat_service,
+            max_context_chars=len(prefix) + len(content),
+        )
+        mock_vector_store.search = AsyncMock(
+            return_value=[
+                _make_search_result(chunk_id="c1", content=content, chunk_index=0),
+                _make_search_result(chunk_id="c2", content="Excluded", chunk_index=1),
+            ]
+        )
+
+        prepared = await service.prepare(ChatRequest(message="test"))
+
+        assert prepared.references == (
+            RAGReference(
+                document_id="d1",
+                chunk_id="c1",
+                chunk_index=0,
+                content=content,
+                distance=0.1,
+            ),
+        )
+        assert prepared.chunk_ids == ("c1",)
+        assert len(prepared.references[0].content) == len(content)
 
     @pytest.mark.asyncio
     async def test_prepare_merges_system_prompt(

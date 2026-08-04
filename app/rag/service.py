@@ -58,21 +58,33 @@ def _append_context_entry(
     entry: str,
     chunk_id: str,
     max_context_chars: int,
-) -> bool:
+) -> str | None:
     current_context = _CONTEXT_SEPARATOR.join(entries)
     separator_cost = len(_CONTEXT_SEPARATOR) if entries else 0
     remaining_chars = max_context_chars - len(current_context) - separator_cost
     if remaining_chars <= 0:
-        return False
+        return None
     if len(entry) > remaining_chars:
         if not entries:
-            entries.append(entry[:remaining_chars])
+            written_entry = entry[:remaining_chars]
+            entries.append(written_entry)
             chunk_ids.append(chunk_id)
-            return True
-        return False
+            return written_entry
+        return None
     entries.append(entry)
     chunk_ids.append(chunk_id)
-    return True
+    return entry
+
+
+@dataclass(frozen=True)
+class RAGReference:
+    """Safe metadata and content for one retrieved knowledge chunk."""
+
+    document_id: str
+    chunk_id: str
+    chunk_index: int
+    content: str
+    distance: float
 
 
 @dataclass(frozen=True)
@@ -80,14 +92,16 @@ class PreparedRAGRequest:
     """Immutable result of the RAG prepare phase.
 
     Contains the enhanced chat request (with context injected into the
-    system prompt) and the list of chunk IDs used for traceability.
-    The ``messages`` field provides the final message list *including*
-    the RAG context so that quota estimation can account for it.
+    system prompt), the list of chunk IDs used for traceability, and the
+    structured references that were included in the context. The ``messages``
+    field provides the final message list *including* the RAG context so that
+    quota estimation can account for it.
     """
 
     enhanced_request: ChatRequest
     chunk_ids: tuple[str, ...] = ()
     messages: tuple[tuple[str, str], ...] = ()
+    references: tuple[RAGReference, ...] = ()
 
 
 class RAGService:
@@ -142,17 +156,19 @@ class RAGService:
 
         context_entries: list[str] = []
         chunk_ids: list[str] = []
+        references: list[RAGReference] = []
         for reference_index, result in enumerate(results, start=1):
             sanitized_content = _sanitize_chunk_content(result.content, boundary="")
             prefix = _REFERENCE_PREFIX_TEMPLATE.format(index=reference_index)
             entry = f"{prefix}{sanitized_content}"
-            if not _append_context_entry(
+            written_entry = _append_context_entry(
                 context_entries,
                 chunk_ids,
                 entry,
                 result.chunk_id,
                 self._max_context_chars,
-            ):
+            )
+            if written_entry is None:
                 logger.info(
                     "RAG context truncated",
                     extra={
@@ -161,6 +177,16 @@ class RAGService:
                     },
                 )
                 break
+            written_content = written_entry[len(prefix) :]
+            references.append(
+                RAGReference(
+                    document_id=result.document_id,
+                    chunk_id=result.chunk_id,
+                    chunk_index=result.chunk_index,
+                    content=written_content,
+                    distance=result.distance,
+                )
+            )
 
         # Generate a per-request random boundary that chunk content
         # cannot predict or forge.
@@ -176,6 +202,7 @@ class RAGService:
             context_text = context_text[: self._max_context_chars]
             if chunk_ids:
                 chunk_ids = chunk_ids[:1]
+                references = references[:1]
         rag_system_part = (
             f"{_RAG_SYSTEM_INSTRUCTION}\n\n{begin_marker}\n{context_text}\n{end_marker}"
         )
@@ -208,6 +235,7 @@ class RAGService:
             enhanced_request=enhanced_request,
             chunk_ids=tuple(chunk_ids),
             messages=tuple(messages),
+            references=tuple(references),
         )
 
     async def answer(self, prepared: PreparedRAGRequest) -> ChatResponse:

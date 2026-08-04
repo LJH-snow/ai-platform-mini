@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
 from app.agents import (
     AgentDecision,
+    AgentMessage,
     AgentModel,
     AgentRunResult,
     AgentRuntime,
@@ -18,7 +19,7 @@ from app.agents import (
 )
 from app.auth.models import APIKey
 from app.core.context import RequestContext
-from app.exceptions.base import ProviderError
+from app.exceptions.base import ProviderError, QuotaExceededError
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.service import QuotaService
 from app.quota.token_estimator import estimate_prompt_tokens
@@ -79,18 +80,48 @@ class _ChatServiceAgentModel:
         self.prompt_tokens: int | None = 0
         self.completion_tokens: int | None = 0
         self.actual_model = request.model or chat_service.default_model
+        self._model_call_count = 0
+        self._usage_complete = True
+        self._prompt_reservation_guard: Callable[[int], Awaitable[None]] | None = None
+
+    def set_prompt_reservation_guard(
+        self, guard: Callable[[int], Awaitable[None]] | None
+    ) -> None:
+        """Set a callback that reserves any newly observed prompt tokens."""
+        self._prompt_reservation_guard = guard
+
+    def estimate_prompt_tokens_for_state(self, state: AgentState) -> int:
+        """Estimate the exact prompt shape sent for the current agent state."""
+        return estimate_prompt_tokens(
+            [
+                ("system", self._build_system_prompt()),
+                ("user", self._build_transcript(state)),
+            ]
+        )
 
     async def decide(self, state: AgentState) -> AgentDecision:
         transcript = self._build_transcript(state)
+        system_prompt = self._build_system_prompt()
+        if self._prompt_reservation_guard is not None:
+            await self._prompt_reservation_guard(
+                estimate_prompt_tokens(
+                    [("system", system_prompt), ("user", transcript)]
+                )
+            )
         chat_request = ChatRequest(
             message=transcript,
             model=self._request.model,
-            system_prompt=self._build_system_prompt(),
+            system_prompt=system_prompt,
             history=[],
-            max_tokens=self._request.token_budget,
+            max_tokens=self._remaining_max_tokens(),
         )
         response = await self._chat_service.chat(chat_request)
+        self._model_call_count += 1
         self.actual_model = response.model
+        self._usage_complete = self._usage_complete and (
+            response.prompt_tokens is not None
+            and response.completion_tokens is not None
+        )
         if response.prompt_tokens is None:
             self.prompt_tokens = None
         elif self.prompt_tokens is not None:
@@ -110,7 +141,14 @@ class _ChatServiceAgentModel:
             answer=decision.answer,
             tool_calls=decision.tool_calls,
             token_usage=token_usage,
+            usage_complete=self._usage_complete,
         )
+
+    @property
+    def has_model_call(self) -> bool:
+        """Whether at least one provider call returned a response."""
+
+        return self._model_call_count > 0
 
     def _build_system_prompt(self) -> str:
         tools_prompt = "\n\nAvailable tools:\n" + json.dumps(
@@ -137,6 +175,15 @@ class _ChatServiceAgentModel:
             current,
         ]
         return "\n".join(sections)
+
+    def _remaining_max_tokens(self) -> int:
+        """Limit each provider call to the unconsumed run token budget."""
+        observed = 0
+        if self.prompt_tokens is not None:
+            observed += self.prompt_tokens
+        if self.completion_tokens is not None:
+            observed += self.completion_tokens
+        return max(self._request.token_budget - observed, 1)
 
     @staticmethod
     def _parse_decision(content: str) -> AgentDecision:
@@ -209,17 +256,34 @@ class AgentService:
         api_key: APIKey,
     ) -> AgentRunOutcome:
         """Run an Agent request and settle platform quota and usage boundaries."""
-        prompt_messages = self._quota_messages(request)
-        reservation = await self._quota_service.reserve(
-            api_key.key,
-            max_tokens=request.token_budget,
-            prompt_tokens=estimate_prompt_tokens(prompt_messages),
-        )
         model = _ChatServiceAgentModel(
             self._chat_service,
             request,
             self._tool_registry.export_schemas(),
         )
+        initial_state = AgentState(
+            run_id="quota-estimate",
+            user_input=request.message,
+            messages=[AgentMessage(role="user", content=request.message)],
+        )
+        reserved_prompt_tokens = model.estimate_prompt_tokens_for_state(initial_state)
+        reservation = await self._quota_service.reserve(
+            api_key.key,
+            max_tokens=request.token_budget,
+            prompt_tokens=reserved_prompt_tokens,
+        )
+
+        async def ensure_prompt_reservation(prompt_tokens: int) -> None:
+            nonlocal reserved_prompt_tokens
+            additional_tokens = prompt_tokens - reserved_prompt_tokens
+            if reservation is None or additional_tokens <= 0:
+                return
+            await self._quota_service.extend(
+                reservation.reservation_id, additional_tokens
+            )
+            reserved_prompt_tokens = prompt_tokens
+
+        model.set_prompt_reservation_guard(ensure_prompt_reservation)
         runtime = self._runtime_factory(
             model,
             None,
@@ -228,14 +292,27 @@ class AgentService:
         started = time.monotonic()
 
         async with ReservationLifecycle(reservation, self._quota_service) as lifecycle:
-            result = await lifecycle.run(
-                runtime.run(
-                    request.message,
-                    max_steps=request.max_steps,
-                    timeout=request.timeout_seconds,
-                    token_budget=request.token_budget,
+            try:
+                result = await lifecycle.run(
+                    runtime.run(
+                        request.message,
+                        max_steps=request.max_steps,
+                        timeout=request.timeout_seconds,
+                        token_budget=request.token_budget,
+                    )
                 )
-            )
+            except QuotaExceededError:
+                if model.has_model_call:
+                    elapsed_ms = (time.monotonic() - started) * 1000
+                    await self._record_usage(
+                        context=context,
+                        model=model,
+                        answer=None,
+                        stop_reason="quota_exceeded",
+                        latency_ms=elapsed_ms,
+                    )
+                raise
+
             elapsed_ms = (time.monotonic() - started) * 1000
             await self._record_usage(
                 context=context,
@@ -282,15 +359,6 @@ class AgentService:
             response=usage_response,
             latency_ms=latency_ms,
         )
-
-    @staticmethod
-    def _quota_messages(request: AgentRunRequest) -> list[tuple[str, str]]:
-        messages: list[tuple[str, str]] = []
-        if request.system_prompt:
-            messages.append(("system", request.system_prompt))
-        messages.extend((message.role, message.content) for message in request.history)
-        messages.append(("user", request.message))
-        return messages
 
     @staticmethod
     def _map_runtime_failure(result: AgentRunResult) -> ProviderError:

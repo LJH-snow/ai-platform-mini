@@ -162,11 +162,22 @@ def provide_chat_service() -> ChatService:
 @lru_cache
 def provide_agent_service() -> AgentService:
     from app.services.agent_service import AgentService
+    from app.tools.calculator import CalculatorTool
+    from app.tools.protocols import Tool
+    from app.tools.registry import ToolRegistry
+
+    tools: list[Tool] = [CalculatorTool()]
+    rag_service = provide_rag_service()
+    if rag_service is not None:
+        from app.tools.knowledge_search import KnowledgeSearchTool
+
+        tools.append(KnowledgeSearchTool(rag_service=rag_service))
 
     return AgentService(
         chat_service=provide_chat_service(),
         quota_service=provide_quota_service(),
         usage_collector=provide_usage_collector(),
+        tool_registry=ToolRegistry(tools),
     )
 
 

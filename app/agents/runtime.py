@@ -20,6 +20,7 @@ from app.agents.models import (
     ToolResult,
 )
 from app.agents.protocols import AgentModel, AgentTool, ToolContext
+from app.exceptions.base import QuotaExceededError
 from app.tools.executor import ToolExecutor
 
 _T = TypeVar("_T")
@@ -98,6 +99,18 @@ class AgentRuntime:
                         stop_reason=stop_reason,
                     )
 
+                if (
+                    token_budget is not None
+                    and token_budget > 0
+                    and state.token_usage >= token_budget
+                ):
+                    return self._finish(
+                        state=state,
+                        events=events,
+                        status=RunStatus.STOPPED,
+                        stop_reason=StopReason.TOKEN_BUDGET_EXCEEDED,
+                    )
+
                 step_index = len(state.steps) + 1
                 try:
                     decision = await self._await_controlled(
@@ -119,6 +132,8 @@ class AgentRuntime:
                         status=RunStatus.CANCELLED,
                         stop_reason=StopReason.EXTERNAL_CANCELLED,
                     )
+                except QuotaExceededError:
+                    raise
                 except Exception as exc:
                     return self._finish(
                         state=state,
@@ -179,6 +194,19 @@ class AgentRuntime:
                         status=RunStatus.COMPLETED,
                         stop_reason=StopReason.DIRECT_ANSWER,
                         answer=decision.answer,
+                    )
+
+                if (
+                    token_budget is not None
+                    and decision.tool_calls
+                    and not decision.usage_complete
+                ):
+                    state.steps.append(AgentStep(index=step_index, decision=decision))
+                    return self._finish(
+                        state=state,
+                        events=events,
+                        status=RunStatus.STOPPED,
+                        stop_reason=StopReason.TOKEN_BUDGET_EXCEEDED,
                     )
 
                 tool_results: list[ToolResult] = []
