@@ -14,7 +14,7 @@
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
-- 前端 Agent Console：[阶段 3 已接入同步 Agent Run Trace 与工具调用卡片，等待用户 Review；Agent SSE 与 RAG 来源 UI 尚未接入](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
+- 前端 Agent Console：[阶段 4 已接入同步 Agent Run Trace、Tool 级 RAG 来源卡片与安全降级；不提供 Agent SSE、实时 Trace 或回答内精确引用](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -78,7 +78,7 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 
 ## Frontend Agent Console
 
-前端位于 `frontend/`，基于 Vite、React 和 TypeScript。阶段 2 的普通 Chat SSE 保持不变；阶段 3 新增独立的 Agent Run 模式，真实调用同步 `POST /api/v1/agent/runs`，并在请求完成后展示后端公开响应中的 Run 状态、步骤和工具摘要。
+前端位于 `frontend/`，基于 Vite、React 和 TypeScript。阶段 2 的普通 Chat SSE 保持不变；阶段 3 新增独立的 Agent Run 模式，阶段 4 在此基础上接入同步 `POST /api/v1/agent/runs` 的 Tool 级 RAG 来源卡片。前端只消费对应 Tool Call 下的公开契约 `steps[].tool_calls[].rag.references`，不维护回答级全局来源。
 
 阶段 3 当前能力：
 
@@ -92,7 +92,14 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - 支持步骤与工具摘要展开/收起、停止本地请求、失败后重新运行、新建会话和清空会话；窄屏布局避免 Trace 横向溢出；
 - 前端对 HTTP、网络、Abort 和异常响应进行安全归一化，不渲染堆栈、内部路径、API Key、Provider 原始响应或模型思维链。
 
-当前边界：后端 Agent Run API 是同步 JSON，不提供 Agent SSE，因此运行中的具体模型决策和工具状态无法实时展示；前端只在请求完成后渲染真实 Trace。公开响应也没有事件时间、步骤耗时、工具参数、工具输出或工具错误详情。Agent SSE、持久化 Trace 查询、RAG 来源 UI 和阶段 4 能力均尚未完成。
+阶段 4 当前能力：
+
+- `knowledge_search` 的来源只在对应 ToolCallCard 内展示，沿用真实的 `stepIndex` 和 `callId` 关联，不提升为回答级全局来源；
+- 读取公开契约 `steps[].tool_calls[].rag.references`，展示真实的稳定来源标识、分块索引、片段摘要和 distance；缺失字段显示“后端未提供”，不生成文档名、URL、rank、引用编号或回答内精确引用；
+- 支持有来源、来源缺失、空来源、无相关来源、知识库为空、RAG 服务不可用、Embedding 失败、输出不可用和其他失败状态；服务故障不会伪装成无相关来源；
+- 来源片段遵循后端公开边界，并在前端显示截断/安全提示；RAG 内容始终作为不可信参考材料以普通文本渲染，不执行其中的指令或 HTML。
+
+当前边界：后端 Agent Run API 是同步 JSON，不提供 Agent SSE，因此运行中的具体模型决策和工具状态无法实时展示；前端只在请求完成后渲染真实 Trace 和 Tool 级来源卡片。来源列表用于安全展示检索结果，不证明回答中的精确引用，也不提供实时 RAG Trace。公开响应也没有事件时间、步骤耗时、工具参数、工具输出或工具错误详情。Agent SSE、持久化 Trace 查询和回答内精确引用均未实现。
 
 启动前端开发服务器：
 

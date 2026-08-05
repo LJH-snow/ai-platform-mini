@@ -24,9 +24,47 @@ export type AgentTraceEvent = {
   stopReason: string | null
 }
 
+export type AgentRagStatus =
+  | 'success_with_sources'
+  | 'no_relevant_sources'
+  | 'knowledge_base_empty'
+  | 'rag_unavailable'
+  | 'embedding_failed'
+  | 'output_unavailable'
+  | 'failed'
+
+export type AgentRagErrorCode =
+  | 'invalid_query'
+  | 'no_relevant_context'
+  | 'knowledge_base_empty'
+  | 'rag_storage_unavailable'
+  | 'embedding_unavailable'
+  | 'embedding_failed'
+  | 'rag_unavailable'
+  | 'output_truncated'
+  | 'output_malformed'
+  | 'failed'
+
+export type AgentRagReference = {
+  documentId: string | null
+  chunkId: string | null
+  chunkIndex: number | null
+  content: string | null
+  distance: number | null
+  truncated: boolean
+}
+
+export type AgentRag = {
+  status: AgentRagStatus
+  warning: string | null
+  errorCode: AgentRagErrorCode | null
+  references: AgentRagReference[]
+}
+
 export type AgentToolCall = {
   id: string
   name: string
+  callId?: string | null
   known: boolean
   status: AgentToolStatus
   stepIndex: number
@@ -37,6 +75,8 @@ export type AgentToolCall = {
   outputSummary: string | null
   errorCode: string | null
   errorMessage: string | null
+  truncated: boolean | null
+  rag: AgentRag | null
 }
 
 export type AgentTraceStep = {
