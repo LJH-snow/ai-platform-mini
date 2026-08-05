@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -22,6 +23,7 @@ from app.auth.models import APIKey
 from app.core.context import RequestContext
 from app.exceptions.base import ProviderError, QuotaExceededError
 from app.main import app
+from app.mcp import MCPToolAdapter, MCPToolCallResult, MCPToolDefinition
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatResponse
 from app.services.agent_service import (
@@ -29,6 +31,7 @@ from app.services.agent_service import (
     AgentService,
     _ChatServiceAgentModel,
 )
+from app.tools.registry import ToolRegistry
 
 client = TestClient(app)
 _AUTH_HEADERS = {"Authorization": "Bearer sk-test-integration"}
@@ -452,6 +455,32 @@ class _ToolThenAnswerChatService:
         )
 
 
+class _MCPThenAnswerChatService:
+    default_model = "test-model"
+
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+        self._responses = (
+            '{"type":"tool_call","call_id":"call-mcp",'
+            '"name":"mcp__demo__read_status","arguments":{}}',
+            '{"type":"final_answer","answer":"The service is healthy."}',
+        )
+
+    async def chat(self, request: object) -> object:
+        self.requests.append(request)
+        response_index = len(self.requests) - 1
+        return ChatResponse(
+            model="test-model",
+            message=ChatMessage(
+                role="assistant",
+                content=self._responses[min(response_index, len(self._responses) - 1)],
+            ),
+            done=True,
+            prompt_tokens=4,
+            completion_tokens=2,
+        )
+
+
 class _FakeQuotaService:
     def __init__(self) -> None:
         self.reserved: list[dict[str, object]] = []
@@ -563,6 +592,50 @@ async def test_agent_service_extends_prompt_reservation_after_tool_result() -> N
     assert len(quota.extended) == 1
     assert quota.extended[0][0] == "reservation-1"
     assert quota.extended[0][1] > 0
+
+
+@pytest.mark.asyncio
+async def test_agent_service_passes_mcp_grant_into_real_tool_execution() -> None:
+    class MCPClientStub:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, Mapping[str, object]]] = []
+
+        async def call_tool(
+            self,
+            name: str,
+            arguments: Mapping[str, object],
+        ) -> MCPToolCallResult:
+            self.calls.append((name, arguments))
+            return MCPToolCallResult(content=("status: ok",))
+
+    mcp_client = MCPClientStub()
+    mcp_tool = MCPToolAdapter(
+        "demo",
+        mcp_client,  # type: ignore[arg-type]
+        MCPToolDefinition(
+            name="read_status",
+            description="Read status.",
+            input_schema={"type": "object"},
+        ),
+    )
+    quota = _FakeQuotaService()
+    collector = _FakeUsageCollector()
+    service = AgentService(
+        chat_service=_MCPThenAnswerChatService(),  # type: ignore[arg-type]
+        quota_service=quota,  # type: ignore[arg-type]
+        usage_collector=collector,  # type: ignore[arg-type]
+        tool_registry=ToolRegistry([mcp_tool]),
+        granted_permissions=frozenset({"mcp:server:demo"}),
+    )
+
+    outcome = await service.run(
+        AgentRunRequest(message="check status", model="test-model"),
+        context=RequestContext(request_id="request-1", api_key="hashed"),
+        api_key=APIKey(key="hashed", name="test"),
+    )
+
+    assert outcome.result.answer == "The service is healthy."
+    assert mcp_client.calls == [("read_status", {})]
 
 
 @pytest.mark.asyncio

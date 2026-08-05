@@ -17,6 +17,7 @@ from app.core.container import (
     clear_container_cache,
     provide_embedder,
     provide_llm_provider,
+    provide_mcp_manager,
 )
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, setup_logging
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     provider: LLMProvider | None = None
     embedder: OllamaEmbedder | None = None
+    mcp_manager = None
     db_initialized = False
 
     try:
@@ -66,6 +68,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     settings.rag_embedding_model,
                     settings.rag_embedding_dimensions,
                 )
+
+        if settings.mcp_enabled:
+            mcp_manager = provide_mcp_manager()
+            mcp_tools = await mcp_manager.discover_tools()
+            logger.info(
+                "MCP enabled: servers=%d, tools=%d",
+                len(settings.get_mcp_server_configs()),
+                len(mcp_tools),
+            )
 
         await _bootstrap_keys(settings)
         yield
@@ -104,6 +115,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     logger.warning("LLM provider close was cancelled.")
                 except Exception:
                     logger.exception("Failed to close LLM provider.")
+            if mcp_manager is not None:
+                try:
+                    await mcp_manager.close()
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                    logger.warning("MCP manager close was cancelled.")
+                except Exception:
+                    logger.exception("Failed to close MCP manager.")
         finally:
             clear_container_cache()
         if cancellation is not None:

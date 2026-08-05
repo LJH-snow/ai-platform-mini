@@ -1,14 +1,25 @@
 import asyncio
 from collections.abc import Generator
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.auth.dependencies import require_api_key
 from app.auth.models import APIKey
-from app.core.container import provide_llm_provider, provide_usage_service
+from app.core.container import (
+    provide_llm_provider,
+    provide_mcp_manager,
+    provide_usage_service,
+)
 from app.exceptions.base import ProviderError
 from app.main import app
+from app.mcp import (
+    MCPReadiness,
+    MCPReadinessState,
+    MCPServerState,
+    MCPServerStatus,
+)
 from app.usage.memory_repository import InMemoryUsageRepository
 from app.usage.models import UsageRecord
 from app.usage.service import UsageService
@@ -130,3 +141,116 @@ def test_readiness_memory_mode_no_database_check(
     data = response.json()
     checks = data.get("checks", data)
     assert "database" not in checks
+
+
+def test_mcp_health_and_readiness_share_lifecycle_boundary(
+    _override_provider: None,
+) -> None:
+    manager = MagicMock()
+    manager.readiness_status.return_value = MCPReadiness(
+        state=MCPReadinessState.READY,
+        servers=(
+            MCPServerStatus(
+                name="demo",
+                state=MCPServerState.READY,
+                tool_count=1,
+            ),
+        ),
+    )
+    app.dependency_overrides[provide_mcp_manager] = lambda: manager
+    settings = MagicMock(
+        mcp_enabled=True,
+        auth_storage="memory",
+    )
+
+    try:
+        with patch("app.api.health.get_settings", return_value=settings):
+            health_response = client.get("/api/v1/health/mcp")
+            readiness_response = client.get("/api/v1/ready")
+    finally:
+        app.dependency_overrides.pop(provide_mcp_manager, None)
+
+    assert health_response.status_code == 200
+    assert health_response.json() == {
+        "ready": True,
+        "servers": [
+            {
+                "error_code": None,
+                "name": "demo",
+                "status": "ready",
+                "tool_count": 1,
+            }
+        ],
+        "status": "ready",
+    }
+    assert readiness_response.status_code == 200
+    assert readiness_response.json()["checks"]["mcp"] == "ready"
+
+
+def test_mcp_discovery_failure_does_not_block_application_readiness(
+    _override_provider: None,
+) -> None:
+    manager = MagicMock()
+    manager.readiness_status.return_value = MCPReadiness(
+        state=MCPReadinessState.NOT_READY,
+        servers=(
+            MCPServerStatus(
+                name="broken",
+                state=MCPServerState.FAILED,
+                error_code="discovery_failed",
+            ),
+        ),
+    )
+    app.dependency_overrides[provide_mcp_manager] = lambda: manager
+    settings = MagicMock(mcp_enabled=True, auth_storage="memory")
+
+    try:
+        with patch("app.api.health.get_settings", return_value=settings):
+            readiness_response = client.get("/api/v1/ready")
+            health_response = client.get("/api/v1/health/mcp")
+    finally:
+        app.dependency_overrides.pop(provide_mcp_manager, None)
+
+    assert readiness_response.status_code == 200
+    assert readiness_response.json() == {
+        "status": "ready",
+        "checks": {"provider": "ok", "mcp": "not_ready"},
+    }
+    assert health_response.status_code == 503
+    assert health_response.json()["status"] == "not_ready"
+    assert health_response.json()["ready"] is False
+
+
+def test_degraded_mcp_discovery_does_not_block_application_readiness(
+    _override_provider: None,
+) -> None:
+    manager = MagicMock()
+    manager.readiness_status.return_value = MCPReadiness(
+        state=MCPReadinessState.DEGRADED,
+        servers=(
+            MCPServerStatus(
+                name="broken",
+                state=MCPServerState.FAILED,
+                error_code="discovery_failed",
+            ),
+            MCPServerStatus(
+                name="working",
+                state=MCPServerState.READY,
+                tool_count=1,
+            ),
+        ),
+    )
+    app.dependency_overrides[provide_mcp_manager] = lambda: manager
+    settings = MagicMock(mcp_enabled=True, auth_storage="memory")
+
+    try:
+        with patch("app.api.health.get_settings", return_value=settings):
+            response = client.get("/api/v1/ready")
+    finally:
+        app.dependency_overrides.pop(provide_mcp_manager, None)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "checks": {"provider": "ok", "mcp": "degraded"},
+    }

@@ -250,12 +250,30 @@ app/
 - 首个只读 MCP 场景；
 - Server/Tool allowlist，默认拒绝未知高风险能力。
 
+### 当前开发切片
+
+当前已完成 MCP foundation 的最小验收闭环：stdio JSON-RPC Client、工具发现管理器、内部
+Tool Protocol 适配器、Settings allowlist、Server 权限授予、真实风险元数据 fail-closed
+过滤、重复工具隔离、FastAPI lifespan 启停、生命周期 health/readiness 查询，以及发现完成
+后的运行时调用失败/断线测试。默认 Server 注册、主动远端探针、生产部署策略、重连和完整
+可观测性仍属于后续生产化切片。
+
+### 实际状态（2026-08-04）
+
+MCP foundation 已完成，且不改变内部 Tool Protocol 或 Agent Runtime。`/api/v1/health`
+保持原有 liveness 行为；`/api/v1/ready` 在 MCP 开启时复用 Manager 聚合状态；新增
+`/api/v1/health/mcp` 返回脱敏的 Server 生命周期和工具发现状态。测试使用仓库内的只读
+stdio demo fixture，不依赖外网或第三方 MCP SDK，也没有注册到生产默认配置。
+
 ### 验收标准
 
 - Agent 不需要知道工具来自本地还是 MCP；
 - MCP Server 不可用时只影响相关 Tool Call；
 - 应用关闭时正确释放连接和子进程资源；
 - 完成“发现工具 → 模型选择 → MCP 执行 → 继续回答”的端到端测试。
+
+上述 foundation 验收已完成。运行时断线只会由内部 ToolExecutor 归一化为单次 Tool 失败，
+不会承诺自动重连或主动探针；这些能力不属于本 Sprint 的交付范围。
 
 ---
 

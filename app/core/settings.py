@@ -1,8 +1,15 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
 from functools import lru_cache
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+if TYPE_CHECKING:
+    from app.mcp.models import MCPServerConfig
 
 RAG_EMBEDDING_DIMENSIONS = 768
 
@@ -58,6 +65,9 @@ class Settings(BaseSettings):
     rag_max_distance: float = Field(default=0.35, ge=0, le=2)
     rag_embedding_timeout_seconds: float = Field(default=60.0, gt=0)
 
+    mcp_enabled: bool = False
+    mcp_servers_json: str = ""
+
     @field_validator("rag_embedding_dimensions")
     @classmethod
     def validate_embedding_dimensions(cls, v: int) -> int:
@@ -96,6 +106,140 @@ class Settings(BaseSettings):
                 "quota_reservation_ttl_seconds"
             )
         return value
+
+    def get_mcp_server_configs(self) -> tuple[MCPServerConfig, ...]:
+        """Parse the explicitly configured MCP server allowlist."""
+
+        if not self.mcp_enabled or not self.mcp_servers_json.strip():
+            return ()
+
+        try:
+            decoded = json.loads(self.mcp_servers_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError("mcp_servers_json must be valid JSON") from exc
+
+        if not isinstance(decoded, list):
+            raise ValueError("mcp_servers_json must be a JSON array")
+
+        configs: list[MCPServerConfig] = []
+        seen_names: set[str] = set()
+        for index, raw_config in enumerate(decoded):
+            if not isinstance(raw_config, Mapping):
+                raise ValueError(f"MCP server at index {index} must be an object")
+            config = self._parse_mcp_server_config(index, raw_config)
+            if config.name in seen_names:
+                raise ValueError(f"duplicate MCP server name: {config.name}")
+            seen_names.add(config.name)
+            configs.append(config)
+        return tuple(configs)
+
+    @staticmethod
+    def _parse_mcp_server_config(
+        index: int,
+        raw_config: Mapping[object, object],
+    ) -> MCPServerConfig:
+        from app.mcp.models import MCPServerConfig
+        from app.tools.models import RiskLevel
+
+        name = Settings._required_string(raw_config, "name", index)
+        command = Settings._required_string_tuple(raw_config, "command", index)
+        allowed_tools = Settings._optional_string_tuple(
+            raw_config, "allowed_tools", index
+        )
+        environment = Settings._optional_string_mapping(
+            raw_config, "environment", index
+        )
+        raw_risk_level = raw_config.get("max_risk_level", RiskLevel.LOW.value)
+        if not isinstance(raw_risk_level, str):
+            raise ValueError(
+                f"MCP server at index {index} max_risk_level must be a string"
+            )
+        try:
+            risk_level = RiskLevel(raw_risk_level)
+        except ValueError as exc:
+            raise ValueError(
+                f"MCP server at index {index} max_risk_level is invalid"
+            ) from exc
+
+        return MCPServerConfig(
+            name=name,
+            command=command,
+            allowed_tools=frozenset(allowed_tools),
+            max_risk_level=risk_level,
+            startup_timeout_seconds=Settings._positive_float(
+                raw_config.get("startup_timeout_seconds", 10.0),
+                "startup_timeout_seconds",
+                index,
+            ),
+            request_timeout_seconds=Settings._positive_float(
+                raw_config.get("request_timeout_seconds", 10.0),
+                "request_timeout_seconds",
+                index,
+            ),
+            environment=environment,
+        )
+
+    @staticmethod
+    def _required_string(
+        raw_config: Mapping[object, object], key: str, index: int
+    ) -> str:
+        value = raw_config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                f"MCP server at index {index} {key} must be a non-empty string"
+            )
+        return value
+
+    @staticmethod
+    def _required_string_tuple(
+        raw_config: Mapping[object, object], key: str, index: int
+    ) -> tuple[str, ...]:
+        value = raw_config.get(key)
+        if not isinstance(value, list) or not value:
+            raise ValueError(
+                f"MCP server at index {index} {key} must be a non-empty array"
+            )
+        result = Settings._string_tuple(value, key, index)
+        if not result:
+            raise ValueError(f"MCP server at index {index} {key} must not be empty")
+        return result
+
+    @staticmethod
+    def _optional_string_tuple(
+        raw_config: Mapping[object, object], key: str, index: int
+    ) -> tuple[str, ...]:
+        value = raw_config.get(key, [])
+        if not isinstance(value, list):
+            raise ValueError(f"MCP server at index {index} {key} must be an array")
+        return Settings._string_tuple(value, key, index)
+
+    @staticmethod
+    def _string_tuple(value: list[object], key: str, index: int) -> tuple[str, ...]:
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            raise ValueError(f"MCP server at index {index} {key} must contain strings")
+        return tuple(cast(str, item) for item in value)
+
+    @staticmethod
+    def _optional_string_mapping(
+        raw_config: Mapping[object, object], key: str, index: int
+    ) -> dict[str, str]:
+        value = raw_config.get(key, {})
+        if not isinstance(value, Mapping):
+            raise ValueError(f"MCP server at index {index} {key} must be an object")
+        if any(
+            not isinstance(name, str) or not name.strip() or not isinstance(item, str)
+            for name, item in value.items()
+        ):
+            raise ValueError(
+                f"MCP server at index {index} {key} must map non-empty names to strings"
+            )
+        return {cast(str, name): cast(str, item) for name, item in value.items()}
+
+    @staticmethod
+    def _positive_float(value: object, key: str, index: int) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(f"MCP server at index {index} {key} must be positive")
+        return float(value)
 
 
 @lru_cache

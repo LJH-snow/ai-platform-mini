@@ -6,9 +6,14 @@ from fastapi.responses import JSONResponse
 
 from app.auth.dependencies import require_api_key
 from app.auth.models import APIKey
-from app.core.container import provide_llm_provider, provide_usage_service
+from app.core.container import (
+    provide_llm_provider,
+    provide_mcp_manager,
+    provide_usage_service,
+)
 from app.core.settings import get_settings
 from app.exceptions.base import ProviderError
+from app.mcp.manager import MCPToolManager
 from app.providers.base import LLMProvider
 from app.usage.models import UsageSummary
 from app.usage.service import UsageService
@@ -26,6 +31,7 @@ def health_check() -> dict[str, str]:
 @router.get("/ready", summary="Readiness probe")
 async def readiness_check(
     provider: Annotated[LLMProvider, Depends(provide_llm_provider)],
+    mcp_manager: Annotated[MCPToolManager, Depends(provide_mcp_manager)],
 ) -> JSONResponse:
     checks: dict[str, str] = {}
     healthy = True
@@ -60,6 +66,10 @@ async def readiness_check(
             checks["database"] = "failed"
             healthy = False
 
+    if settings.mcp_enabled:
+        mcp_readiness = mcp_manager.readiness_status()
+        checks["mcp"] = mcp_readiness.state.value
+
     status_code = 200 if healthy else 503
     return JSONResponse(
         status_code=status_code,
@@ -67,6 +77,24 @@ async def readiness_check(
             "status": "ready" if healthy else "not_ready",
             "checks": checks,
         },
+    )
+
+
+@router.get("/health/mcp", summary="MCP health and readiness")
+def mcp_health(
+    mcp_manager: Annotated[MCPToolManager, Depends(provide_mcp_manager)],
+) -> JSONResponse:
+    """Expose MCP lifecycle state without actively probing remote servers."""
+
+    settings = get_settings()
+    if not settings.mcp_enabled:
+        content = {"status": "disabled", "ready": True, "servers": []}
+        return JSONResponse(status_code=200, content=content)
+
+    readiness = mcp_manager.readiness_status()
+    return JSONResponse(
+        status_code=200 if readiness.is_ready else 503,
+        content=readiness.to_dict(),
     )
 
 
