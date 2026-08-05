@@ -773,3 +773,111 @@ textarea {
     align-self: flex-start;
   }
 }
+
+/* Phase 5 accessibility and resilient content rules */
+.srOnlyStatus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.copyFeedback {
+  color: #116b3d;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.copyButton {
+  min-height: 2.25rem;
+  max-width: 100%;
+  padding: 0.35rem 0.5rem;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: right;
+}
+
+.inlineRetryButton {
+  justify-self: start;
+  min-height: 2.5rem;
+  margin-top: 0.65rem;
+  padding: 0.55rem 0.8rem;
+}
+
+.runIdLine {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  overflow-wrap: anywhere;
+}
+
+.runIdLine > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ragToggle {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.45rem 0;
+  color: #27324a;
+  background: transparent;
+  text-align: left;
+}
+
+.ragToggle:hover:not(:disabled) {
+  box-shadow: none;
+  transform: none;
+  text-decoration: underline;
+}
+
+.ragToggle > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ragContent {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.traceStep,
+.toolCard {
+  overflow: visible;
+}
+
+@media (max-width: 520px) {
+  .requestIdGroup {
+    max-width: 100%;
+    justify-items: start;
+  }
+
+  .copyFeedback {
+    text-align: left;
+  }
+
+  .runIdLine {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .traceBadge {
+    white-space: normal;
+  }
+
+  .ragReferenceFacts {
+    grid-template-columns: 1fr;
+  }
+}

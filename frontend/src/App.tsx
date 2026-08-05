@@ -17,9 +17,9 @@ import type {
   AgentToolCall,
   AgentTraceStep,
 } from './agent/types.ts'
-import { createChatClient, type ChatClient } from './chat/client.ts'
+import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
 import { getRuntimeConfig } from './chat/config.ts'
-import type { ChatMessage } from './chat/types.ts'
+import type { ChatApiMessage, ChatMessage } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
 type RequestStatus =
@@ -146,6 +146,43 @@ const ragStatusDescriptions: Record<AgentRag['status'], string> = {
   failed: 'RAG 检索失败，未生成来源。',
 }
 
+const getRagAnnouncement = (run: AgentRun): string | null => {
+  const ragTools = run.steps.flatMap((step) =>
+    step.toolCalls.filter((tool) => tool.name === 'knowledge_search'),
+  )
+  if (ragTools.length === 0) return null
+
+  const rag = ragTools.at(-1)?.rag
+  if (rag === null || rag === undefined) return 'RAG 来源不可用，当前响应没有可展示的来源。'
+  if (rag.references.length > 0) return `RAG 来源已加载，共 ${rag.references.length} 条。`
+  if (rag.status === 'rag_unavailable' || rag.status === 'failed') {
+    return 'RAG 来源加载失败，当前响应没有可展示的来源。'
+  }
+  return 'RAG 未找到相关来源。'
+}
+
+const getSafeChatErrorMessage = (error: ChatBackendError): string => {
+  if (error.status === 401 || error.status === 403) return 'Chat 请求未通过鉴权，请检查运行时凭据。'
+  if (error.status === 408 || error.status === 504) return 'Chat 请求超时，请稍后重试。'
+  if (error.status === 429) return 'Chat 请求过于频繁，请稍后重试。'
+  if (error.status >= 500) return 'Chat 服务暂时不可用，请稍后重试。'
+  return `Chat 请求失败（HTTP ${error.status}），请稍后重试。`
+}
+
+const getSafeAgentErrorMessage = (error: Error): string => {
+  if (error instanceof AgentNetworkError) return '无法连接 Agent 服务，请稍后重试。'
+  if (error instanceof AgentResponseError) return 'Agent 服务返回了无法识别的响应，请稍后重试。'
+  if (error instanceof AgentBackendError) {
+    if (error.status === 401 || error.status === 403)
+      return 'Agent 请求未通过鉴权，请检查运行时凭据。'
+    if (error.status === 408 || error.status === 504) return 'Agent 请求超时，请稍后重试。'
+    if (error.status === 429) return 'Agent 请求过于频繁，请稍后重试。'
+    if (error.status >= 500) return 'Agent 服务暂时不可用，请稍后重试。'
+    return `Agent 请求失败（HTTP ${error.status}），请稍后重试。`
+  }
+  return 'Agent 请求失败，未展示未经处理的内部错误。'
+}
+
 const MAX_RAG_CONTENT_LENGTH = 1200
 
 const formatRagValue = (value: string | number | null): string =>
@@ -201,6 +238,7 @@ function RagReferenceCard({ reference }: { reference: AgentRagReference }): JSX.
 }
 
 function RagSection({ tool }: { tool: AgentToolCall }): JSX.Element | null {
+  const [expanded, setExpanded] = useState(true)
   if (tool.name !== 'knowledge_search') return null
   if (tool.rag === null) {
     return (
@@ -213,34 +251,47 @@ function RagSection({ tool }: { tool: AgentToolCall }): JSX.Element | null {
 
   const { rag } = tool
   const hasReferences = rag.references.length > 0
+  const contentId = `${tool.id}-rag-content`
   return (
     <section
       className={hasReferences ? 'ragSources' : 'ragUnavailableNotice'}
       aria-label="RAG 参考来源"
     >
-      <div className="ragHeader">
-        <strong>
-          {hasReferences ? `参考来源：${rag.references.length} 条` : ragStatusTitles[rag.status]}
-        </strong>
+      <button
+        type="button"
+        className="ragToggle"
+        aria-expanded={expanded}
+        aria-controls={contentId}
+        aria-label={`${hasReferences ? `参考来源：${rag.references.length} 条` : ragStatusTitles[rag.status]}，${expanded ? '收起参考来源' : '展开参考来源'}`}
+        onClick={() => setExpanded((current) => !current)}
+      >
         <span>
-          关联工具：knowledge_search · 步骤序号：{tool.stepIndex} · 调用标识：
-          {tool.callId ?? '后端未提供'}
+          {hasReferences ? `参考来源：${rag.references.length} 条` : ragStatusTitles[rag.status]}
         </span>
+        <span aria-hidden="true">{expanded ? '收起' : '展开'}</span>
+      </button>
+      <div id={contentId} className="ragContent" hidden={!expanded}>
+        <div className="ragHeader">
+          <span>
+            关联工具：knowledge_search · 步骤序号：{tool.stepIndex} · 调用标识：
+            {tool.callId ?? '后端未提供'}
+          </span>
+        </div>
+        {rag.warning ? <p className="ragWarning">不可信参考提示：{rag.warning}</p> : null}
+        {hasReferences ? (
+          <ol className="ragReferenceList">
+            {rag.references.map((reference, index) => (
+              <RagReferenceCard
+                key={`${tool.callId ?? tool.id}-rag-${index}`}
+                reference={reference}
+              />
+            ))}
+          </ol>
+        ) : (
+          <span>{ragStatusDescriptions[rag.status]}</span>
+        )}
+        {rag.errorCode ? <span>RAG 错误码：{rag.errorCode}</span> : null}
       </div>
-      {rag.warning ? <p className="ragWarning">不可信参考提示：{rag.warning}</p> : null}
-      {hasReferences ? (
-        <ol className="ragReferenceList">
-          {rag.references.map((reference, index) => (
-            <RagReferenceCard
-              key={`${tool.callId ?? tool.id}-rag-${index}`}
-              reference={reference}
-            />
-          ))}
-        </ol>
-      ) : (
-        <span>{ragStatusDescriptions[rag.status]}</span>
-      )}
-      {rag.errorCode ? <span>RAG 错误码：{rag.errorCode}</span> : null}
     </section>
   )
 }
@@ -256,6 +307,7 @@ function ToolCallCard({ tool }: { tool: AgentToolCall }): JSX.Element {
         className="traceToggle toolToggle"
         aria-expanded={expanded}
         aria-controls={contentId}
+        aria-label={`工具调用 ${tool.name}，${toolStatusLabels[tool.status]}，${expanded ? '收起' : '展开'}`}
         onClick={() => setExpanded((current) => !current)}
       >
         <span className="traceToggleText">
@@ -264,18 +316,16 @@ function ToolCallCard({ tool }: { tool: AgentToolCall }): JSX.Element {
         </span>
         <span className={`traceBadge badge-${tool.status}`}>{toolStatusLabels[tool.status]}</span>
       </button>
-      {expanded ? (
-        <div id={contentId} className="traceDetails">
-          <p>步骤序号：{tool.stepIndex}</p>
-          <p>调用标识：{tool.callId ?? '后端未提供'}</p>
-          <p>耗时：{tool.durationMs === null ? '后端未提供' : `${tool.durationMs} ms`}</p>
-          <p>输入摘要：{tool.inputSummary ?? '后端未提供'}</p>
-          <p>输出摘要：{tool.outputSummary ?? '后端未提供'}</p>
-          {tool.errorCode ? <p>错误码：{tool.errorCode}</p> : null}
-          {tool.errorMessage ? <p className="safeError">{tool.errorMessage}</p> : null}
-          <RagSection tool={tool} />
-        </div>
-      ) : null}
+      <div id={contentId} className="traceDetails" hidden={!expanded}>
+        <p>步骤序号：{tool.stepIndex}</p>
+        <p>调用标识：{tool.callId ?? '后端未提供'}</p>
+        <p>耗时：{tool.durationMs === null ? '后端未提供' : `${tool.durationMs} ms`}</p>
+        <p>输入摘要：{tool.inputSummary ?? '后端未提供'}</p>
+        <p>输出摘要：{tool.outputSummary ?? '后端未提供'}</p>
+        {tool.errorCode ? <p>错误码：{tool.errorCode}</p> : null}
+        {tool.errorMessage ? <p className="safeError">{tool.errorMessage}</p> : null}
+        <RagSection tool={tool} />
+      </div>
     </div>
   )
 }
@@ -291,6 +341,7 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
         className="traceToggle"
         aria-expanded={expanded}
         aria-controls={contentId}
+        aria-label={`步骤 ${step.index}，${decisionLabels[step.decisionKind]}，${expanded ? '收起' : '展开'}`}
         onClick={() => setExpanded((current) => !current)}
       >
         <span className="traceToggleText">
@@ -310,45 +361,43 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
           ))}
         </div>
       ) : null}
-      {expanded ? (
-        <div id={contentId} className="traceDetails stepDetails">
-          <p>{step.summary}</p>
-          <dl className="traceFacts">
-            <div>
-              <dt>开始时间</dt>
-              <dd>{step.startedAt ?? '后端未提供'}</dd>
-            </div>
-            <div>
-              <dt>完成时间</dt>
-              <dd>{step.completedAt ?? '后端未提供'}</dd>
-            </div>
-            <div>
-              <dt>耗时</dt>
-              <dd>{step.durationMs === null ? '后端未提供' : `${step.durationMs} ms`}</dd>
-            </div>
-          </dl>
-          <div className="srFacts" aria-label="步骤时间信息">
-            <span>开始时间：{step.startedAt ?? '后端未提供'}</span>
-            <span>完成时间：{step.completedAt ?? '后端未提供'}</span>
-            <span>耗时：{step.durationMs === null ? '后端未提供' : `${step.durationMs} ms`}</span>
+      <div id={contentId} className="traceDetails stepDetails" hidden={!expanded}>
+        <p>{step.summary}</p>
+        <dl className="traceFacts">
+          <div>
+            <dt>开始时间</dt>
+            <dd>{step.startedAt ?? '后端未提供'}</dd>
           </div>
-          {step.events.length > 0 ? (
-            <div className="eventSummary">
-              <span className="metricLabel">可审计事件</span>
-              <ol>
-                {step.events.map((event) => (
-                  <li key={event.id}>{eventLabels[event.kind] ?? event.kind}</li>
-                ))}
-              </ol>
-            </div>
-          ) : (
-            <p>关联事件：后端未提供</p>
-          )}
-          {step.toolCalls.map((tool) => (
-            <ToolCallCard key={tool.id} tool={tool} />
-          ))}
+          <div>
+            <dt>完成时间</dt>
+            <dd>{step.completedAt ?? '后端未提供'}</dd>
+          </div>
+          <div>
+            <dt>耗时</dt>
+            <dd>{step.durationMs === null ? '后端未提供' : `${step.durationMs} ms`}</dd>
+          </div>
+        </dl>
+        <div className="srFacts" aria-label="步骤时间信息">
+          <span>开始时间：{step.startedAt ?? '后端未提供'}</span>
+          <span>完成时间：{step.completedAt ?? '后端未提供'}</span>
+          <span>耗时：{step.durationMs === null ? '后端未提供' : `${step.durationMs} ms`}</span>
         </div>
-      ) : null}
+        {step.events.length > 0 ? (
+          <div className="eventSummary">
+            <span className="metricLabel">可审计事件</span>
+            <ol>
+              {step.events.map((event) => (
+                <li key={event.id}>{eventLabels[event.kind] ?? event.kind}</li>
+              ))}
+            </ol>
+          </div>
+        ) : (
+          <p>关联事件：后端未提供</p>
+        )}
+        {step.toolCalls.map((tool) => (
+          <ToolCallCard key={tool.id} tool={tool} />
+        ))}
+      </div>
     </li>
   )
 }
@@ -384,6 +433,13 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const [traceUnavailableMessage, setTraceUnavailableMessage] = useState<string | null>(null)
   const [lastAgentInput, setLastAgentInput] = useState<AgentRunInput | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [announcement, setAnnouncement] = useState('准备就绪。')
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null)
+  const [lastChatInput, setLastChatInput] = useState<ChatApiMessage[] | null>(null)
+  const [lastChatAssistantMessageId, setLastChatAssistantMessageId] = useState<string | null>(null)
+  const [lastAgentAssistantMessageId, setLastAgentAssistantMessageId] = useState<string | null>(
+    null,
+  )
   const activeRequest = useRef<ActiveRequest | null>(null)
 
   const sessionLabel = sessionCount === 0 ? '未命名会话' : `本地会话 ${sessionCount}`
@@ -410,7 +466,12 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setAgentRun(null)
     setTraceUnavailableMessage(null)
     setLastAgentInput(null)
+    setLastChatInput(null)
+    setLastChatAssistantMessageId(null)
+    setLastAgentAssistantMessageId(null)
     setErrorMessage(null)
+    setCopyFeedback(null)
+    setAnnouncement(action === 'new' ? '已新建会话。' : '已清空当前会话。')
     setRequestStatus('idle')
 
     if (action === 'new') {
@@ -430,8 +491,10 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     if (request.kind === 'agent') {
       replaceAssistantContent(request.assistantMessageId, '请求已取消；后端终态未知。')
       setRequestStatus('client_cancelled')
+      setAnnouncement('已停止等待 Agent 响应；后端终态未知。')
     } else {
       setRequestStatus('stopped')
+      setAnnouncement('Chat 请求已停止。')
     }
   }
 
@@ -450,7 +513,10 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setAgentRun(null)
     setTraceUnavailableMessage(null)
     setErrorMessage(null)
+    setCopyFeedback(null)
+    setLastChatAssistantMessageId(assistantMessage.id)
     setRequestStatus('sending')
+    setAnnouncement('Chat 请求已开始。')
 
     try {
       await resolvedChatClient.streamChat(
@@ -472,25 +538,32 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         },
         request.controller.signal,
       )
-      if (!request.stopped) setRequestStatus('completed')
+      if (!request.stopped) {
+        setRequestStatus('completed')
+        setAnnouncement('Chat 请求已完成。')
+      }
     } catch (error) {
       if (request.stopped) return
       if (error instanceof DOMException && error.name === 'AbortError') {
         setRequestStatus('stopped')
+        setAnnouncement('Chat 请求已停止。')
       } else if (error instanceof Error && error.name === 'ChatStreamInterruptedError') {
-        setErrorMessage(error.message)
+        setErrorMessage('Chat SSE 连接已断开，可重试。')
         setRequestStatus('interrupted')
-      } else if (error instanceof Error && error.name === 'ChatBackendError') {
-        setErrorMessage(error.message)
+        setAnnouncement('Chat SSE 已断连，可重试。')
+      } else if (error instanceof ChatBackendError) {
+        setErrorMessage(getSafeChatErrorMessage(error))
         setRequestStatus('chat_failed')
-        if ('requestId' in error && typeof error.requestId === 'string')
-          setRequestId(error.requestId)
+        setAnnouncement('Chat 后端请求失败，可重试。')
+        if (error.requestId) setRequestId(error.requestId)
       } else if (error instanceof Error && error.name === 'ChatNetworkError') {
-        setErrorMessage(error.message)
+        setErrorMessage('无法连接 Chat 服务，请稍后重试。')
         setRequestStatus('network')
+        setAnnouncement('Chat 网络请求失败，可重试。')
       } else {
-        setErrorMessage('网络请求失败。')
+        setErrorMessage('Chat 请求失败，可重试。')
         setRequestStatus('network')
+        setAnnouncement('Chat 请求失败，可重试。')
       }
     } finally {
       if (activeRequest.current === request) activeRequest.current = null
@@ -512,8 +585,11 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setAgentRun(null)
     setTraceUnavailableMessage(null)
     setErrorMessage(null)
+    setCopyFeedback(null)
+    setLastAgentAssistantMessageId(assistantMessage.id)
     setRequestStatus('agent_running')
     setLastAgentInput(input)
+    setAnnouncement('Agent Run 已开始。')
 
     try {
       const run = await resolvedAgentClient.runAgent(input, request.controller.signal)
@@ -521,26 +597,45 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       setAgentRun(run)
       replaceAssistantContent(assistantMessage.id, fallbackAnswerForRun(run))
       setRequestStatus(requestStatusForRun(run.status))
+      const runAnnouncement =
+        run.status === 'completed'
+          ? 'Agent Run 已完成。'
+          : run.status === 'timed_out'
+            ? 'Agent Run 已超时，可重试。'
+            : run.status === 'cancelled'
+              ? 'Agent Run 已被后端取消。'
+              : run.status === 'stopped'
+                ? 'Agent Run 已停止。'
+                : 'Agent Run 失败，可重试。'
+      const ragAnnouncement = getRagAnnouncement(run)
+      setAnnouncement(ragAnnouncement ? `${ragAnnouncement} ${runAnnouncement}` : runAnnouncement)
     } catch (error) {
       if (request.stopped) return
       if (error instanceof DOMException && error.name === 'AbortError') {
         replaceAssistantContent(assistantMessage.id, '请求已取消；后端终态未知。')
         setRequestStatus('client_cancelled')
-      } else if (
-        error instanceof AgentBackendError ||
-        error instanceof AgentNetworkError ||
-        error instanceof AgentResponseError
-      ) {
-        replaceAssistantContent(assistantMessage.id, error.message)
+        setAnnouncement('已停止等待 Agent 响应；后端终态未知。')
+      } else if (error instanceof AgentNetworkError) {
+        const message = getSafeAgentErrorMessage(error)
+        replaceAssistantContent(assistantMessage.id, message)
         setTraceUnavailableMessage('本次 Agent 请求未收到可展示的 Trace。')
-        setErrorMessage(error.message)
-        setRequestStatus(error instanceof AgentNetworkError ? 'network' : 'failed')
-      } else {
-        const message = 'Agent 请求失败，未展示未经处理的内部错误。'
+        setErrorMessage(message)
+        setRequestStatus('network')
+        setAnnouncement('Agent 网络请求失败，可重试。')
+      } else if (error instanceof AgentBackendError || error instanceof AgentResponseError) {
+        const message = getSafeAgentErrorMessage(error)
         replaceAssistantContent(assistantMessage.id, message)
         setTraceUnavailableMessage('本次 Agent 请求未收到可展示的 Trace。')
         setErrorMessage(message)
         setRequestStatus('failed')
+        setAnnouncement('Agent 请求失败，可重试。')
+      } else {
+        const message = getSafeAgentErrorMessage(error instanceof Error ? error : new Error())
+        replaceAssistantContent(assistantMessage.id, message)
+        setTraceUnavailableMessage('本次 Agent 请求未收到可展示的 Trace。')
+        setErrorMessage(message)
+        setRequestStatus('failed')
+        setAnnouncement('Agent 请求失败，可重试。')
       }
     } finally {
       if (activeRequest.current === request) activeRequest.current = null
@@ -572,19 +667,57 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         assistantMessage,
       )
     } else {
+      const chatInput = nextMessages.map(({ role, content: messageContent }) => ({
+        role,
+        content: messageContent,
+      }))
+      setLastChatInput(chatInput)
       await executeChat(nextMessages, assistantMessage)
     }
   }
 
   const handleRetry = async (): Promise<void> => {
-    if (!lastAgentInput || isActive) return
-    const assistantMessage = createMessage('assistant', '')
-    setMessages((current) => [...current, assistantMessage])
-    await executeAgent(lastAgentInput, assistantMessage)
+    if (isActive) return
+    if (mode === 'agent' && lastAgentInput) {
+      const previousAssistantId = lastAgentAssistantMessageId
+      const assistantMessage = createMessage('assistant', '')
+      setMessages((current) => [
+        ...current.filter((message) => message.id !== previousAssistantId),
+        assistantMessage,
+      ])
+      setAnnouncement('重新运行 Agent 已开始。')
+      await executeAgent(lastAgentInput, assistantMessage)
+    } else if (mode === 'chat' && lastChatInput) {
+      const previousAssistantId = lastChatAssistantMessageId
+      const assistantMessage = createMessage('assistant', '')
+      setMessages((current) => [
+        ...current.filter((message) => message.id !== previousAssistantId),
+        assistantMessage,
+      ])
+      setAnnouncement('重新发送 Chat 已开始。')
+      await executeChat(
+        lastChatInput.map(({ role, content }) => ({
+          id: `${role}-${crypto.randomUUID()}`,
+          role,
+          content,
+        })),
+        assistantMessage,
+      )
+    }
   }
 
-  const handleCopyRequestId = async (): Promise<void> => {
-    if (requestId && navigator.clipboard) await navigator.clipboard.writeText(requestId)
+  const handleCopy = async (label: string, value: string | null): Promise<void> => {
+    if (!value) return
+    if (!navigator.clipboard) {
+      setCopyFeedback(`${label}复制失败：当前环境不支持剪贴板。`)
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopyFeedback(`${label}已复制。`)
+    } catch {
+      setCopyFeedback(`${label}复制失败，请手动选择文本。`)
+    }
   }
 
   const traceStatus = agentRun
@@ -593,16 +726,16 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       ? 'Trace 不可用'
       : '无运行结果'
   const canRetry =
-    mode === 'agent' &&
-    lastAgentInput !== null &&
-    ['failed', 'network', 'timed_out'].includes(requestStatus) &&
-    !isActive
+    !isActive &&
+    ((mode === 'agent' && lastAgentInput !== null) ||
+      (mode === 'chat' && lastChatInput !== null)) &&
+    ['failed', 'network', 'timed_out', 'chat_failed', 'interrupted'].includes(requestStatus)
 
   return (
     <main className="shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agent Console · Phase 3</p>
+          <p className="eyebrow">Agent Console · Phase 5</p>
           <h1>对话与 Agent Trace</h1>
           <p className="heroCopy">
             普通模式继续使用真实 Chat SSE；Agent Run 使用同步 JSON，并在请求完成后加载可审计
@@ -617,16 +750,26 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
           <div className="panelHeader">
             <div>
               <h2>会话</h2>
-              <span className={`requestStatus status-${requestStatus}`} role="status">
+              <span className={`requestStatus status-${requestStatus}`} aria-hidden="true">
                 {statusLabels[requestStatus]}
               </span>
             </div>
             {requestId ? (
               <div className="requestIdGroup">
                 <span className="metricLabel">Request ID</span>
-                <button type="button" className="copyButton" onClick={handleCopyRequestId}>
+                <button
+                  type="button"
+                  className="copyButton"
+                  aria-label={`复制 Request ID ${requestId}`}
+                  onClick={() => void handleCopy('Request ID', requestId)}
+                >
                   {requestId}
                 </button>
+                {copyFeedback ? (
+                  <span className="copyFeedback" aria-live="polite">
+                    {copyFeedback}
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -652,6 +795,10 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             </button>
           </div>
 
+          <div className="srOnlyStatus" role="status" aria-live="polite" aria-atomic="true">
+            {statusLabels[requestStatus]}。{announcement}
+          </div>
+
           {messages.length === 0 ? (
             <div className="emptyState">
               <div className="emptyIcon">A</div>
@@ -663,7 +810,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               </p>
             </div>
           ) : (
-            <div className="messageList" aria-live="polite" aria-label="消息列表">
+            <div className="messageList" aria-label="消息列表">
               {messages.map((message) => (
                 <div key={message.id} className={`message message-${message.role}`}>
                   <span className="messageRole">{message.role === 'user' ? '你' : '助手'}</span>
@@ -675,7 +822,12 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
 
           {errorMessage ? (
             <div className="errorNotice" role="alert">
-              {errorMessage}
+              <span>{errorMessage}</span>
+              {canRetry ? (
+                <button type="button" className="inlineRetryButton" onClick={handleRetry}>
+                  {mode === 'chat' ? '重试 Chat' : '重新运行 Agent'}
+                </button>
+              ) : null}
             </div>
           ) : null}
 
@@ -692,12 +844,18 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               }
               rows={3}
               disabled={isActive}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                  event.preventDefault()
+                  event.currentTarget.form?.requestSubmit()
+                }
+              }}
             />
             <div className="composerActions">
               <span className="composerHint">
                 {mode === 'chat'
-                  ? '普通回答为实时 Chat SSE。'
-                  : 'Agent Trace 在同步请求完成后加载，非实时。'}
+                  ? '普通回答为实时 Chat SSE；Enter 换行，Ctrl/⌘ + Enter 发送。'
+                  : 'Agent Trace 在同步请求完成后加载，非实时；Enter 换行，Ctrl/⌘ + Enter 运行。'}
               </span>
               {isActive ? (
                 <button type="button" className="stopButton" onClick={handleStop}>
@@ -745,7 +903,24 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
           ) : agentRun ? (
             <div className="traceContent">
               <div className="traceMeta">
-                <span>Run ID：{agentRun.runId ?? '后端未提供'}</span>
+                <span className="runIdLine">
+                  <span>Run ID：{agentRun.runId ?? '后端未提供'}</span>
+                  {agentRun.runId ? (
+                    <button
+                      type="button"
+                      className="copyButton"
+                      aria-label={`复制 Run ID ${agentRun.runId}`}
+                      onClick={() => void handleCopy('Run ID', agentRun.runId)}
+                    >
+                      复制 Run ID
+                    </button>
+                  ) : null}
+                  {copyFeedback ? (
+                    <span className="copyFeedback" aria-live="polite">
+                      {copyFeedback}
+                    </span>
+                  ) : null}
+                </span>
                 <span>停止原因：{agentRun.stopReason ?? '后端未提供'}</span>
                 <span>总 Token：{formatMetric(agentRun.usage.totalTokens)}</span>
                 <span>时间与耗时：后端未提供</span>

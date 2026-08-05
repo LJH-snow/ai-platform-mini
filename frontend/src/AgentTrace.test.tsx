@@ -186,16 +186,31 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     expect(stepButton).toHaveAttribute('aria-expanded', 'false')
-    await user.click(stepButton)
+    expect(stepButton).toHaveAccessibleName(/展开/)
+    const stepContent = document.getElementById(stepButton.getAttribute('aria-controls') ?? '')
+    expect(stepContent).toBeInTheDocument()
+    expect(stepContent).not.toBeVisible()
+    stepButton.focus()
+    await user.keyboard(' ')
     expect(stepButton).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('开始时间：后端未提供')).toBeInTheDocument()
-    expect(screen.getByText('耗时：后端未提供')).toBeInTheDocument()
+    expect(stepButton).toHaveAccessibleName(/收起/)
+    expect(within(stepContent as HTMLElement).getByText('开始时间：后端未提供')).toBeVisible()
+    expect(stepContent?.querySelector('.traceFacts dd:last-child')).toBeVisible()
 
     const toolButton = screen.getByRole('button', { name: /calculator.*成功/ })
-    await user.click(toolButton)
+    expect(toolButton).toHaveAccessibleName(/展开/)
+    const toolContent = document.getElementById(toolButton.getAttribute('aria-controls') ?? '')
+    expect(toolContent).toBeInTheDocument()
+    expect(toolContent).not.toBeVisible()
+    toolButton.focus()
+    await user.keyboard(' ')
     expect(toolButton).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('输入摘要：后端未提供')).toBeInTheDocument()
-    expect(screen.getByText('输出摘要：后端未提供')).toBeInTheDocument()
+    expect(toolButton).toHaveAccessibleName(/收起/)
+    expect(screen.getByText('输入摘要：后端未提供')).toBeVisible()
+    expect(screen.getByText('输出摘要：后端未提供')).toBeVisible()
+    toolButton.focus()
+    await user.keyboard(' ')
+    expect(toolContent).not.toBeVisible()
   })
 
   it.each([
@@ -213,7 +228,7 @@ describe('Agent Trace integration', () => {
       await waitFor(() =>
         expect(within(conversation).getByRole('status')).toHaveTextContent(statusLabel),
       )
-      expect(screen.getByText(toolLabel)).toBeInTheDocument()
+      expect(screen.getAllByText(toolLabel).length).toBeGreaterThan(0)
       if (status === 'failed') {
         expect(screen.getByRole('button', { name: '重新运行' })).toBeInTheDocument()
         await user.click(screen.getByRole('button', { name: '重新运行' }))
@@ -227,8 +242,8 @@ describe('Agent Trace integration', () => {
     await startAgentRun(controlled)
     controlled.getRequest().resolve(createRun({ toolName: 'future_tool' }))
 
-    expect(await screen.findByText('未知工具')).toBeInTheDocument()
-    expect(screen.getByText('future_tool')).toBeInTheDocument()
+    expect((await screen.findAllByText('未知工具')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('future_tool').length).toBeGreaterThan(0)
   })
 
   it('recognizes knowledge_search and explicitly reports that the current response has no sources', async () => {
@@ -286,6 +301,21 @@ describe('Agent Trace integration', () => {
     await user.click(stepButton)
     const toolButton = screen.getByRole('button', { name: /knowledge_search.*成功/ })
     await user.click(toolButton)
+
+    const ragToggle = screen.getByRole('button', { name: /参考来源：2 条/ })
+    expect(ragToggle).toHaveAttribute('aria-expanded', 'true')
+    expect(ragToggle).toHaveAccessibleName(/收起参考来源/)
+    const ragContent = document.getElementById(ragToggle.getAttribute('aria-controls') ?? '')
+    expect(ragContent).toBeInTheDocument()
+    expect(ragContent).toBeVisible()
+    ragToggle.focus()
+    await user.keyboard(' ')
+    expect(ragToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(ragToggle).toHaveAccessibleName(/展开参考来源/)
+    expect(ragContent).not.toBeVisible()
+    expect(screen.getByText('doc-1')).not.toBeVisible()
+    await user.keyboard(' ')
+    expect(ragContent).toBeVisible()
 
     const toolCard = toolButton.parentElement
     expect(toolCard).not.toBeNull()
@@ -416,7 +446,7 @@ describe('Agent Trace integration', () => {
     await waitFor(() => expect(controlled.getRequestCount()).toBe(2))
     controlled.getRequest().resolve(createRun({ toolName: 'calculator' }))
 
-    expect(await screen.findByText('calculator')).toBeInTheDocument()
+    expect((await screen.findAllByText('calculator')).length).toBeGreaterThan(0)
     expect(screen.queryByText('参考来源：暂无可用来源')).not.toBeInTheDocument()
   })
 

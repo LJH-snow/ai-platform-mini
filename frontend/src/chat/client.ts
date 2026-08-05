@@ -75,9 +75,15 @@ const parseErrorResponse = async (
   const errorRequestId = typeof payload.request_id === 'string' ? payload.request_id : requestId
   const code = typeof payload.code === 'string' ? payload.code : null
   const message =
-    typeof payload.message === 'string'
-      ? payload.message
-      : `后端请求失败（HTTP ${response.status}）。`
+    response.status === 401 || response.status === 403
+      ? 'Chat 请求未通过鉴权，请检查运行时凭据。'
+      : response.status === 408 || response.status === 504
+        ? 'Chat 请求超时，请稍后重试。'
+        : response.status === 429
+          ? 'Chat 请求过于频繁，请稍后重试。'
+          : response.status >= 500
+            ? 'Chat 服务暂时不可用，请稍后重试。'
+            : `Chat 请求失败（HTTP ${response.status}），请稍后重试。`
 
   return new ChatBackendError(message, response.status, code, errorRequestId)
 }

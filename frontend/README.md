@@ -1,6 +1,6 @@
 # AI Platform Mini Frontend
 
-基于 Vite + React + TypeScript 的 Agent Console。当前完成阶段 4：保留普通 Chat SSE，接入同步 Agent Run Trace、Tool 级 RAG 来源卡片与安全降级。
+基于 Vite + React + TypeScript 的 Agent Console。当前完成阶段 5：在保留阶段 2—4能力的基础上，完成可访问性、状态播报、响应式布局、复制反馈和错误恢复收口。
 
 ## 阶段 3 已完成
 
@@ -43,6 +43,29 @@
 - **空与错误状态**：区分来源缺失、无相关来源、知识库为空、RAG 服务不可用、Embedding 失败、输出不可用和其他失败；服务故障不会伪装成无相关来源。
 - **安全展示**：来源片段遵循后端截断边界，过长或 `truncated=true` 时显示安全提示；warning 作为不可信参考提示展示，所有来源内容使用普通文本渲染，不执行 HTML 或来源中的指令。
 - **能力边界**：RAG 来源是不可信参考材料，不等同于回答内精确引用，也不表示模型对某个来源做出了可验证的精确引用。Agent Run 仍是同步请求，不承诺 Agent SSE、实时 Trace 或实时 RAG Trace。
+
+
+## 阶段 5 已完成
+
+### 可访问性与状态播报
+
+- 输入框、发送/运行、停止、新建会话、清空会话和失败重试均使用语义化控件，可通过键盘操作；文本输入保留多行 Enter，使用 `Ctrl/⌘ + Enter` 发送或运行。
+- Step、Tool Call 和 RAG 来源均提供独立 disclosure；按钮使用 `aria-expanded`、`aria-controls` 和包含对象名称及展开/收起状态的动态 accessible name，折叠目标持续存在并通过 `hidden` 控制可见性。
+- 使用单独、低频的 live region 播报 Chat 开始/完成/停止/SSE 断连、Agent 开始/完成/失败/超时/前端停止等待、RAG 有来源/无来源/不可用和重试开始；Chat SSE 的每个增量只更新视觉内容，不触发单独播报。
+- 状态同时通过文字、结构和状态标签表达，不依赖颜色；焦点轮廓保持可见，辅助文字、状态 badge 和错误提示在窄屏下仍可读。
+
+### 复制、错误与恢复
+
+- Request ID 和真实 Run ID 提供明确的复制按钮名称；复制成功、Clipboard API 不可用或复制被拒绝时均有可理解的反馈。
+- Chat 后端错误、网络失败和 SSE 断连提供安全、可操作的重试文案；Agent 失败、超时、取消、网络错误和响应错误明确区分，并保留已有回答与 Trace。
+- 重试会清理上一 Agent Run 的回答、Trace、来源和错误；旧请求的晚到回调不会污染新 Run 或新会话；页面不展示 Provider 原始响应、堆栈、内部路径或 API Key。
+- RAG 来源支持独立展开/收起，来源内容沿用阶段 4 的安全投影和截断边界，不复制未展示的敏感字段。
+
+### 响应式目标与验证
+
+- 响应式目标宽度为 **320px、375px、768px、1024px 和 1440px**；长回答、Run ID、call ID、chunk ID、Tool 摘要和 RAG 内容允许换行或安全截断，操作区和触摸目标保持可用。
+- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **5 个测试文件、62 个测试全部通过**。
+- 真实浏览器五档回归尚未完成：当前环境没有可用的浏览器二进制，因此未声称已验证 320/375/768/1024/1440 的真实布局、焦点轮廓或屏幕阅读器行为。
 
 ## 尚未实现
 

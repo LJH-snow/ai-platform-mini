@@ -14,7 +14,7 @@
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
-- 前端 Agent Console：[阶段 4 已接入同步 Agent Run Trace、Tool 级 RAG 来源卡片与安全降级；不提供 Agent SSE、实时 Trace 或回答内精确引用](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
+- 前端 Agent Console：[阶段 5 已完成可访问性、状态播报、响应式目标、复制反馈、错误恢复和 Tool 级 RAG disclosure；不提供 Agent SSE、实时 Trace 或回答内精确引用](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -98,6 +98,15 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - 读取公开契约 `steps[].tool_calls[].rag.references`，展示真实的稳定来源标识、分块索引、片段摘要和 distance；缺失字段显示“后端未提供”，不生成文档名、URL、rank、引用编号或回答内精确引用；
 - 支持有来源、来源缺失、空来源、无相关来源、知识库为空、RAG 服务不可用、Embedding 失败、输出不可用和其他失败状态；服务故障不会伪装成无相关来源；
 - 来源片段遵循后端公开边界，并在前端显示截断/安全提示；RAG 内容始终作为不可信参考材料以普通文本渲染，不执行其中的指令或 HTML。
+
+
+阶段 5 当前能力：
+
+- 核心输入、发送、停止、新建、清空、重试以及 Step/Tool/RAG disclosure 均支持键盘操作，并提供正确的 `aria-expanded`、`aria-controls` 和动态 accessible name；多行输入保留 Enter，使用 `Ctrl/⌘ + Enter` 发送或运行；
+- 通过单独的低频 live region 播报 Chat、Agent、RAG 和重试关键状态，SSE 增量不会逐条触发播报；状态同时提供文字和结构表达，不依赖颜色；
+- Request ID 与真实 Run ID 提供复制反馈；Chat/Agent 错误使用安全文案并支持重试，重试和会话切换隔离旧回答、Trace、来源、错误及晚到回调；
+- 响应式目标覆盖 320px、375px、768px、1024px 和 1440px，长回答与长标识支持换行或安全截断；
+- 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（5 个测试文件、62 个测试）和生产构建；真实浏览器五档回归因当前环境没有可用浏览器二进制而未完成，未声称已经验证真实布局或焦点行为。
 
 当前边界：后端 Agent Run API 是同步 JSON，不提供 Agent SSE，因此运行中的具体模型决策和工具状态无法实时展示；前端只在请求完成后渲染真实 Trace 和 Tool 级来源卡片。来源列表用于安全展示检索结果，不证明回答中的精确引用，也不提供实时 RAG Trace。公开响应也没有事件时间、步骤耗时、工具参数、工具输出或工具错误详情。Agent SSE、持久化 Trace 查询和回答内精确引用均未实现。
 
@@ -748,3 +757,13 @@ RAG Tool 化的关键不是复制一套检索代码，而是把现有 `RAGServic
 #### Run Trace Foundation 学习总结
 
 Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制一套 Agent Loop。单 run Recorder 加上显式 `recorder_factory` 边界，可以在保持简单的同时避免并发状态污染。脱敏和截断必须位于记录边界，默认不保存 prompt、工具参数和外部检索原文。持久化、实时推送和查询接口应作为后续 Sprint 的独立能力演进。
+
+### 阶段 5 / Agent Console 收口
+
+- 完成键盘可访问性、单独低频 live region、非颜色状态表达、Step/Tool/RAG disclosure、Request ID/Run ID 复制反馈、Chat/Agent 错误恢复和旧 Run 隔离。
+- 前端五项门禁通过：format、lint、typecheck、62 tests 和 build；真实浏览器 320/375/768/1024/1440 五档回归因当前环境没有可用浏览器二进制而未完成。
+- 保留阶段 2—4的 Chat SSE、同步 Agent Trace、Tool 状态和 RAG 来源契约；Agent SSE、实时 Trace、实时 RAG Trace、持久化查询和回答内精确引用仍未实现。
+
+#### 阶段 5 学习总结
+
+本阶段确认可访问性状态应与视觉增量渲染分离，避免 SSE 内容更新造成过度播报。错误恢复必须同时处理安全文案、旧请求隔离和可重试路径，不能只补一个按钮。RAG disclosure 通过稳定的 `aria-controls` 目标和 `hidden` 控制保持语义一致。浏览器级响应式回归仍需在具备可用浏览器二进制的环境中完成。

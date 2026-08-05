@@ -98,7 +98,7 @@ describe('App', () => {
 
     controlled.finish()
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已完成'))
-    expect(screen.getByRole('button', { name: 'req-test-123' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '复制 Request ID req-test-123' })).toBeInTheDocument()
   })
 
   it('prevents duplicate submission while a request is active', async () => {
@@ -145,7 +145,7 @@ describe('App', () => {
     await waitFor(() => expect(backendFailure.getRequestCount()).toBe(1))
     backendFailure.fail(new ChatBackendError('后端返回 502', 502, 'PROVIDER_ERROR', 'req-error'))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('后端错误'))
-    expect(screen.getByRole('alert')).toHaveTextContent('后端返回 502')
+    expect(screen.getByRole('alert')).toHaveTextContent('Chat 服务暂时不可用，请稍后重试。')
 
     const networkFailure = createControlledClient()
     rerender(<App chatClient={networkFailure.client} />)
@@ -155,7 +155,7 @@ describe('App', () => {
     await waitFor(() => expect(networkFailure.getRequestCount()).toBe(1))
     networkFailure.fail(new ChatNetworkError('无法连接后端。'))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('网络失败'))
-    expect(screen.getByRole('alert')).toHaveTextContent('无法连接后端。')
+    expect(screen.getByRole('alert')).toHaveTextContent('无法连接 Chat 服务，请稍后重试。')
 
     const interrupted = createControlledClient()
     rerender(<App chatClient={interrupted.client} />)
@@ -165,7 +165,7 @@ describe('App', () => {
     await waitFor(() => expect(interrupted.getRequestCount()).toBe(1))
     interrupted.fail(Object.assign(new Error('SSE 断连'), { name: 'ChatStreamInterruptedError' }))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('SSE 已断连'))
-    expect(screen.getByRole('alert')).toHaveTextContent('SSE 断连')
+    expect(screen.getByRole('alert')).toHaveTextContent('Chat SSE 连接已断开，可重试。')
   })
 
   it('creates a new session and ignores callbacks from the previous session', async () => {
@@ -204,5 +204,75 @@ describe('App', () => {
     expect(screen.getByText('开始一段普通对话')).toBeInTheDocument()
     const clearMetric = screen.getByText('清空次数').parentElement
     expect(clearMetric && within(clearMetric).getByText('1')).toBeInTheDocument()
+  })
+
+  it('supports keyboard send, preserves Enter for multiline input, and lets the keyboard stop Chat', async () => {
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    render(<App chatClient={controlled.client} />)
+
+    const input = screen.getByLabelText('输入消息')
+    await user.type(input, '第一行')
+    await user.keyboard('{Enter}')
+    await user.type(input, '第二行')
+    expect(input).toHaveValue('第一行\n第二行')
+
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(screen.getByRole('button', { name: '停止请求' })).toBeInTheDocument()
+
+    screen.getByRole('button', { name: '停止请求' }).focus()
+    await user.keyboard('{Enter}')
+    expect(screen.getByRole('status')).toHaveTextContent('已停止')
+  })
+
+  it('does not announce every Chat delta and supports safe copy success and failure feedback', async () => {
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    render(<App chatClient={controlled.client} />)
+
+    await user.type(screen.getByLabelText('输入消息'), '复制测试')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    controlled.emitDelta('增量内容')
+    expect(screen.getByRole('status')).not.toHaveTextContent('增量内容')
+    controlled.finish()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /复制 Request ID/ })).toBeInTheDocument(),
+    )
+
+    await user.click(screen.getByRole('button', { name: '复制 Request ID req-test-123' }))
+    expect(writeText).toHaveBeenCalledWith('req-test-123')
+    expect(screen.getByText('Request ID已复制。')).toBeInTheDocument()
+
+    writeText.mockRejectedValueOnce(new Error('denied'))
+    await user.click(screen.getByRole('button', { name: '复制 Request ID req-test-123' }))
+    expect(screen.getByText('Request ID复制失败，请手动选择文本。')).toBeInTheDocument()
+  })
+
+  it('offers Chat retry and removes the previous failed assistant state', async () => {
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    render(<App chatClient={controlled.client} />)
+
+    await user.type(screen.getByLabelText('输入消息'), '请重试')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    controlled.fail(
+      new ChatBackendError('内部 Provider response /secret', 502, 'PROVIDER_ERROR', 'req-failed'),
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '重试 Chat' })).toBeInTheDocument(),
+    )
+    expect(screen.queryByText('内部 Provider response /secret')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '重试 Chat' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(2))
+    expect(screen.queryByText('Chat 服务暂时不可用，请稍后重试。')).not.toBeInTheDocument()
   })
 })
