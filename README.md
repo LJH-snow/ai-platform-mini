@@ -37,6 +37,12 @@
 - Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
 
+## Evaluation Foundation
+
+Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序执行 runner：评测用例通过 JSONL 保存，runner 接受可注入的异步 `run_case`，不会调用真实 LLM 或外网。单用例结果记录状态、成功与否、答案/工具判定、工具序列、步骤、延迟、Token 用量和错误；汇总提供任务成功率、声明工具期望用例的 tool selection accuracy、平均步骤、p95 延迟和 Token 总量/均值。`tests/fixtures/evals/agent_golden.jsonl` 是 30 条本地契约 fixture，覆盖 direct-answer、calculator 和 knowledge_search，它明确不是线上模型结果，也不包含密钥。当前尚未接入真实模型 CI、数据库报表或 RAG Recall@K。
+
+学习总结：本 Sprint 学到应先固定可序列化的评测数据契约，再通过依赖注入让 runner 保持离线和可重复。将答案包含判断与完整有序工具序列判断拆开，使失败原因和聚合指标更清晰。p95 对空集返回 `0.0`，tool accuracy 在没有声明 expected_tools 时返回 `None`，避免制造误导性统计。通过 JSON 标准库解析而不是 `eval`，并用异常隔离保证单个 case 不会阻断整批评测。
+
 ## Project rules
 
 - Python version: support `3.12` to `3.14`, with `3.14` as the default local version
