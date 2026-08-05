@@ -8,6 +8,7 @@ export const AGENT_STREAM_EVENTS = [
   'rag_started',
   'tool_completed',
   'tool_failed',
+  'answer_delta',
   'assistant_message',
   'run_completed',
   'run_failed',
@@ -33,6 +34,7 @@ export type AgentStreamEvent = {
   status?: string | null
   stop_reason?: string | null
   answer?: string | null
+  delta?: string | null
   succeeded?: boolean | null
   error_code?: string | null
   rag?: AgentRagApiSummary | null
@@ -117,6 +119,9 @@ export function parseAgentStreamEvent(eventName: string, data: string): AgentStr
   if (!isSequence(record.sequence)) {
     throw new AgentStreamFormatError()
   }
+  if (eventName === 'answer_delta' && !isNullableString(record.delta)) {
+    throw new AgentStreamFormatError()
+  }
   if (
     record.step_index !== undefined &&
     record.step_index !== null &&
@@ -165,6 +170,7 @@ export function parseAgentStreamEvent(eventName: string, data: string): AgentStr
     ...(typeof record.answer === 'string' || record.answer === null
       ? { answer: record.answer }
       : {}),
+    ...(eventName === 'answer_delta' ? { delta: record.delta as string | null } : {}),
     ...(typeof record.succeeded === 'boolean' || record.succeeded === null
       ? { succeeded: record.succeeded }
       : {}),

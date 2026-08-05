@@ -141,6 +141,7 @@ class AgentStreamEvent(BaseModel):
         "rag_started",
         "tool_completed",
         "tool_failed",
+        "answer_delta",
         "assistant_message",
         "run_completed",
         "run_failed",
@@ -157,6 +158,7 @@ class AgentStreamEvent(BaseModel):
     status: RunStatus | None = None
     stop_reason: StopReason | None = None
     answer: str | None = None
+    delta: str | None = None
     succeeded: bool | None = None
     error_code: AgentToolErrorCode | None = None
     rag: AgentRAGToolSummary | None = None

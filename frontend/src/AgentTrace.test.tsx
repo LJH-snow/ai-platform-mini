@@ -18,6 +18,7 @@ import type {
   AgentRunStatus,
   AgentToolStatus,
 } from './agent/types.ts'
+import type { AgentStreamEvent } from './agent/stream.ts'
 import type { ChatClient } from './chat/client.ts'
 import type { ChatStreamResult } from './chat/types.ts'
 
@@ -46,6 +47,51 @@ const createControlledAgentClient = () => {
     if (!request) {
       throw new Error(`Missing agent request ${index}`)
     }
+    return request
+  }
+  return { client, getRequest, getRequestCount: () => requests.length }
+}
+
+type ControlledAgentStreamRequest = {
+  input: AgentRunInput
+  signal: AbortSignal
+  emit: (event: AgentStreamEvent) => void
+  complete: () => void
+}
+
+const createControlledAgentStreamClient = () => {
+  const requests: ControlledAgentStreamRequest[] = []
+  const client: AgentClient = {
+    runAgent: vi.fn(),
+    streamAgent: vi.fn((input, handlers, signal) => {
+      return new Promise<void>((resolve, reject) => {
+        const request: ControlledAgentStreamRequest = {
+          input,
+          signal,
+          emit: (event) => {
+            handlers.onEvent(event)
+            if (
+              event.event === 'run_completed' ||
+              event.event === 'run_failed' ||
+              event.event === 'run_timed_out' ||
+              event.event === 'run_cancelled' ||
+              event.event === 'run_stopped'
+            ) {
+              resolve()
+            }
+          },
+          complete: resolve,
+        }
+        requests.push(request)
+        signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {
+          once: true,
+        })
+      })
+    }),
+  }
+  const getRequest = (index = requests.length - 1): ControlledAgentStreamRequest => {
+    const request = requests[index]
+    if (!request) throw new Error(`Missing agent stream request ${index}`)
     return request
   }
   return { client, getRequest, getRequestCount: () => requests.length }
@@ -158,25 +204,102 @@ afterEach(() => {
 })
 
 describe('Agent Trace integration', () => {
-  it('shows synchronous loading first, then an explicit empty trace with matching answer status', async () => {
-    const controlled = createControlledAgentClient()
-    await startAgentRun(controlled)
+  it('renders cumulative answer_delta output without announcing each delta', async () => {
+    const controlled = createControlledAgentStreamClient()
+    const user = userEvent.setup()
+    render(<App chatClient={idleChatClient} agentClient={controlled.client} />)
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), '请回答')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+
+    expect(screen.getByText('实时 Agent SSE')).toBeInTheDocument()
+    expect(
+      screen.getByText('正在接收后端真实 Agent SSE，Trace 将随事件实时更新。'),
+    ).toBeInTheDocument()
+
+    const request = controlled.getRequest()
+    request.emit({ event: 'run_started', run_id: 'run-stream-1', sequence: 0 })
+    request.emit({
+      event: 'step_started',
+      run_id: 'run-stream-1',
+      sequence: 1,
+      step_index: 1,
+    })
+    request.emit({
+      event: 'answer_delta',
+      run_id: 'run-stream-1',
+      sequence: 2,
+      delta: '真实',
+    })
+    await waitFor(() => expect(screen.getByText('真实')).toBeInTheDocument())
+    const liveRegion = screen.getByRole('status')
+    expect(liveRegion).toHaveTextContent('Agent 执行中。Agent Run 已开始。')
+
+    request.emit({
+      event: 'answer_delta',
+      run_id: 'run-stream-1',
+      sequence: 3,
+      delta: '回答',
+    })
+    await waitFor(() => expect(screen.getByText('真实回答')).toBeInTheDocument())
+    expect(liveRegion).toHaveTextContent('Agent 执行中。Agent Run 已开始。')
+
+    request.emit({
+      event: 'run_completed',
+      run_id: 'run-stream-1',
+      sequence: 4,
+      status: 'completed',
+      stop_reason: 'direct_answer',
+    })
+    await waitFor(() => expect(liveRegion).toHaveTextContent('已完成。Agent Run 已完成。'))
+    expect(screen.getByText('真实回答')).toBeInTheDocument()
+  })
+
+  it('shows realtime Agent SSE waiting state, then updates Trace as events arrive', async () => {
+    const controlled = createControlledAgentStreamClient()
+    const user = userEvent.setup()
+    render(<App chatClient={idleChatClient} agentClient={controlled.client} />)
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), '请计算 2+2')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
 
     const conversation = screen.getByRole('article', { name: '会话' })
     const trace = screen.getByRole('complementary', { name: 'Agent Trace' })
-    expect(within(conversation).getByRole('status')).toHaveTextContent('Agent 运行中')
-    expect(within(trace).getByText('等待同步结果')).toBeInTheDocument()
-    expect(within(trace).getByText('完成后加载 Trace，非实时')).toBeInTheDocument()
+    expect(within(conversation).getByRole('status')).toHaveTextContent('连接 Agent 中')
+    expect(within(trace).getByText('实时 Agent SSE')).toBeInTheDocument()
+    expect(
+      within(trace).getByText('正在接收后端真实 Agent SSE，Trace 将随事件实时更新。'),
+    ).toBeInTheDocument()
+    expect(within(trace).queryByText(/同步请求|完成后加载 Trace|非实时/)).not.toBeInTheDocument()
 
-    controlled.getRequest().resolve(createRun({ empty: true }))
+    const request = controlled.getRequest()
+    request.emit({ event: 'run_started', run_id: 'run-stream-2', sequence: 0 })
 
+    await waitFor(() => expect(within(trace).getByText('Run ID：run-stream-2')).toBeInTheDocument())
+    expect(within(trace).getByText('后端返回空 Trace')).toBeInTheDocument()
+
+    request.emit({
+      event: 'step_started',
+      run_id: 'run-stream-2',
+      sequence: 1,
+      step_index: 1,
+    })
+    await waitFor(() =>
+      expect(within(trace).getByRole('button', { name: /步骤 1/ })).toBeInTheDocument(),
+    )
+
+    request.emit({
+      event: 'run_completed',
+      run_id: 'run-stream-2',
+      sequence: 2,
+      status: 'completed',
+      stop_reason: 'direct_answer',
+    })
     await waitFor(() =>
       expect(within(conversation).getByRole('status')).toHaveTextContent('已完成'),
     )
-    expect(screen.getByText('计算结果是 4。')).toBeInTheDocument()
-    expect(within(trace).getByText('后端返回空 Trace')).toBeInTheDocument()
-    expect(within(trace).getByText('Run ID：run-real-123')).toBeInTheDocument()
-    expect(within(trace).getByText('总 Token：后端未提供')).toBeInTheDocument()
   })
 
   it('renders and toggles a real calculator step and tool summary without invented timing or payloads', async () => {

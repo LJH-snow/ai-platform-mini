@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import TypeVar, cast
 
 from app.agents.models import (
+    AgentAnswerChunk,
     AgentDecision,
     AgentEvent,
     AgentEventKind,
@@ -78,6 +79,7 @@ class AgentRuntime:
         run_id: str | None = None,
         request_id: str | None = None,
         model: str | None = None,
+        stream_answer: bool = False,
     ) -> AgentRunResult:
         """Execute one bounded run and return all state and observability data."""
         if not user_input.strip():
@@ -229,17 +231,53 @@ class AgentRuntime:
                     )
 
                 if decision.answer is not None:
+                    answer = decision.answer
+                    if stream_answer:
+                        try:
+                            answer = await self._consume_answer_stream(
+                                events=events,
+                                state=state,
+                                step_index=step_index,
+                                effective_deadline=effective_deadline,
+                                cancel_event=cancel_event,
+                            )
+                        except _RuntimeStop as stop:
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=self._status_for(stop.reason),
+                                stop_reason=stop.reason,
+                            )
+                        except asyncio.CancelledError:
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.CANCELLED,
+                                stop_reason=StopReason.EXTERNAL_CANCELLED,
+                            )
+                        except Exception as exc:
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.FAILED,
+                                stop_reason=StopReason.MODEL_ERROR,
+                                error=str(exc),
+                            )
                     state.messages.append(
-                        AgentMessage(role="assistant", content=decision.answer)
+                        AgentMessage(role="assistant", content=answer)
                     )
-                    self._append_event(
-                        events,
-                        recorder=recorder,
-                        kind=AgentEventKind.ANSWER,
-                        run_id=resolved_run_id,
-                        step_index=step_index,
-                        message=decision.answer,
-                    )
+                    if not stream_answer:
+                        self._append_event(
+                            events,
+                            recorder=recorder,
+                            kind=AgentEventKind.ANSWER,
+                            run_id=resolved_run_id,
+                            step_index=step_index,
+                            message=answer,
+                        )
                     state.steps.append(AgentStep(index=step_index, decision=decision))
                     self._append_event(
                         events,
@@ -256,7 +294,7 @@ class AgentRuntime:
                         events=events,
                         status=RunStatus.COMPLETED,
                         stop_reason=StopReason.DIRECT_ANSWER,
-                        answer=decision.answer,
+                        answer=answer,
                     )
 
                 if (
@@ -372,6 +410,55 @@ class AgentRuntime:
                 status=RunStatus.CANCELLED,
                 stop_reason=StopReason.EXTERNAL_CANCELLED,
             )
+
+    async def _consume_answer_stream(
+        self,
+        *,
+        events: list[AgentEvent],
+        state: AgentState,
+        step_index: int,
+        effective_deadline: float | None,
+        cancel_event: asyncio.Event | None,
+    ) -> str:
+        stream_factory = getattr(self._model, "stream_answer", None)
+        if not callable(stream_factory):
+            raise RuntimeError("streaming answer is unavailable")
+        stream = stream_factory(state)
+        if not hasattr(stream, "__aiter__"):
+            raise RuntimeError("streaming answer returned an invalid iterator")
+        iterator = stream.__aiter__()
+        parts: list[str] = []
+        try:
+            while True:
+                try:
+                    chunk = await self._await_controlled(
+                        anext(iterator),
+                        effective_deadline=effective_deadline,
+                        cancel_event=cancel_event,
+                    )
+                except StopAsyncIteration:
+                    break
+                if not isinstance(chunk, AgentAnswerChunk):
+                    raise RuntimeError("streaming answer returned an invalid chunk")
+                if chunk.content:
+                    parts.append(chunk.content)
+                    self._append_event(
+                        events,
+                        recorder=None,
+                        kind=AgentEventKind.ANSWER_DELTA,
+                        run_id=state.run_id,
+                        step_index=step_index,
+                        message=chunk.content,
+                        include_result=False,
+                        include_recorder=False,
+                    )
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                await close()
+        if not parts:
+            raise RuntimeError("streaming answer returned no content")
+        return "".join(parts)
 
     async def _execute_tool(
         self,

@@ -136,7 +136,7 @@ async def stream_agent_run(
     service: Annotated[AgentService, Depends(get_agent_service)],
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
 ) -> StreamingResponse:
-    """Stream real Runtime lifecycle events; answer text is not token streamed."""
+    """Stream real Runtime lifecycle events and provider answer deltas."""
     context: RequestContext = http_request.state.context
     stream = AgentEventStream()
     cancel_event = asyncio.Event()
@@ -149,6 +149,7 @@ async def stream_agent_run(
                 api_key=api_key,
                 observer=stream,
                 cancel_event=cancel_event,
+                streaming=True,
             )
         except Exception:
             # A failure before Runtime emits run_started is an SSE setup error,
@@ -184,9 +185,7 @@ async def _stream_events(
 ) -> AsyncIterator[str]:
     """Consume real events and poll disconnect without blocking the queue.
 
-    ``assistant_message`` carries one complete model-provided answer because the
-    current AgentModel protocol has no text-delta interface. It is not a token
-    stream and contains no synthetic usage or timing data.
+    Answer deltas are emitted only after a real provider stream yields them.
     """
     receive_task = asyncio.create_task(stream.receive())
     try:
@@ -253,6 +252,8 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
         raise ValueError("model decision is internal and not a public SSE event")
     elif event.kind is AgentEventKind.ANSWER:
         name = "assistant_message"
+    elif event.kind is AgentEventKind.ANSWER_DELTA:
+        name = "answer_delta"
     elif event.kind is AgentEventKind.RUN_STOPPED:
         if event.status is RunStatus.COMPLETED:
             name = "run_completed"
@@ -294,6 +295,7 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
                 "rag_started",
                 "tool_completed",
                 "tool_failed",
+                "answer_delta",
                 "assistant_message",
                 "run_completed",
                 "run_failed",
@@ -314,6 +316,11 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
         answer=(
             _sanitize_public_text(event.message)
             if event.kind is AgentEventKind.ANSWER and event.message is not None
+            else None
+        ),
+        delta=(
+            _sanitize_public_text(event.message)
+            if event.kind is AgentEventKind.ANSWER_DELTA and event.message is not None
             else None
         ),
         succeeded=None if result is None else result.succeeded,

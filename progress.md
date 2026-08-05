@@ -5,10 +5,12 @@
 - 已读取项目协作规则、规划 skill 和子代理治理规则。
 - 已确认当前分支与工作区状态，确认阶段 5 的同步 Agent 基线。
 - 已创建阶段计划、发现记录和进度记录。
-- 已完成后端 Runtime/API 与前端 Trace/SSE 定向阅读，确认可安全复用真实 Observer 事件；模型层不支持 token delta。
-- 架构核验完成：已有 Runtime Observer 事件和取消/超时能力，可复用；模型层目前不支持 token 级流，不能伪造逐 token 增量。
+- 已完成后端 Runtime/API 与前端 Trace/SSE 定向阅读，确认可安全复用真实 Observer 事件；Agent final answer 通过显式 `ChatService.chat_stream()` provider chunks 支持真实文本 `answer_delta`。
+- 架构核验完成：Runtime 负责稳定排序、累计完整答案和取消/超时边界；`answer_delta` 不是精确 Token 计数，不能伪造 usage、时间或耗时。
 - 已委托后端子代理 Pascal，写入范围限定为后端 Runtime/service/API/schema 与后端测试；等待其完成后由主代理 Review。
 - 后端子代理已完成 Agent SSE、Runtime Step/RAG Observer 事件、安全投影、取消边界和测试；后端门禁通过。
-- 前端子代理已完成 Agent SSE 解析、实时 reducer、Trace 增量更新、状态区分和测试；前端门禁通过（7 个测试文件、70 个测试）。
+- 前端子代理已完成 Agent SSE 解析、实时 reducer、Trace 增量更新、状态区分和测试；前端门禁通过（7 个测试文件、76 个测试全部通过）。
 - 文档子任务已完成：新增 Agent SSE 事件契约和阶段 6 开发记录，更新根 README、前端 README 与计划记录。
-- 浏览器五档回归未完成，当前环境没有可用浏览器二进制；启动阶段 `stream_error` 可缺少 `run_id`/`sequence`，前端解析器已兼容并由客户端归类为 `AgentNetworkError`；该帧不代表 Run 终态。
+- 已在真实浏览器验证 320/375/768/1024/1440 五档无横向溢出，并核对静态页面文案和 Agent 模式展示；键盘焦点与屏幕阅读器行为未包含在本次验证中。
+- 真实后端 Agent SSE 浏览器端到端未完成：默认前端页面没有 runtime API 注入，后端未启用 CORS，不能声称真实 `answer_delta` 已在浏览器通过。启动阶段 `stream_error` 可缺少 `run_id`/`sequence`，前端解析器已兼容并由客户端归类为 `AgentNetworkError`；该帧不代表 Run 终态。
+- `assistant_message` 仅作为 legacy/非 streaming 兼容事件；空流不生成补充回答，Provider 错误、超时和取消保留真实终态。精确 Token 统计/usage、事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排不在阶段 6 范围。

@@ -27,18 +27,23 @@ JSON 拆成假事件。事件由单调 `sequence` 和真实 `run_id`/`request_id
 
 后端已通过 `ruff format --check .`、`ruff check .`、`mypy app tests` 和
 `pytest -q`；集成测试按既有环境条件跳过。前端已通过 `npm run format:check`、
-`npm run lint`、`npm run typecheck`、`npm test -- --run`（7 个测试文件、70 个测试）
+`npm run lint`、`npm run typecheck`、`npm test -- --run`（7 个测试文件、76 个测试全部通过）
 和 `npm run build`。
 
-浏览器五档回归未完成：当前环境没有可用浏览器二进制，因此没有声称已验证
-320px、375px、768px、1024px、1440px 的真实布局、连接中断、键盘焦点或屏幕阅读器
-行为。
+已在真实浏览器验证 320px、375px、768px、1024px、1440px 五档无横向溢出，
+并核对静态页面文案和 Agent 模式展示。键盘焦点与屏幕阅读器行为未包含在本次验证中。
+真实后端 Agent SSE 浏览器端到端仍未完成：默认前端页面没有注入 runtime API 配置，
+后端也未启用 CORS，因此不能声称浏览器已经收到并展示真实 `answer_delta`。
 
 ## 已知限制与 Review 项
 
-当前模型协议没有 token delta，`assistant_message` 是一次完整的真实回答，不是
-逐 token 流。后端没有提供时间、耗时、Token 增量、工具载荷或 Provider 原始响应。
-前端主动停止只停止等待，后端取消必须以真实 `run_cancelled` 为依据。
+Agent final answer 已支持真实文本 `answer_delta`：增量来自显式
+`ChatService.chat_stream()` 的 provider chunks，Runtime 按稳定 `sequence` 转发并累计
+完整答案。`assistant_message` 仅保留为 legacy/非 streaming 兼容事件，同步 Agent API
+仍保持非流式。空流不生成补充文本；Provider 错误、超时和取消保留真实终态，已知增量
+可以保留但不会被改写为成功。后端不提供精确 Token 统计/usage、时间、耗时、工具载荷
+或 Provider 原始响应，前端不补造这些数据。增量与完整回答都经过敏感字段清洗。前端
+主动停止只停止等待，后端取消必须以真实 `run_cancelled` 为依据。
 
 启动阶段 `stream_error` 可能缺少 `run_id`/`sequence`；前端解析器允许该启动阶段帧，
 会将缺失字段归一化，并由客户端归类为 `AgentNetworkError`。它只表示流无法启动或
@@ -48,4 +53,4 @@ Observer 与 Recorder 同时存在时的兼容方式，以及断连后是否需�
 
 ## 学习总结
 
-复用 Runtime Observer 能让实时 Trace 与同步结果共享真实执行顺序，避免前端推断 Agent 状态。事件公开层必须严格投影字段，尤其是 RAG、错误和回答内容。模型没有 token delta 时，完整回答事件比伪造 token 增量更诚实。Abort、网络断连和后端取消是不同状态，必须由不同证据驱动。把持久化查询和复杂编排留在阶段 7 以后，可以控制本阶段的协议边界。
+复用 Runtime Observer 能让实时 Trace 与同步结果共享真实执行顺序，避免前端推断 Agent 状态。`answer_delta` 必须来自真实 provider chunk，不能从模型 JSON 或完整回答拆分。事件公开层必须严格投影字段，尤其是 RAG、错误和回答内容。空流、Provider 错误、超时和取消都保留各自真实语义。Abort、网络断连和后端取消是不同状态，必须由不同证据驱动。精确 usage、事件回放、持久化查询、回答内精确引用、MCP UI 和复杂编排留在后续阶段。

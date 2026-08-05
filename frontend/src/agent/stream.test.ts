@@ -65,4 +65,21 @@ describe('Agent SSE parser', () => {
       parseAgentStreamEvent('run_started', JSON.stringify({ error_code: 'failed' })),
     ).toThrow(AgentStreamFormatError)
   })
+
+  it('parses answer deltas and rejects invalid delta values', () => {
+    expect(parseAgentStreamEvent('answer_delta', event(1, { delta: '真实' }))).toMatchObject({
+      event: 'answer_delta',
+      delta: '真实',
+    })
+    expect(parseAgentStreamEvent('answer_delta', event(2, { delta: '' }))).toMatchObject({
+      delta: '',
+    })
+    expect(parseAgentStreamEvent('answer_delta', event(3, { delta: null }))).toMatchObject({
+      delta: null,
+    })
+    expect(() => parseAgentStreamEvent('answer_delta', event(4))).toThrow(AgentStreamFormatError)
+    expect(() => parseAgentStreamEvent('answer_delta', event(5, { delta: 42 }))).toThrow(
+      AgentStreamFormatError,
+    )
+  })
 })

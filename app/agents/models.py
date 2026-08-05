@@ -41,6 +41,7 @@ class AgentEventKind(StrEnum):
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
     TOOL_FAILED = "tool_failed"
+    ANSWER_DELTA = "answer_delta"
     ANSWER = "answer"
     RUN_STOPPED = "run_stopped"
 
@@ -82,6 +83,17 @@ class AgentDecision:
     tool_calls: tuple[ToolCall, ...] = ()
     token_usage: int | None = None
     usage_complete: bool = True
+
+
+@dataclass(frozen=True)
+class AgentAnswerChunk:
+    """One provider-produced text chunk for an explicitly streamed answer."""
+
+    content: str
+    model: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    done: bool = False
 
 
 @dataclass(frozen=True)

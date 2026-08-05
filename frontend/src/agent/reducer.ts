@@ -7,6 +7,7 @@ export type AgentStreamState = {
   terminal: boolean
   lastSequence: number
   requestId: string | null
+  answerDeltaSeen: boolean
 }
 
 const emptyUsage = {
@@ -162,6 +163,7 @@ export const initialAgentStreamState: AgentStreamState = {
   terminal: false,
   lastSequence: -1,
   requestId: null,
+  answerDeltaSeen: false,
 }
 
 export function reduceAgentStream(
@@ -173,6 +175,7 @@ export function reduceAgentStream(
   const requestId = event.request_id ?? state.requestId
   let run = state.run ?? makeRun(event, requestId)
   let terminal = false
+  let answerDeltaSeen = state.answerDeltaSeen
   if (event.event === 'run_started') run = { ...run, requestId }
   const stepIndex = event.step_index
   if (stepIndex !== null && stepIndex !== undefined) {
@@ -189,7 +192,17 @@ export function reduceAgentStream(
       step = updateTool(step, event)
     run = upsertStep(run, step)
   }
-  if (event.event === 'assistant_message') run = { ...run, answer: event.answer ?? run.answer }
+  if (event.event === 'answer_delta') {
+    if (event.delta) {
+      answerDeltaSeen = true
+      run = {
+        ...run,
+        answer: state.answerDeltaSeen ? `${run.answer ?? ''}${event.delta}` : event.delta,
+      }
+    }
+  }
+  if (event.event === 'assistant_message' && !answerDeltaSeen)
+    run = { ...run, answer: event.answer ?? run.answer }
   if (
     event.event === 'run_completed' ||
     event.event === 'run_failed' ||
@@ -224,7 +237,7 @@ export function reduceAgentStream(
     sequence: event.sequence,
   }
   run = { ...run, events: [...run.events, traceEvent], requestId, lastSequence: event.sequence }
-  return { run, terminal, lastSequence: event.sequence, requestId }
+  return { run, terminal, lastSequence: event.sequence, requestId, answerDeltaSeen }
 }
 
 export function mergeSynchronousRun(state: AgentStreamState, response: AgentRun): AgentStreamState {
@@ -233,5 +246,6 @@ export function mergeSynchronousRun(state: AgentStreamState, response: AgentRun)
     terminal: true,
     lastSequence: response.lastSequence ?? state.lastSequence,
     requestId: response.requestId ?? state.requestId,
+    answerDeltaSeen: false,
   }
 }

@@ -69,12 +69,43 @@ afterEach(() => {
 })
 
 describe('App', () => {
-  it('renders the initial chat state and describes the synchronous Agent Trace boundary', () => {
+  it('renders the Phase 6 realtime Agent surface and preserves the Chat SSE copy', async () => {
+    const user = userEvent.setup()
     render(<App />)
 
+    expect(screen.getByText('Agent Console · Phase 6')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        '普通模式继续使用真实 Chat SSE；Agent 模式使用真实 Agent SSE，Trace 实时更新；回答支持后端真实 answer_delta 增量。',
+      ),
+    ).toBeInTheDocument()
     expect(screen.getByText('开始一段普通对话')).toBeInTheDocument()
-    expect(screen.getByText('等待 Agent Run')).toBeInTheDocument()
-    expect(screen.getByText(/完成后在此加载 Trace，非实时/)).toBeInTheDocument()
+    expect(
+      screen.getByText('输入问题后，前端会真实调用 Chat SSE，并将回答增量显示在这里。'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('普通回答为实时 Chat SSE；Enter 换行，Ctrl/⌘ + Enter 发送。'),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+
+    expect(screen.getByText('运行一次真实 Agent')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Agent 模式通过真实 Agent SSE 实时更新回答与 Trace；后端 answer_delta 会按增量显示。',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Agent 使用真实 Agent SSE 实时更新回答与 Trace，后端 answer_delta 会增量显示；Enter 换行，Ctrl/⌘ + Enter 运行。',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText('等待 Agent SSE')).toBeInTheDocument()
+    expect(
+      screen.getByText('切换到 Agent Run 模式后发起真实 Agent SSE，Trace 将随事件实时更新。'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('实时 Agent SSE')).toBeInTheDocument()
+    expect(screen.queryByText(/同步请求|完成后加载 Trace|非实时/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Run ID：/)).not.toBeInTheDocument()
   })
 

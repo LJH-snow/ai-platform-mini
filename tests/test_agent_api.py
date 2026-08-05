@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
@@ -26,6 +26,7 @@ from app.core.context import RequestContext
 from app.exceptions.base import ProviderError, QuotaExceededError
 from app.main import app
 from app.mcp import MCPToolAdapter, MCPToolCallResult, MCPToolDefinition
+from app.providers.results import ProviderChatResult
 from app.runs import InMemoryRunTraceRecorder, RunTraceRecorderFactory
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatResponse
@@ -431,6 +432,150 @@ class _FakeChatService:
         )
 
 
+class _CountingStreamingChatService(_FakeChatService):
+    def __init__(
+        self,
+        *,
+        stream_mode: str = "success",
+    ) -> None:
+        super().__init__(prompt_tokens=4, completion_tokens=2)
+        self.stream_calls = 0
+        self.stream_mode = stream_mode
+
+    async def chat_stream(self, request: object) -> AsyncIterator[ProviderChatResult]:
+        del request
+        self.stream_calls += 1
+        if self.stream_mode == "error":
+            raise ProviderError("provider stream failed")
+        if self.stream_mode == "empty":
+            return
+        yield ProviderChatResult(
+            model="test-model",
+            created_at=None,
+            role="assistant",
+            content="real answer",
+            done=False,
+            done_reason=None,
+        )
+        yield ProviderChatResult(
+            model="test-model",
+            created_at=None,
+            role="assistant",
+            content="",
+            done=True,
+            done_reason="stop",
+            prompt_tokens=3,
+            completion_tokens=2,
+        )
+
+
+class _StreamingRuntime:
+    def __init__(self, model: AgentModel) -> None:
+        self._runtime = AgentRuntime(model)
+
+    async def run(self, user_input: str, **kwargs: object) -> AgentRunResult:
+        return await self._runtime.run(user_input, **kwargs)  # type: ignore[arg-type]
+
+
+def _streaming_runtime_factory(
+    model: AgentModel,
+    tools: Mapping[str, AgentTool] | None,
+    *,
+    tool_executor: ToolExecutor | None = None,
+    recorder_factory: RunTraceRecorderFactory | None = None,
+    observer: object | None = None,
+) -> AgentRuntime:
+    del tools, tool_executor, recorder_factory
+    runtime = AgentRuntime(model, observer=observer)  # type: ignore[arg-type]
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_agent_service_only_consumes_answer_stream_when_explicitly_enabled() -> (
+    None
+):
+    chat_service = _CountingStreamingChatService()
+    service = AgentService(
+        chat_service=chat_service,  # type: ignore[arg-type]
+        quota_service=_FakeQuotaService(),  # type: ignore[arg-type]
+        usage_collector=_FakeUsageCollector(),  # type: ignore[arg-type]
+        runtime_factory=_streaming_runtime_factory,
+    )
+    request = AgentRunRequest(message="hello", model="test-model")
+    context = RequestContext(request_id="request-1", api_key="hashed")
+    api_key = APIKey(key="hashed", name="test")
+
+    sync_outcome = await service.run(request, context=context, api_key=api_key)
+    assert sync_outcome.result.answer == "hello"
+    assert chat_service.stream_calls == 0
+
+    stream_outcome = await service.run(
+        request,
+        context=context,
+        api_key=api_key,
+        streaming=True,
+    )
+    assert stream_outcome.result.answer == "real answer"
+    assert chat_service.stream_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_mode", ["error", "empty"])
+async def test_stream_failure_or_empty_stream_has_unknown_usage_and_one_terminal(
+    stream_mode: str,
+) -> None:
+    chat_service = _CountingStreamingChatService(stream_mode=stream_mode)
+    adapter = _ChatServiceAgentModel(
+        chat_service,  # type: ignore[arg-type]
+        AgentRunRequest(message="hello", model="test-model"),
+    )
+    if stream_mode == "error":
+        with pytest.raises(ProviderError):
+            async for _ in adapter.stream_answer(
+                AgentState(run_id="run-adapter", user_input="hello")
+            ):
+                pass
+    else:
+        chunks = [
+            chunk
+            async for chunk in adapter.stream_answer(
+                AgentState(run_id="run-adapter", user_input="hello")
+            )
+        ]
+        assert chunks == []
+    assert adapter.prompt_tokens is None
+    assert adapter.completion_tokens is None
+
+    chat_service = _CountingStreamingChatService(stream_mode=stream_mode)
+    collector = _FakeUsageCollector()
+    service = AgentService(
+        chat_service=chat_service,  # type: ignore[arg-type]
+        quota_service=_FakeQuotaService(),  # type: ignore[arg-type]
+        usage_collector=collector,  # type: ignore[arg-type]
+        runtime_factory=_streaming_runtime_factory,
+    )
+    observer = _RecordingObserver()
+
+    with pytest.raises(ProviderError):
+        await service.run(
+            AgentRunRequest(message="hello", model="test-model"),
+            context=RequestContext(request_id="request-1", api_key="hashed"),
+            api_key=APIKey(key="hashed", name="test"),
+            observer=observer,
+            streaming=True,
+        )
+
+    assert len(collector.responses) == 1
+    recorded = collector.responses[0]
+    assert isinstance(recorded, ChatResponse)
+    assert recorded.prompt_tokens == 4
+    assert recorded.completion_tokens is None
+    terminal_events = [
+        event for event in observer.events if event.kind is AgentEventKind.RUN_STOPPED
+    ]
+    assert len(terminal_events) == 1
+
+
 class _ToolThenAnswerChatService:
     default_model = "test-model"
 
@@ -544,6 +689,14 @@ class _FakeUsageCollector:
     ) -> None:
         del context, latency_ms
         self.responses.append(response)
+
+
+class _RecordingObserver:
+    def __init__(self) -> None:
+        self.events: list[AgentEvent] = []
+
+    def observe(self, event: AgentEvent) -> None:
+        self.events.append(event)
 
 
 @pytest.mark.asyncio

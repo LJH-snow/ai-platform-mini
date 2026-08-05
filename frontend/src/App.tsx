@@ -128,6 +128,7 @@ const eventLabels: Record<string, string> = {
   tool_started: '工具开始',
   tool_completed: '工具完成',
   tool_failed: '工具失败',
+  answer_delta: '回答增量',
   answer: '最终回答',
   run_stopped: '运行结束',
 }
@@ -648,6 +649,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               if (event.event === 'rag_started') setRequestStatus('rag_loading')
               if (event.event === 'tool_completed') setRequestStatus('tool_completed')
               if (event.event === 'tool_failed') setRequestStatus('tool_failed')
+              if (event.event === 'answer_delta') setRequestStatus('running')
               if (event.event === 'assistant_message') setRequestStatus('running')
               if (event.event === 'rag_started') setAnnouncement('RAG 来源加载中。')
             },
@@ -812,6 +814,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     : traceUnavailableMessage
       ? 'Trace 不可用'
       : '无运行结果'
+  const agentSseAvailable = resolvedAgentClient.streamAgent !== undefined
   const canRetry =
     !isActive &&
     ((mode === 'agent' && lastAgentInput !== null) ||
@@ -822,11 +825,12 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     <main className="shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">Agent Console · Phase 5</p>
+          <p className="eyebrow">Agent Console · Phase 6</p>
           <h1>对话与 Agent Trace</h1>
           <p className="heroCopy">
-            普通模式继续使用真实 Chat SSE；Agent Run 使用同步 JSON，并在请求完成后加载可审计
-            Trace。当前不是实时 Agent SSE，也不伪造时间、耗时、工具载荷或 Token。
+            {
+              '普通模式继续使用真实 Chat SSE；Agent 模式使用真实 Agent SSE，Trace 实时更新；回答支持后端真实 answer_delta 增量。'
+            }
           </p>
         </div>
         <div className="statusPill">{sessionLabel}</div>
@@ -893,7 +897,9 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               <p>
                 {mode === 'chat'
                   ? '输入问题后，前端会真实调用 Chat SSE，并将回答增量显示在这里。'
-                  : '请求结束后同时显示最终回答与同步 Trace；等待期间不会伪造实时步骤。'}
+                  : agentSseAvailable
+                    ? 'Agent 模式通过真实 Agent SSE 实时更新回答与 Trace；后端 answer_delta 会按增量显示。'
+                    : 'Agent Run 将在返回结果后显示回答与 Trace；当前客户端未提供实时 Agent SSE。'}
               </p>
             </div>
           ) : (
@@ -942,7 +948,9 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               <span className="composerHint">
                 {mode === 'chat'
                   ? '普通回答为实时 Chat SSE；Enter 换行，Ctrl/⌘ + Enter 发送。'
-                  : 'Agent Trace 在同步请求完成后加载，非实时；Enter 换行，Ctrl/⌘ + Enter 运行。'}
+                  : agentSseAvailable
+                    ? 'Agent 使用真实 Agent SSE 实时更新回答与 Trace，后端 answer_delta 会增量显示；Enter 换行，Ctrl/⌘ + Enter 运行。'
+                    : 'Agent Run 等待后端结果；当前客户端未提供实时 Agent SSE。Enter 换行，Ctrl/⌘ + Enter 运行。'}
               </span>
               {isActive ? (
                 <button type="button" className="stopButton" onClick={handleStop}>
@@ -963,18 +971,20 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               <h2>Agent Trace</h2>
               <span>{requestStatus === 'agent_running' ? '运行中' : traceStatus}</span>
             </div>
-            <span className="traceDelivery">实时 Agent SSE</span>
+            <span className="traceDelivery">
+              {agentSseAvailable ? '实时 Agent SSE' : 'Agent Run 兼容路径'}
+            </span>
           </div>
 
           {isActive && mode === 'agent' && !agentRun && resolvedAgentClient.streamAgent ? (
             <div className="traceNotice">
               <h3>{statusLabels[requestStatus]}</h3>
-              <p>正在接收后端真实 Agent 事件，尚未收到完整 Trace。</p>
+              <p>正在接收后端真实 Agent SSE，Trace 将随事件实时更新。</p>
             </div>
           ) : requestStatus === 'agent_running' && !agentRun ? (
             <div className="traceNotice">
-              <h3>等待同步结果</h3>
-              <p>完成后加载 Trace，非实时</p>
+              <h3>等待 Agent Run</h3>
+              <p>正在等待 Agent Run 结果；当前客户端未提供实时 Agent SSE。</p>
             </div>
           ) : requestStatus === 'client_cancelled' ? (
             <div className="traceNotice traceCancelled">
@@ -1020,7 +1030,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               {agentRun.steps.length === 0 ? (
                 <div className="traceNotice compactNotice">
                   <h3>后端返回空 Trace</h3>
-                  <p>本次同步响应没有步骤；前端不会补造模型决策或工具调用。</p>
+                  <p>本次 Agent Run 没有步骤事件；前端不会补造模型决策或工具调用。</p>
                 </div>
               ) : (
                 <ol className="stepTimeline" aria-label="Agent 步骤时间线">
@@ -1037,8 +1047,12 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             </div>
           ) : (
             <div className="traceNotice">
-              <h3>等待 Agent Run</h3>
-              <p>切换到 Agent Run 模式后发起真实同步请求，完成后在此加载 Trace，非实时。</p>
+              <h3>{agentSseAvailable ? '等待 Agent SSE' : '等待 Agent Run'}</h3>
+              <p>
+                {agentSseAvailable
+                  ? '切换到 Agent Run 模式后发起真实 Agent SSE，Trace 将随事件实时更新。'
+                  : '切换到 Agent Run 模式后等待 Agent Run 结果；当前客户端未提供实时 Agent SSE。'}
+              </p>
               {canRetry ? (
                 <button type="button" className="retryButton" onClick={handleRetry}>
                   重新运行

@@ -80,6 +80,25 @@ def test_stream_projection_emits_complete_answer_without_token_claims() -> None:
     assert "token" not in _serialize_sse(projected)
 
 
+def test_stream_projection_emits_sanitized_answer_delta_only() -> None:
+    projected = _to_stream_event(
+        _event(
+            AgentEventKind.ANSWER_DELTA,
+            2,
+            step_index=1,
+            message="delta api_key=secret-value",
+        ),
+        "request-1",
+    )
+
+    serialized = _serialize_sse(projected)
+    assert projected.event == "answer_delta"
+    assert projected.delta == "delta [redacted]"
+    assert "secret-value" not in serialized
+    assert '"answer"' not in serialized
+    assert '"tool_name"' not in serialized
+
+
 def test_knowledge_search_uses_safe_rag_projection() -> None:
     result = ToolResult(
         call_id="call-1",

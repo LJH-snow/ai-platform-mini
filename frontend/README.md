@@ -8,7 +8,7 @@
 
 - **普通 Chat SSE 模式**：继续调用 `POST /v1/chat/completions?stream=true`，解析 `choices[0].delta.content` 并按增量显示回答。
 - **Agent Run 模式**：调用 `POST /api/v1/agent/runs/stream`，按真实 SSE 事件增量更新左侧回答与右侧 Trace；同步 `POST /api/v1/agent/runs` 客户端仍保留兼容。
-- 当前模型协议没有 token delta，`assistant_message` 是一次完整真实回答，不是前端拆分的 token 流；普通 Chat SSE 行为保持不变。
+- Agent final answer 支持真实文本 `answer_delta`：每个 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunk，前端按真实事件增量显示；普通 Chat SSE 行为保持不变。`assistant_message` 仅作为 legacy/非 streaming 兼容事件保留，不由前端拆分或伪造。
 
 ### Agent Trace 与状态
 
@@ -63,22 +63,23 @@
 ### 响应式目标与验证
 
 - 响应式目标宽度为 **320px、375px、768px、1024px 和 1440px**；长回答、Run ID、call ID、chunk ID、Tool 摘要和 RAG 内容允许换行或安全截断，操作区和触摸目标保持可用。
-- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **7 个测试文件、71 个测试全部通过**。
-- 真实浏览器五档回归尚未完成：当前环境没有可用的浏览器二进制，因此未声称已验证 320/375/768/1024/1440 的真实布局、焦点轮廓或屏幕阅读器行为。
+- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **7 个测试文件、76 个测试全部通过**。
+- 已在真实浏览器验证 320/375/768/1024/1440 五档无横向溢出，并核对静态页面文案和 Agent 模式展示。该回归不等同于键盘焦点或屏幕阅读器验证。
+- 真实后端 Agent SSE 浏览器端到端尚未完成：默认前端页面没有注入 runtime API 配置，后端也未启用 CORS，因此不能声称浏览器已经收到并展示真实 `answer_delta`。
 
 ## 阶段 6 实时 Agent Run
 
-- 事件顺序为 `run_started`、每个 Step 的 `step_started`/Tool/RAG/`step_completed`、可选 `assistant_message`，最后一个终止事件；公开事件带真实 `run_id`、`request_id` 和 `sequence`，Tool 事件带 `step_index`、`call_id`、`tool_name`。
+- 事件顺序为 `run_started`、每个 Step 的 `step_started`/Tool/RAG/`step_completed`、按 `sequence` 排序的 `answer_delta`（或 legacy `assistant_message`）、最后一个终止事件；公开事件带真实 `run_id`、`request_id` 和 `sequence`，Tool 事件带 `step_index`、`call_id`、`tool_name`。`answer_delta.delta` 只来自真实 provider chunk，Runtime 同时累计完整答案。
 - 支持 `run_completed`、`run_failed`、`run_timed_out`、`run_cancelled` 和 `run_stopped`；同一 Run 只接受一个终止状态。未知、重复、乱序或缺失字段事件安全降级。
 - 前端状态覆盖 connecting、running、waiting、tool running/completed/failed、RAG loading/completed、completed、failed、timeout、cancelled、connection lost 和 response format error；状态不只依赖颜色。
 - 前端 Abort/停止等待不等于后端取消，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和 `stream_error` 分别表示连接/启动边界，不伪造 Run 终态。
-- RAG 仅显示 `knowledge_search` 的 loading、真实安全来源和真实失败状态；不显示 Prompt、工具输入输出、Provider 原始响应、堆栈、密钥、时间、耗时或假 Token。
+- RAG 仅显示 `knowledge_search` 的 loading、真实安全来源和真实失败状态；不显示 Prompt、工具输入输出、Provider 原始响应、堆栈、密钥、时间、耗时或假 Token。空回答流不会生成补充文本；Provider 错误、超时或取消只展示相应真实错误/终止状态，已知增量不会被伪装成完整成功回答。
 
 ## 尚未实现或不在阶段 6 范围
 
 - **事件时间与步骤耗时**：当前公开 API 未提供，前端不推算或伪造。
 - **工具输入、输出和详细错误**：当前公开 API 未提供，前端不读取 Provider 或内部 Runtime 原始对象。
-- 持久化 Trace 查询、真实 token delta、回答内精确引用、MCP UI 和复杂多 Agent 编排不在阶段 6 范围。
+- 精确 Token 统计/usage、事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排不在阶段 6 范围；`answer_delta` 是真实文本增量，不等同于逐 Token 计数。
 - 启动失败的 `stream_error` 可以缺少 `run_id`/`sequence`；前端解析器会将缺失字段归一化，并由客户端归类为 `AgentNetworkError`。该帧只表示流启动或连接边界错误，不代表 Agent Run 已进入任何终态。
 
 详细事件字段和边界见 [Agent SSE 事件契约](../docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md)。

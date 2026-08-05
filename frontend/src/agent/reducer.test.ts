@@ -88,6 +88,47 @@ describe('Agent stream reducer', () => {
     expect(state.run?.events).toHaveLength(2)
   })
 
+  it('accumulates answer deltas after tools and does not duplicate legacy answer', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('tool_started', 1, { step_index: 1, call_id: 'calc-1', tool_name: 'calculator' }),
+      e('tool_completed', 2, {
+        step_index: 1,
+        call_id: 'calc-1',
+        tool_name: 'calculator',
+        succeeded: true,
+      }),
+      e('answer_delta', 3, { delta: '真实' }),
+      e('answer_delta', 4, { delta: '' }),
+      e('answer_delta', 5, { delta: '回答' }),
+      e('assistant_message', 6, { answer: '真实回答' }),
+      e('run_completed', 7, { status: 'completed' }),
+    ])
+    expect(state.run?.answer).toBe('真实回答')
+    expect(state.run?.status).toBe('completed')
+  })
+
+  it('ignores duplicate and out-of-order answer deltas', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('answer_delta', 1, { delta: 'A' }),
+      e('answer_delta', 2, { delta: 'B' }),
+    ])
+    expect(reduceAgentStream(state, e('answer_delta', 2, { delta: 'X' }))).toBe(state)
+    expect(reduceAgentStream(state, e('answer_delta', 1, { delta: 'Y' }))).toBe(state)
+    expect(state.run?.answer).toBe('AB')
+  })
+
+  it('lets the first real delta replace a legacy complete answer', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('assistant_message', 1, { answer: '旧完整回答' }),
+      e('answer_delta', 2, { delta: '新' }),
+      e('answer_delta', 3, { delta: '回答' }),
+    ])
+    expect(state.run?.answer).toBe('新回答')
+  })
+
   it('preserves loading and safely downgrades unknown RAG statuses', () => {
     const state = apply([
       e('run_started', 0),

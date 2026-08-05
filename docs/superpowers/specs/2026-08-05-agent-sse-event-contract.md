@@ -34,7 +34,7 @@ data: <one JSON object>
 | `tool_name` | 真实工具名；不包含工具参数 |
 | `status` | Run 或 Step 的公开状态 |
 | `stop_reason` | 终止原因；只在终止事件出现 |
-| `answer` | `assistant_message` 的完整真实回答 |
+| `answer` | `assistant_message` 的完整真实回答；`answer_delta` 使用 `delta` 传递真实文本片段 |
 | `succeeded` | Tool 是否成功 |
 | `error_code` | 允许列表中的工具或 RAG 错误码 |
 | `rag` | `knowledge_search` 的安全 RAG 投影 |
@@ -47,8 +47,10 @@ data: <one JSON object>
 
 在正常执行中，顺序是 `run_started`，随后每个 Step 的
 `step_started`、零个或多个 Tool 事件、`step_completed`，必要时在 Step 之间继续
-下一个 Step；有回答时发送 `assistant_message`，最后发送且只发送一个终止事件。
-`sequence` 是稳定的 Runtime 顺序，不代表时间、耗时或 Token 增量。
+下一个 Step；final answer 流会按 Runtime `sequence` 发送零个或多个 `answer_delta`，并在
+Runtime 累计完整答案后结束；非 streaming/legacy 路径可以发送一次完整的
+`assistant_message`。最后发送且只发送一个终止事件。`sequence` 是稳定的 Runtime
+顺序，不代表时间、耗时或精确 Token 计数。
 
 | 事件 | 真实来源与负载 |
 | --- | --- |
@@ -59,7 +61,8 @@ data: <one JSON object>
 | `tool_completed` | 真实工具成功完成；有 Tool 关联字段和 `succeeded: true` |
 | `tool_failed` | 真实工具失败；有安全 `error_code`，不含原始错误详情 |
 | `step_completed` | Runtime 完成真实 Step；有 `step_index` |
-| `assistant_message` | 模型提供的一次完整回答；不是 token delta，不拆分、不补造 Token 数 |
+| `answer_delta` | 显式 Agent final-answer `ChatService.chat_stream()` provider chunk 提供的真实文本增量；按 `sequence` 顺序发送，不暴露模型 JSON，不补造 Token 数或 usage |
+| `assistant_message` | legacy/非 streaming 兼容事件，携带一次完整真实回答；前端不得将其拆成伪造增量 |
 | `run_completed` | `status=completed` 的真实终止事件 |
 | `run_failed` | `status=failed` 的真实终止事件 |
 | `run_timed_out` | `status=timed_out` 的真实终止事件 |
@@ -81,6 +84,18 @@ data: <one JSON object>
 `AgentNetworkError`。普通 Run 事件仍要求真实的 `run_id` 和非负 `sequence`。
 `stream_error` 只表示流无法启动或连接边界出错，不代表 Agent Run 已产生任何终态，
 也不能替代 `run_failed`、`run_timed_out` 或 `run_cancelled`。
+
+## Answer Delta 语义
+
+`answer_delta.delta` 只能来自显式 final-answer `ChatService.chat_stream()` 消费到的
+真实 provider chunk。Runtime 按事件顺序转发增量并累计完整回答；前端按 `sequence`
+去重和拒绝乱序，不能从模型 JSON、完整回答或定时器自行拆分文本。空流不生成补充回答，
+也不伪造 Token、usage、时间或耗时。Provider 在流中失败时，已收到的增量可以保留，
+但终态必须反映真实失败；超时和取消同理，分别映射为 `run_timed_out` 或
+`run_cancelled`，不能改写为成功。
+
+增量内容与完整回答使用同一敏感字段清洗边界；SSE 不暴露 Prompt、模型 JSON、工具
+原始输入/输出、Provider 原始响应、堆栈、内部路径、API Key 或其他内部决策数据。
 
 ## RAG 投影
 
@@ -112,7 +127,7 @@ Embedding 失败、输出截断或输出格式错误分别保留真实可区分�
 
 ## 不在阶段 6 范围
 
-阶段 6 不实现回答内精确引用、MCP UI、持久化 Trace 查询、复杂多 Agent 编排、
-真实 token 级回答流、事件历史回放或断线后的 Run 状态查询。后端没有提供时间、
-耗时、Token 增量、工具参数、工具原始输出和 Provider 原始响应，前后端均不伪造这些
-数据。
+阶段 6 不实现精确 Token 统计/usage、回答内精确引用、MCP UI、持久化 Trace 查询、
+复杂多 Agent 编排、事件历史回放或断线后的 Run 状态查询。`answer_delta` 是真实文本
+增量，但不是精确 Token 计数；后端没有提供事件时间、耗时、工具参数、工具原始输出
+和 Provider 原始响应，前后端均不伪造这些数据。
