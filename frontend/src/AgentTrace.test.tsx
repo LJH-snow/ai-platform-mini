@@ -339,6 +339,7 @@ describe('Agent Trace integration', () => {
   it('distinguishes empty RAG outcomes and never presents a service failure as no relevant sources', async () => {
     const statuses: Array<[AgentRagStatus, string]> = [
       ['no_relevant_sources', '参考来源：暂无相关来源'],
+      ['loading', '参考来源：加载中'],
       ['knowledge_base_empty', '参考来源：知识库为空'],
       ['rag_unavailable', '参考来源：来源暂不可用'],
       ['embedding_failed', '参考来源：来源暂不可用'],

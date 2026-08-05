@@ -1,14 +1,14 @@
 # AI Platform Mini Frontend
 
-基于 Vite + React + TypeScript 的 Agent Console。当前完成阶段 5：在保留阶段 2—4能力的基础上，完成可访问性、状态播报、响应式布局、复制反馈和错误恢复收口。
+基于 Vite + React + TypeScript 的 Agent Console。当前完成阶段 6：在保留阶段 2—5 能力的基础上，接入真实 Agent SSE、实时 Trace、Tool/RAG 状态和错误恢复边界。
 
 ## 阶段 3 已完成
 
 ### 两种真实请求模式
 
 - **普通 Chat SSE 模式**：继续调用 `POST /v1/chat/completions?stream=true`，解析 `choices[0].delta.content` 并按增量显示回答。
-- **Agent Run 模式**：调用同步 `POST /api/v1/agent/runs`，请求结束后同时更新左侧最终回答与右侧 Trace。
-- Agent Trace 明确标记为“完成后加载，非实时”；普通 Chat SSE 不会被伪装成 Agent Trace。
+- **Agent Run 模式**：调用 `POST /api/v1/agent/runs/stream`，按真实 SSE 事件增量更新左侧回答与右侧 Trace；同步 `POST /api/v1/agent/runs` 客户端仍保留兼容。
+- 当前模型协议没有 token delta，`assistant_message` 是一次完整真实回答，不是前端拆分的 token 流；普通 Chat SSE 行为保持不变。
 
 ### Agent Trace 与状态
 
@@ -42,7 +42,7 @@
 - **真实来源字段**：来源卡片只展示后端实际提供的稳定文档/分块标识、分块序号、片段摘要和 distance；字段缺失时显示“后端未提供”，不会生成文档名称、URL、rank、引用编号或其他推断字段。
 - **空与错误状态**：区分来源缺失、无相关来源、知识库为空、RAG 服务不可用、Embedding 失败、输出不可用和其他失败；服务故障不会伪装成无相关来源。
 - **安全展示**：来源片段遵循后端截断边界，过长或 `truncated=true` 时显示安全提示；warning 作为不可信参考提示展示，所有来源内容使用普通文本渲染，不执行 HTML 或来源中的指令。
-- **能力边界**：RAG 来源是不可信参考材料，不等同于回答内精确引用，也不表示模型对某个来源做出了可验证的精确引用。Agent Run 仍是同步请求，不承诺 Agent SSE、实时 Trace 或实时 RAG Trace。
+- **能力边界**：RAG 来源是不可信参考材料，不等同于回答内精确引用，也不表示模型对某个来源做出了可验证的精确引用。Agent Run 的实时路径使用 Agent SSE，但不承诺回答内精确引用或持久化 Trace 查询。
 
 ## 阶段 5 已完成
 
@@ -63,15 +63,25 @@
 ### 响应式目标与验证
 
 - 响应式目标宽度为 **320px、375px、768px、1024px 和 1440px**；长回答、Run ID、call ID、chunk ID、Tool 摘要和 RAG 内容允许换行或安全截断，操作区和触摸目标保持可用。
-- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **5 个测试文件、62 个测试全部通过**。
+- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **7 个测试文件、71 个测试全部通过**。
 - 真实浏览器五档回归尚未完成：当前环境没有可用的浏览器二进制，因此未声称已验证 320/375/768/1024/1440 的真实布局、焦点轮廓或屏幕阅读器行为。
 
-## 尚未实现
+## 阶段 6 实时 Agent Run
 
-- **Agent SSE / 实时 Trace 推送**：当前 Agent Run 是同步 JSON，只能在请求完成后加载完整 Trace。
+- 事件顺序为 `run_started`、每个 Step 的 `step_started`/Tool/RAG/`step_completed`、可选 `assistant_message`，最后一个终止事件；公开事件带真实 `run_id`、`request_id` 和 `sequence`，Tool 事件带 `step_index`、`call_id`、`tool_name`。
+- 支持 `run_completed`、`run_failed`、`run_timed_out`、`run_cancelled` 和 `run_stopped`；同一 Run 只接受一个终止状态。未知、重复、乱序或缺失字段事件安全降级。
+- 前端状态覆盖 connecting、running、waiting、tool running/completed/failed、RAG loading/completed、completed、failed、timeout、cancelled、connection lost 和 response format error；状态不只依赖颜色。
+- 前端 Abort/停止等待不等于后端取消，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和 `stream_error` 分别表示连接/启动边界，不伪造 Run 终态。
+- RAG 仅显示 `knowledge_search` 的 loading、真实安全来源和真实失败状态；不显示 Prompt、工具输入输出、Provider 原始响应、堆栈、密钥、时间、耗时或假 Token。
+
+## 尚未实现或不在阶段 6 范围
+
 - **事件时间与步骤耗时**：当前公开 API 未提供，前端不推算或伪造。
 - **工具输入、输出和详细错误**：当前公开 API 未提供，前端不读取 Provider 或内部 Runtime 原始对象。
-- 持久化 Trace 查询、实时 Token 更新和其他后续 Agent Console 能力尚未实现。
+- 持久化 Trace 查询、真实 token delta、回答内精确引用、MCP UI 和复杂多 Agent 编排不在阶段 6 范围。
+- 启动失败的 `stream_error` 可以缺少 `run_id`/`sequence`；前端解析器会将缺失字段归一化，并由客户端归类为 `AgentNetworkError`。该帧只表示流启动或连接边界错误，不代表 Agent Run 已进入任何终态。
+
+详细事件字段和边界见 [Agent SSE 事件契约](../docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md)。
 
 ## 鉴权与跨源运行时边界
 

@@ -14,7 +14,7 @@
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
-- 前端 Agent Console：[阶段 5 已完成可访问性、状态播报、响应式目标、复制反馈、错误恢复和 Tool 级 RAG disclosure；不提供 Agent SSE、实时 Trace 或回答内精确引用](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
+- 前端 Agent Console：[阶段 6 已接入 Agent SSE、实时 Trace、Tool/RAG 状态和错误边界；浏览器五档回归未完成，也不提供回答内精确引用](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -42,7 +42,7 @@
 
 ## Agent Run RAG public contract
 
-`POST /api/v1/agent/runs` 保持同步 JSON 语义。对于实际执行的 `knowledge_search` Tool Call，响应可以在对应的 `steps[].tool_calls[]` 中增加可选 `rag` 字段；旧客户端可以忽略该字段。该扩展不提供 Agent SSE、实时 Trace 或回答内精确引用。
+`POST /api/v1/agent/runs` 保持同步 JSON 语义。对于实际执行的 `knowledge_search` Tool Call，响应可以在对应的 `steps[].tool_calls[]` 中增加可选 `rag` 字段；旧客户端可以忽略该字段。Agent SSE 另由 `POST /api/v1/agent/runs/stream` 提供，RAG 事件仍只使用同一安全投影，不提供回答内精确引用。
 
 公开的 `rag` 结构为：
 
@@ -83,7 +83,7 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 阶段 3 当前能力：
 
 - 普通模式继续解析 `POST /v1/chat/completions?stream=true` 的真实 SSE 增量，不把普通聊天伪装成 Agent Trace；
-- Agent 模式使用同步 JSON 请求，等待期间明确显示“完成后加载 Trace，非实时”；
+- Agent 模式现在使用 Agent SSE 实时更新；同步 JSON 客户端仍保留用于兼容和回归；
 - 左侧最终回答与右侧 Run 状态联动，支持 `completed`、`stopped`、`failed`、`cancelled`、`timed_out`，并区分浏览器中止等待与后端取消终态；
 - 领域适配层稳定排序并去重步骤/事件，组件不直接依赖后端原始 JSON；
 - 步骤卡片展示序号、决策类型、状态、工具名称和安全摘要；后端公开契约没有时间戳与耗时，因此显示“后端未提供”，不会补零或伪造；
@@ -106,9 +106,12 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - 通过单独的低频 live region 播报 Chat、Agent、RAG 和重试关键状态，SSE 增量不会逐条触发播报；状态同时提供文字和结构表达，不依赖颜色；
 - Request ID 与真实 Run ID 提供复制反馈；Chat/Agent 错误使用安全文案并支持重试，重试和会话切换隔离旧回答、Trace、来源、错误及晚到回调；
 - 响应式目标覆盖 320px、375px、768px、1024px 和 1440px，长回答与长标识支持换行或安全截断；
-- 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（5 个测试文件、62 个测试）和生产构建；真实浏览器五档回归因当前环境没有可用浏览器二进制而未完成，未声称已经验证真实布局或焦点行为。
+- Agent SSE 解析真实的 `run_started`、Step、Tool、RAG、回答和终止事件；事件按 `run_id`/`sequence` 隔离，重复或乱序事件安全忽略；
+- 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（7 个测试文件、70 个测试）和生产构建；真实浏览器五档回归因当前环境没有可用浏览器二进制而未完成，未声称已经验证真实布局或焦点行为。
 
-当前边界：后端 Agent Run API 是同步 JSON，不提供 Agent SSE，因此运行中的具体模型决策和工具状态无法实时展示；前端只在请求完成后渲染真实 Trace 和 Tool 级来源卡片。来源列表用于安全展示检索结果，不证明回答中的精确引用，也不提供实时 RAG Trace。公开响应也没有事件时间、步骤耗时、工具参数、工具输出或工具错误详情。Agent SSE、持久化 Trace 查询和回答内精确引用均未实现。
+当前边界：Agent SSE 已提供真实 Runtime 生命周期事件，但当前模型协议没有 token delta，因此 `assistant_message` 是完整真实回答而非逐 token 增量。后端不提供事件时间、步骤耗时、工具参数、工具原始输出、Provider 原始响应或精确 Token 增量，前端不补造这些数据。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
+
+> [Agent SSE 事件契约](docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md) 和 [阶段 6 开发记录](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md) 记录真实事件、字段、顺序、终止与取消边界。
 
 启动前端开发服务器：
 
@@ -762,7 +765,7 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 
 - 完成键盘可访问性、单独低频 live region、非颜色状态表达、Step/Tool/RAG disclosure、Request ID/Run ID 复制反馈、Chat/Agent 错误恢复和旧 Run 隔离。
 - 前端五项门禁通过：format、lint、typecheck、62 tests 和 build；真实浏览器 320/375/768/1024/1440 五档回归因当前环境没有可用浏览器二进制而未完成。
-- 保留阶段 2—4的 Chat SSE、同步 Agent Trace、Tool 状态和 RAG 来源契约；Agent SSE、实时 Trace、实时 RAG Trace、持久化查询和回答内精确引用仍未实现。
+- 保留阶段 2—5 的 Chat SSE、同步 Agent Trace、Tool 状态和 RAG 来源契约；阶段 6 已实现 Agent SSE、实时 Trace 和实时 RAG 状态投影，持久化查询和回答内精确引用仍未实现。
 
 #### 阶段 5 学习总结
 

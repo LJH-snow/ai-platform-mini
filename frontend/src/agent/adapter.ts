@@ -35,6 +35,7 @@ const SAFE_STOP_REASONS = new Set([
   'quota_exceeded',
 ])
 const RAG_STATUSES = new Set<AgentRagApiStatus>([
+  'loading',
   'success_with_sources',
   'no_relevant_sources',
   'knowledge_base_empty',
@@ -112,8 +113,29 @@ const safeNullableInteger = (value: unknown): number | null =>
 const safeNullableDistance = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 2 ? value : null
 
-const normalizeRagStatus = (value: AgentRagApiStatus): AgentRagStatus =>
-  RAG_STATUSES.has(value) ? value : 'failed'
+const normalizeRagStatus = (value: AgentRagApiStatus): AgentRagStatus => {
+  if (!RAG_STATUSES.has(value)) return 'failed'
+  switch (value) {
+    case 'loading':
+      return 'loading'
+    case 'success_with_sources':
+      return 'success_with_sources'
+    case 'no_relevant_sources':
+      return 'no_relevant_sources'
+    case 'knowledge_base_empty':
+      return 'knowledge_base_empty'
+    case 'rag_unavailable':
+      return 'rag_unavailable'
+    case 'embedding_failed':
+      return 'embedding_failed'
+    case 'output_unavailable':
+      return 'output_unavailable'
+    case 'failed':
+      return 'failed'
+    default:
+      return 'failed'
+  }
+}
 
 const normalizeRagErrorCode = (
   value: AgentRagApiErrorCode | null | undefined,

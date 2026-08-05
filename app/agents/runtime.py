@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TypeVar, cast
 
@@ -57,9 +58,7 @@ class AgentRuntime:
         self._tools = dict(tools or {})
         self._tool_executor = tool_executor
         self._tool_output_max_chars = tool_output_max_chars
-        if observer is not None and (
-            recorder is not None or recorder_factory is not None
-        ):
+        if observer is not None and recorder is not None:
             raise ValueError("provide observer or recorder, not both")
         if recorder is not None and recorder_factory is not None:
             raise ValueError("provide recorder or recorder_factory, not both")
@@ -141,6 +140,15 @@ class AgentRuntime:
                     )
 
                 step_index = len(state.steps) + 1
+                self._append_event(
+                    events,
+                    recorder=recorder,
+                    kind=AgentEventKind.STEP_STARTED,
+                    run_id=resolved_run_id,
+                    step_index=step_index,
+                    include_result=False,
+                    include_recorder=False,
+                )
                 try:
                     decision = await self._await_controlled(
                         self._model.decide(state),
@@ -203,6 +211,15 @@ class AgentRuntime:
                     state.token_usage += decision.token_usage
                 if token_budget is not None and state.token_usage > token_budget:
                     state.steps.append(AgentStep(index=step_index, decision=decision))
+                    self._append_event(
+                        events,
+                        recorder=recorder,
+                        kind=AgentEventKind.STEP_COMPLETED,
+                        run_id=resolved_run_id,
+                        step_index=step_index,
+                        include_result=False,
+                        include_recorder=False,
+                    )
                     return self._finish(
                         recorder=recorder,
                         state=state,
@@ -224,6 +241,15 @@ class AgentRuntime:
                         message=decision.answer,
                     )
                     state.steps.append(AgentStep(index=step_index, decision=decision))
+                    self._append_event(
+                        events,
+                        recorder=recorder,
+                        kind=AgentEventKind.STEP_COMPLETED,
+                        run_id=resolved_run_id,
+                        step_index=step_index,
+                        include_result=False,
+                        include_recorder=False,
+                    )
                     return self._finish(
                         recorder=recorder,
                         state=state,
@@ -321,6 +347,15 @@ class AgentRuntime:
                         decision=decision,
                         tool_results=tuple(tool_results),
                     )
+                )
+                self._append_event(
+                    events,
+                    recorder=recorder,
+                    kind=AgentEventKind.STEP_COMPLETED,
+                    run_id=resolved_run_id,
+                    step_index=step_index,
+                    include_result=False,
+                    include_recorder=False,
                 )
             return self._finish(
                 recorder=recorder,
@@ -525,6 +560,8 @@ class AgentRuntime:
         status: RunStatus | None = None,
         stop_reason: StopReason | None = None,
         cumulative_token_usage: int | None = None,
+        include_result: bool = True,
+        include_recorder: bool = True,
     ) -> None:
         previous = events[-1] if events else None
         occurred_at = datetime.now(UTC)
@@ -547,7 +584,8 @@ class AgentRuntime:
         )
         events.append(event)
         self._notify_observer(event)
-        self._notify_recorder(recorder, event)
+        if include_recorder:
+            self._notify_recorder(recorder, event)
 
     def _notify_observer(self, event: AgentEvent) -> None:
         if self._observer is None or self._observer is self._recorder:
@@ -617,6 +655,11 @@ class AgentRuntime:
         answer: str | None = None,
         error: str | None = None,
     ) -> AgentRunResult:
+        self._complete_open_steps(
+            recorder=recorder,
+            events=events,
+            run_id=state.run_id,
+        )
         self._append_event(
             events,
             recorder=recorder,
@@ -627,21 +670,67 @@ class AgentRuntime:
             message=error,
             cumulative_token_usage=state.token_usage,
         )
+        result_events = tuple(
+            replace(event, sequence=index)
+            for index, event in enumerate(
+                (event for event in events if include_result_event(event)),
+                start=1,
+            )
+        )
         result = AgentRunResult(
             run_id=state.run_id,
             status=status,
             stop_reason=stop_reason,
             answer=answer,
             state=state,
-            events=tuple(events),
+            events=result_events,
             token_usage=state.token_usage,
             error=error,
         )
         self._notify_recorder_finish(recorder, result)
         return result
 
+    def _complete_open_steps(
+        self,
+        *,
+        recorder: RunTraceRecorderProtocol | None,
+        events: list[AgentEvent],
+        run_id: str,
+    ) -> None:
+        """Close every started step before publishing the run terminal event."""
+        started = {
+            event.step_index
+            for event in events
+            if event.kind is AgentEventKind.STEP_STARTED
+            and event.step_index is not None
+        }
+        completed = {
+            event.step_index
+            for event in events
+            if event.kind is AgentEventKind.STEP_COMPLETED
+            and event.step_index is not None
+        }
+        for step_index in sorted(started - completed):
+            self._append_event(
+                events,
+                recorder=recorder,
+                kind=AgentEventKind.STEP_COMPLETED,
+                run_id=run_id,
+                step_index=step_index,
+                include_result=False,
+                include_recorder=False,
+            )
+
 
 class _RuntimeStop(Exception):
     def __init__(self, reason: StopReason) -> None:
         super().__init__(reason.value)
         self.reason = reason
+
+
+def include_result_event(event: AgentEvent) -> bool:
+    """Keep synchronous result events backward-compatible with the old list."""
+    return event.kind not in {
+        AgentEventKind.STEP_STARTED,
+        AgentEventKind.STEP_COMPLETED,
+    }

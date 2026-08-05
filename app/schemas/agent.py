@@ -8,6 +8,7 @@ from app.agents.models import RunStatus, StopReason
 from app.schemas.chat import ChatMessage
 
 type AgentRAGStatus = Literal[
+    "loading",
     "success_with_sources",
     "no_relevant_sources",
     "knowledge_base_empty",
@@ -127,3 +128,35 @@ class AgentRunResponse(BaseModel):
     steps: list[AgentStepSummary] = Field(default_factory=list)
     events: list[AgentEventSummary] = Field(default_factory=list)
     usage: AgentUsage
+
+
+class AgentStreamEvent(BaseModel):
+    """Safe SSE projection of one real Runtime lifecycle event."""
+
+    event: Literal[
+        "run_started",
+        "step_started",
+        "step_completed",
+        "tool_started",
+        "rag_started",
+        "tool_completed",
+        "tool_failed",
+        "assistant_message",
+        "run_completed",
+        "run_failed",
+        "run_timed_out",
+        "run_cancelled",
+        "run_stopped",
+    ]
+    run_id: str
+    request_id: str | None = None
+    sequence: int
+    step_index: int | None = Field(default=None, ge=1)
+    call_id: str | None = Field(default=None, max_length=128)
+    tool_name: str | None = Field(default=None, max_length=128)
+    status: RunStatus | None = None
+    stop_reason: StopReason | None = None
+    answer: str | None = None
+    succeeded: bool | None = None
+    error_code: AgentToolErrorCode | None = None
+    rag: AgentRAGToolSummary | None = None

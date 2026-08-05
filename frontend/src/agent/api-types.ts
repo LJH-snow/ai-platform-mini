@@ -8,6 +8,7 @@ export type AgentRunApiRequest = {
 }
 
 export type AgentRagApiStatus =
+  | 'loading'
   | 'success_with_sources'
   | 'no_relevant_sources'
   | 'knowledge_base_empty'
@@ -15,6 +16,7 @@ export type AgentRagApiStatus =
   | 'embedding_failed'
   | 'output_unavailable'
   | 'failed'
+  | (string & {})
 
 export type AgentRagApiErrorCode =
   | 'invalid_query'

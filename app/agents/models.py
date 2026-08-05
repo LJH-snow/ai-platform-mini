@@ -35,6 +35,8 @@ class AgentEventKind(StrEnum):
     """Observable lifecycle events emitted by the runtime."""
 
     RUN_STARTED = "run_started"
+    STEP_STARTED = "step_started"
+    STEP_COMPLETED = "step_completed"
     MODEL_DECISION = "model_decision"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"

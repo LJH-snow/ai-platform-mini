@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -23,7 +24,7 @@ from app.exceptions.base import ProviderError, QuotaExceededError
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.service import QuotaService
 from app.quota.token_estimator import estimate_prompt_tokens
-from app.runs.protocols import RunTraceRecorderFactory
+from app.runs.protocols import AgentEventObserver, RunTraceRecorderFactory
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
@@ -64,6 +65,20 @@ class AgentRuntimeFactory(Protocol):
         *,
         tool_executor: ToolExecutor | None = None,
         recorder_factory: RunTraceRecorderFactory | None = None,
+    ) -> AgentRuntime: ...
+
+
+class AgentStreamingRuntimeFactory(Protocol):
+    """Optional extension implemented by runtimes that accept an observer."""
+
+    def __call__(
+        self,
+        model: AgentModel,
+        tools: Mapping[str, AgentTool] | None,
+        *,
+        tool_executor: ToolExecutor | None = None,
+        recorder_factory: RunTraceRecorderFactory | None = None,
+        observer: AgentEventObserver,
     ) -> AgentRuntime: ...
 
 
@@ -268,6 +283,8 @@ class AgentService:
         *,
         context: RequestContext,
         api_key: APIKey,
+        observer: AgentEventObserver | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> AgentRunOutcome:
         """Run an Agent request and settle platform quota and usage boundaries."""
         model = _ChatServiceAgentModel(
@@ -299,32 +316,63 @@ class AgentService:
 
         model.set_prompt_reservation_guard(ensure_prompt_reservation)
         if self._recorder_factory is None:
-            runtime = self._runtime_factory(
-                model,
-                None,
-                tool_executor=self._tool_executor,
-            )
+            if observer is None:
+                runtime = self._runtime_factory(
+                    model, None, tool_executor=self._tool_executor
+                )
+            else:
+                streaming_factory = cast(
+                    AgentStreamingRuntimeFactory, self._runtime_factory
+                )
+                runtime = streaming_factory(
+                    model, None, tool_executor=self._tool_executor, observer=observer
+                )
         else:
-            runtime = self._runtime_factory(
-                model,
-                None,
-                tool_executor=self._tool_executor,
-                recorder_factory=self._recorder_factory,
-            )
+            if observer is None:
+                runtime = self._runtime_factory(
+                    model,
+                    None,
+                    tool_executor=self._tool_executor,
+                    recorder_factory=self._recorder_factory,
+                )
+            else:
+                streaming_factory = cast(
+                    AgentStreamingRuntimeFactory, self._runtime_factory
+                )
+                runtime = streaming_factory(
+                    model,
+                    None,
+                    tool_executor=self._tool_executor,
+                    recorder_factory=self._recorder_factory,
+                    observer=observer,
+                )
         started = time.monotonic()
 
         async with ReservationLifecycle(reservation, self._quota_service) as lifecycle:
             try:
-                result = await lifecycle.run(
-                    runtime.run(
-                        request.message,
-                        max_steps=request.max_steps,
-                        timeout=request.timeout_seconds,
-                        token_budget=request.token_budget,
-                        request_id=context.request_id,
-                        model=model.actual_model,
+                if cancel_event is not None:
+                    result = await lifecycle.run(
+                        runtime.run(
+                            request.message,
+                            max_steps=request.max_steps,
+                            timeout=request.timeout_seconds,
+                            token_budget=request.token_budget,
+                            request_id=context.request_id,
+                            model=model.actual_model,
+                            cancel_event=cancel_event,
+                        )
                     )
-                )
+                else:
+                    result = await lifecycle.run(
+                        runtime.run(
+                            request.message,
+                            max_steps=request.max_steps,
+                            timeout=request.timeout_seconds,
+                            token_budget=request.token_budget,
+                            request_id=context.request_id,
+                            model=model.actual_model,
+                        )
+                    )
             except QuotaExceededError:
                 if model.has_model_call:
                     elapsed_ms = (time.monotonic() - started) * 1000

@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
-from collections.abc import Mapping
-from typing import Annotated, Literal
+from collections.abc import AsyncIterator, Mapping
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import StreamingResponse
 
-from app.agents.models import AgentStep, ToolResult
+from app.agents.models import (
+    AgentEvent,
+    AgentEventKind,
+    AgentStep,
+    RunStatus,
+    ToolResult,
+)
+from app.agents.stream import (
+    AgentEventStream,
+    AgentStreamClosed,
+    AgentStreamSetupError,
+)
 from app.auth.models import APIKey
 from app.core.context import RequestContext
 from app.ratelimit.dependencies import require_rate_limit
@@ -21,6 +34,7 @@ from app.schemas.agent import (
     AgentRunRequest,
     AgentRunResponse,
     AgentStepSummary,
+    AgentStreamEvent,
     AgentToolCallSummary,
     AgentToolErrorCode,
     AgentUsage,
@@ -108,6 +122,204 @@ async def create_agent_run(
     outcome = await service.run(request, context=context, api_key=api_key)
     _set_rate_limit_headers(http_request, response)
     return _to_response(outcome)
+
+
+@router.post(
+    "/agent/runs/stream",
+    response_model=None,
+    summary="Stream a bounded Agent Runtime execution",
+)
+async def stream_agent_run(
+    request: AgentRunRequest,
+    http_request: Request,
+    response: Response,
+    service: Annotated[AgentService, Depends(get_agent_service)],
+    api_key: Annotated[APIKey, Depends(require_rate_limit)],
+) -> StreamingResponse:
+    """Stream real Runtime lifecycle events; answer text is not token streamed."""
+    context: RequestContext = http_request.state.context
+    stream = AgentEventStream()
+    cancel_event = asyncio.Event()
+
+    async def produce() -> None:
+        try:
+            await service.run(
+                request,
+                context=context,
+                api_key=api_key,
+                observer=stream,
+                cancel_event=cancel_event,
+            )
+        except Exception:
+            # A failure before Runtime emits run_started is an SSE setup error,
+            # not an Agent Run failure and must not claim a backend cancellation.
+            stream.fail_setup()
+            return
+        finally:
+            if not stream.terminal_observed:
+                stream.close()
+
+    task = asyncio.create_task(produce())
+
+    _set_rate_limit_headers(http_request, response)
+    return StreamingResponse(
+        _stream_events(
+            http_request,
+            stream,
+            context.request_id,
+            task,
+            cancel_event,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+async def _stream_events(
+    http_request: Request,
+    stream: AgentEventStream,
+    request_id: str,
+    producer: asyncio.Task[None],
+    cancel_event: asyncio.Event,
+) -> AsyncIterator[str]:
+    """Consume real events and poll disconnect without blocking the queue.
+
+    ``assistant_message`` carries one complete model-provided answer because the
+    current AgentModel protocol has no text-delta interface. It is not a token
+    stream and contains no synthetic usage or timing data.
+    """
+    receive_task = asyncio.create_task(stream.receive())
+    try:
+        while True:
+            disconnect_task = asyncio.create_task(http_request.is_disconnected())
+            poll_task = asyncio.create_task(asyncio.sleep(0.1))
+            done, _ = await asyncio.wait(
+                (receive_task, disconnect_task, poll_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for pending in (disconnect_task, poll_task):
+                if pending not in done:
+                    pending.cancel()
+            await asyncio.gather(disconnect_task, poll_task, return_exceptions=True)
+
+            if disconnect_task in done and disconnect_task.result():
+                cancel_event.set()
+                break
+            if receive_task not in done:
+                continue
+
+            item = receive_task.result()
+            if isinstance(item, AgentStreamClosed):
+                break
+            if isinstance(item, AgentStreamSetupError):
+                payload = json.dumps(
+                    {
+                        "event": "stream_error",
+                        "error_code": item.error_code,
+                    },
+                    separators=(",", ":"),
+                )
+                yield f"event: stream_error\ndata: {payload}\n\n"
+                break
+            if item.kind is AgentEventKind.MODEL_DECISION:
+                receive_task = asyncio.create_task(stream.receive())
+                continue
+            yield _serialize_sse(_to_stream_event(item, request_id))
+            if item.kind is AgentEventKind.RUN_STOPPED:
+                break
+            receive_task = asyncio.create_task(stream.receive())
+    finally:
+        if not receive_task.done():
+            receive_task.cancel()
+        await asyncio.gather(receive_task, return_exceptions=True)
+        if not producer.done():
+            cancel_event.set()
+        await asyncio.gather(producer, return_exceptions=True)
+
+
+def _serialize_sse(event: AgentStreamEvent) -> str:
+    payload = event.model_dump_json(exclude_none=True)
+    return f"event: {event.event}\ndata: {payload}\n\n"
+
+
+def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
+    if event.kind is AgentEventKind.RUN_STARTED:
+        name = "run_started"
+    elif event.kind is AgentEventKind.STEP_STARTED:
+        name = "step_started"
+    elif event.kind is AgentEventKind.STEP_COMPLETED:
+        name = "step_completed"
+    elif event.kind is AgentEventKind.MODEL_DECISION:
+        raise ValueError("model decision is internal and not a public SSE event")
+    elif event.kind is AgentEventKind.ANSWER:
+        name = "assistant_message"
+    elif event.kind is AgentEventKind.RUN_STOPPED:
+        if event.status is RunStatus.COMPLETED:
+            name = "run_completed"
+        elif event.status is RunStatus.FAILED:
+            name = "run_failed"
+        elif event.status is RunStatus.TIMED_OUT:
+            name = "run_timed_out"
+        elif event.status is RunStatus.CANCELLED:
+            name = "run_cancelled"
+        else:
+            name = "run_stopped"
+    else:
+        name = event.kind.value
+
+    tool_call = event.tool_call
+    result = event.tool_result
+    rag = None
+    if (
+        tool_call is not None
+        and tool_call.name == "knowledge_search"
+        and event.kind is AgentEventKind.TOOL_STARTED
+    ):
+        name = "rag_started"
+        rag = AgentRAGToolSummary(
+            status="loading",
+            warning=_PUBLIC_RAG_WARNING,
+            references=[],
+        )
+    elif tool_call is not None and tool_call.name == "knowledge_search" and result:
+        rag = _to_rag_summary(result.content, output_truncated=result.truncated)
+
+    return AgentStreamEvent(
+        event=cast(
+            Literal[
+                "run_started",
+                "step_started",
+                "step_completed",
+                "tool_started",
+                "rag_started",
+                "tool_completed",
+                "tool_failed",
+                "assistant_message",
+                "run_completed",
+                "run_failed",
+                "run_timed_out",
+                "run_cancelled",
+                "run_stopped",
+            ],
+            name,
+        ),
+        run_id=event.run_id,
+        request_id=request_id,
+        sequence=event.sequence,
+        step_index=event.step_index,
+        call_id=None if tool_call is None else tool_call.call_id,
+        tool_name=None if tool_call is None else tool_call.name,
+        status=event.status,
+        stop_reason=event.stop_reason,
+        answer=(
+            _sanitize_public_text(event.message)
+            if event.kind is AgentEventKind.ANSWER and event.message is not None
+            else None
+        ),
+        succeeded=None if result is None else result.succeeded,
+        error_code=_public_tool_error_code(None if result is None else result.error),
+        rag=rag,
+    )
 
 
 def _to_response(outcome: AgentRunOutcome) -> AgentRunResponse:
@@ -348,6 +560,12 @@ def _sanitize_public_rag_content(content: str) -> tuple[str, bool]:
         sanitized = sanitized[:_MAX_RAG_CONTENT_CHARS]
         changed = True
     return sanitized, changed
+
+
+def _sanitize_public_text(content: str) -> str:
+    """Apply the same public redaction boundary to assistant text."""
+    sanitized, _ = _sanitize_public_rag_content(content)
+    return sanitized
 
 
 def _bounded_identifier(

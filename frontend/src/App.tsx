@@ -17,6 +17,12 @@ import type {
   AgentToolCall,
   AgentTraceStep,
 } from './agent/types.ts'
+import {
+  initialAgentStreamState,
+  reduceAgentStream,
+  type AgentStreamState,
+} from './agent/reducer.ts'
+import { AgentStreamFormatError } from './agent/stream.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
 import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage } from './chat/types.ts'
@@ -26,6 +32,7 @@ type RequestStatus =
   | 'idle'
   | 'sending'
   | 'agent_running'
+  | 'running'
   | 'completed'
   | 'stopped'
   | 'client_cancelled'
@@ -35,6 +42,15 @@ type RequestStatus =
   | 'chat_failed'
   | 'network'
   | 'interrupted'
+  | 'connecting'
+  | 'waiting'
+  | 'tool_running'
+  | 'tool_completed'
+  | 'tool_failed'
+  | 'rag_loading'
+  | 'rag_completed'
+  | 'response_format_error'
+  | 'connection_lost'
 
 type AppProps = {
   chatClient?: ChatClient
@@ -58,6 +74,7 @@ const statusLabels: Record<RequestStatus, string> = {
   idle: '待发送',
   sending: '回答生成中',
   agent_running: 'Agent 运行中',
+  running: 'Agent 执行中',
   completed: '已完成',
   stopped: '已停止',
   client_cancelled: '请求已取消',
@@ -67,6 +84,15 @@ const statusLabels: Record<RequestStatus, string> = {
   chat_failed: '后端错误',
   network: '网络失败',
   interrupted: 'SSE 已断连',
+  connecting: '连接 Agent 中',
+  waiting: '等待 Agent 事件',
+  tool_running: '工具调用中',
+  tool_completed: '工具调用完成',
+  tool_failed: '工具调用失败',
+  rag_loading: 'RAG 加载中',
+  rag_completed: 'RAG 已完成',
+  response_format_error: '响应格式错误',
+  connection_lost: '连接已断开',
 }
 
 const runStatusLabels: Record<AgentRunStatus, string> = {
@@ -127,6 +153,7 @@ const formatMetric = (value: number | null): string =>
   value === null ? '后端未提供' : String(value)
 
 const ragStatusTitles: Record<AgentRag['status'], string> = {
+  loading: '参考来源：加载中',
   success_with_sources: '参考来源：暂无可用来源',
   no_relevant_sources: '参考来源：暂无相关来源',
   knowledge_base_empty: '参考来源：知识库为空',
@@ -137,6 +164,7 @@ const ragStatusTitles: Record<AgentRag['status'], string> = {
 }
 
 const ragStatusDescriptions: Record<AgentRag['status'], string> = {
+  loading: 'RAG 正在加载来源，完成后将显示检索结果。',
   success_with_sources: '后端未提供可展示的来源内容。',
   no_relevant_sources: '后端未返回与当前查询匹配的来源。',
   knowledge_base_empty: '当前知识库没有可检索的内容。',
@@ -154,6 +182,7 @@ const getRagAnnouncement = (run: AgentRun): string | null => {
 
   const rag = ragTools.at(-1)?.rag
   if (rag === null || rag === undefined) return 'RAG 来源不可用，当前响应没有可展示的来源。'
+  if (rag.status === 'loading') return 'RAG 来源加载中。'
   if (rag.references.length > 0) return `RAG 来源已加载，共 ${rag.references.length} 条。`
   if (rag.status === 'rag_unavailable' || rag.status === 'failed') {
     return 'RAG 来源加载失败，当前响应没有可展示的来源。'
@@ -440,10 +469,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const [lastAgentAssistantMessageId, setLastAgentAssistantMessageId] = useState<string | null>(
     null,
   )
+  const agentStreamState = useRef<AgentStreamState>(initialAgentStreamState)
   const activeRequest = useRef<ActiveRequest | null>(null)
 
   const sessionLabel = sessionCount === 0 ? '未命名会话' : `本地会话 ${sessionCount}`
-  const isActive = requestStatus === 'sending' || requestStatus === 'agent_running'
+  const isActive =
+    requestStatus === 'sending' ||
+    requestStatus === 'agent_running' ||
+    ['connecting', 'waiting', 'running', 'tool_running', 'rag_loading'].includes(requestStatus)
 
   const replaceAssistantContent = (messageId: string, content: string): void => {
     setMessages((currentMessages) =>
@@ -464,6 +497,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setDraft('')
     setRequestId(null)
     setAgentRun(null)
+    agentStreamState.current = initialAgentStreamState
     setTraceUnavailableMessage(null)
     setLastAgentInput(null)
     setLastChatInput(null)
@@ -511,6 +545,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     activeRequest.current = request
     setRequestId(null)
     setAgentRun(null)
+    agentStreamState.current = initialAgentStreamState
     setTraceUnavailableMessage(null)
     setErrorMessage(null)
     setCopyFeedback(null)
@@ -587,12 +622,57 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setErrorMessage(null)
     setCopyFeedback(null)
     setLastAgentAssistantMessageId(assistantMessage.id)
-    setRequestStatus('agent_running')
+    setRequestStatus(resolvedAgentClient.streamAgent ? 'connecting' : 'agent_running')
     setLastAgentInput(input)
     setAnnouncement('Agent Run 已开始。')
 
     try {
-      const run = await resolvedAgentClient.runAgent(input, request.controller.signal)
+      let run: AgentRun
+      if (resolvedAgentClient.streamAgent) {
+        await resolvedAgentClient.streamAgent(
+          input,
+          {
+            onEvent: (event) => {
+              if (activeRequest.current !== request || request.stopped) return
+              const next = reduceAgentStream(agentStreamState.current, event)
+              if (next === agentStreamState.current) return
+              agentStreamState.current = next
+              if (next.run) {
+                setAgentRun(next.run)
+                if (next.run.answer !== null)
+                  replaceAssistantContent(assistantMessage.id, next.run.answer)
+              }
+              if (event.event === 'run_started') setRequestStatus('waiting')
+              if (event.event === 'step_started') setRequestStatus('running')
+              if (event.event === 'tool_started') setRequestStatus('tool_running')
+              if (event.event === 'rag_started') setRequestStatus('rag_loading')
+              if (event.event === 'tool_completed') setRequestStatus('tool_completed')
+              if (event.event === 'tool_failed') setRequestStatus('tool_failed')
+              if (event.event === 'assistant_message') setRequestStatus('running')
+              if (event.event === 'rag_started') setAnnouncement('RAG 来源加载中。')
+            },
+          },
+          request.controller.signal,
+        )
+        run = agentStreamState.current.run ?? {
+          runId: null,
+          status: 'unknown',
+          answer: null,
+          stopReason: null,
+          steps: [],
+          events: [],
+          usage: {
+            promptTokens: null,
+            completionTokens: null,
+            totalTokens: null,
+            estimated: false,
+          },
+        }
+        if (!agentStreamState.current.terminal)
+          throw new AgentStreamFormatError('Agent SSE 未提供终止事件。')
+      } else {
+        run = await resolvedAgentClient.runAgent(input, request.controller.signal)
+      }
       if (activeRequest.current !== request || request.stopped) return
       setAgentRun(run)
       replaceAssistantContent(assistantMessage.id, fallbackAnswerForRun(run))
@@ -620,8 +700,15 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         replaceAssistantContent(assistantMessage.id, message)
         setTraceUnavailableMessage('本次 Agent 请求未收到可展示的 Trace。')
         setErrorMessage(message)
-        setRequestStatus('network')
+        setRequestStatus('connection_lost')
         setAnnouncement('Agent 网络请求失败，可重试。')
+      } else if (error instanceof AgentStreamFormatError) {
+        const message = 'Agent SSE 响应格式错误，请重试。'
+        replaceAssistantContent(assistantMessage.id, message)
+        setTraceUnavailableMessage('本次 Agent 请求的实时事件无法安全解析。')
+        setErrorMessage(message)
+        setRequestStatus('response_format_error')
+        setAnnouncement('Agent 响应格式错误，可重试。')
       } else if (error instanceof AgentBackendError || error instanceof AgentResponseError) {
         const message = getSafeAgentErrorMessage(error)
         replaceAssistantContent(assistantMessage.id, message)
@@ -876,10 +963,15 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               <h2>Agent Trace</h2>
               <span>{requestStatus === 'agent_running' ? '运行中' : traceStatus}</span>
             </div>
-            <span className="traceDelivery">完成后加载 · 非实时</span>
+            <span className="traceDelivery">实时 Agent SSE</span>
           </div>
 
-          {requestStatus === 'agent_running' ? (
+          {isActive && mode === 'agent' && !agentRun && resolvedAgentClient.streamAgent ? (
+            <div className="traceNotice">
+              <h3>{statusLabels[requestStatus]}</h3>
+              <p>正在接收后端真实 Agent 事件，尚未收到完整 Trace。</p>
+            </div>
+          ) : requestStatus === 'agent_running' && !agentRun ? (
             <div className="traceNotice">
               <h3>等待同步结果</h3>
               <p>完成后加载 Trace，非实时</p>

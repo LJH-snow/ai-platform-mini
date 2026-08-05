@@ -8,6 +8,23 @@ export type AgentRunStatus =
   | 'timed_out'
   | 'unknown'
 
+export type AgentLiveStatus =
+  | 'connecting'
+  | 'running'
+  | 'waiting'
+  | 'tool_running'
+  | 'tool_completed'
+  | 'tool_failed'
+  | 'rag_loading'
+  | 'rag_completed'
+  | 'completed'
+  | 'failed'
+  | 'timeout'
+  | 'cancelled'
+  | 'connection_lost'
+  | 'response_format_error'
+  | 'client_stopped'
+
 export type AgentToolStatus =
   | 'running'
   | 'succeeded'
@@ -22,9 +39,11 @@ export type AgentTraceEvent = {
   stepIndex: number | null
   status: AgentRunStatus | null
   stopReason: string | null
+  sequence?: number
 }
 
 export type AgentRagStatus =
+  | 'loading'
   | 'success_with_sources'
   | 'no_relevant_sources'
   | 'knowledge_base_empty'
@@ -108,6 +127,8 @@ export type AgentRun = {
   steps: AgentTraceStep[]
   events: AgentTraceEvent[]
   usage: AgentUsage
+  requestId?: string | null
+  lastSequence?: number
 }
 
 export type AgentRunInput = {
