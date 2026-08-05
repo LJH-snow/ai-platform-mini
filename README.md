@@ -13,7 +13,7 @@
 - Storage: Memory 或 PostgreSQL
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
-- 前端 Agent Console：[阶段 1 基础骨架已完成，等待用户 Review，尚未接入后端 SSE/Agent API](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
+- 前端 Agent Console：[阶段 2 普通流式聊天已完成，等待用户 Review；Agent Trace/Run/Tool/RAG UI 尚未接入](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -46,7 +46,17 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 
 ## Frontend Agent Console
 
-前端位于 `frontend/`，当前为官方 Vite React + TypeScript 脚手架上的阶段 1 基础骨架。界面只包含本地 Agent Console 空状态、会话计数、清空计数和最近动作展示；“新建会话”和“清空”仅更新本地 React 状态。当前尚未接入后端 SSE、Agent API、真实聊天、Trace 流或真实 Agent 交互。
+前端位于 `frontend/`，基于官方 Vite React + TypeScript 脚手架。阶段 1 的响应式 Agent Console 基础布局已完成；阶段 2 已接入真实的 OpenAI-compatible Chat SSE：`POST /v1/chat/completions?stream=true`。
+
+阶段 2 当前能力：
+
+- 会话区消息列表、用户输入和发送消息；
+- 使用真实 Chat SSE 增量渲染 assistant 文本；
+- 发送期间禁止重复提交，并支持停止当前请求；
+- 支持请求完成、停止、后端错误、网络失败和 SSE 连接中断状态；
+- 展示并支持复制后端返回的 `X-Request-ID`；Chat API 未提供 Run ID，因此前端不会伪造 Run ID；
+- 支持新建会话和清空当前会话；停止或切换会话后，旧流事件不会继续污染当前会话；
+- 右侧 Trace 区明确显示 `Agent Trace/SSE 尚未接入`，不模拟 Agent 事件、Tool Call、RAG 来源或 Run Trace。
 
 启动前端开发服务器：
 
@@ -55,6 +65,21 @@ cd frontend
 npm ci
 npm run dev
 ```
+
+### 前端鉴权与跨源边界
+
+前端通过运行时配置读取 Chat API 地址和 Bearer API Key，不把真实 API Key 写入源码、Git、默认配置或构建产物。开发时可以在页面加载前注入运行时配置，例如：
+
+```html
+<script>
+  window.__AI_PLATFORM_RUNTIME_CONFIG__ = {
+    apiBaseUrl: 'http://localhost:8000',
+    apiKey: '<runtime-injected-key>'
+  };
+</script>
+```
+
+当前后端未启用 `CORSMiddleware`，Vite 也没有默认 proxy；因此浏览器从前端开发源直接访问后端时，需要后端显式允许对应跨源请求，否则会被浏览器 CORS 策略拦截。Bearer API Key 注入浏览器后会暴露给浏览器运行环境和网络请求，不能视为生产级密钥保护方案。生产部署应优先使用同源 BFF/服务端代理或其他受控鉴权边界；本阶段不通过前端绕过 CORS 或鉴权，也不修改后端生产逻辑。
 
 前端验证命令：
 
@@ -74,7 +99,9 @@ cd frontend
 npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build
 ```
 
-本阶段学习总结：前端骨架应优先由官方脚手架生成，再在其基础上替换业务首屏，避免手写配置偏离生态默认。Vite 8 需要与支持 Vite 8 的 Vitest 版本配套，避免同一工程内出现 Vite 7/8 双版本导致类型不一致。阶段 1 只实现可验证的本地 UI 状态，不伪造 SSE、Trace 或 Agent 输出。测试需要隔离每个用例的渲染结果，避免 DOM 残留造成重复按钮查询失败。
+阶段 2 测试覆盖初始空状态、发送、增量内容合并、完成状态、重复提交禁止、停止请求、网络失败、SSE 连接中断、旧流事件隔离、新建会话和清空会话；前端五项门禁已由主代理独立复跑并全部通过。
+
+本阶段学习总结：普通聊天接入应先固定真实 Chat SSE 契约，再把请求生命周期、取消和流解析边界封装在前端客户端中。请求 identity 校验可以避免停止、清空或切换会话后的旧流回调污染当前状态，CRLF 兼容和读取异常分类则让连接中断更接近用户实际看到的故障。浏览器端 Bearer Key 只能作为运行时边界能力，不能替代同源 BFF 或服务端鉴权代理。阶段 2 有意不扩展 Agent Trace、Run、Tool Call 和 RAG UI，等待后续独立阶段与 Review。
 
 ## Project rules
 
