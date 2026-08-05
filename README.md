@@ -789,7 +789,7 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 - 每次新的 Agent Run 都重置流式 reducer，保证 sequence、terminal、run_id、回答和 Trace 不跨 Run 污染。
 - Run 启动后发生 prompt quota 扩展或 reservation 续期失败时，Runtime、Service 和 SSE 统一以唯一 `run_failed` 终态收口；setup failure 只保留给 Run 尚未启动的初始化失败。
 - Agent SSE 显式把 `X-RateLimit-Limit`、`X-RateLimit-Remaining` 和 `X-RateLimit-Reset` 传入实际的 `StreamingResponse`。
-- 新增前后端回归测试；当前后端门禁为 476 passed、28 skipped，前端门禁为 7 个测试文件 83 passed，完整验证结果等待本轮最终复跑确认。
+- 新增前后端回归测试；最终后端门禁为 476 passed、28 skipped，前端门禁为 7 个测试文件 83 passed，另有 1 个既有 Starlette/httpx 弃用警告。
 
 #### 阶段 6 Review 修复学习总结
 
