@@ -69,12 +69,13 @@ afterEach(() => {
 })
 
 describe('App', () => {
-  it('renders the initial empty state and keeps Trace explicitly unavailable', () => {
+  it('renders the initial chat state and describes the synchronous Agent Trace boundary', () => {
     render(<App />)
 
     expect(screen.getByText('开始一段普通对话')).toBeInTheDocument()
-    expect(screen.getByText('Agent Trace/SSE 尚未接入')).toBeInTheDocument()
-    expect(screen.getByText('Run ID：后端未提供，不伪造')).toBeInTheDocument()
+    expect(screen.getByText('等待 Agent Run')).toBeInTheDocument()
+    expect(screen.getByText(/完成后在此加载 Trace，非实时/)).toBeInTheDocument()
+    expect(screen.queryByText(/Run ID：/)).not.toBeInTheDocument()
   })
 
   it('sends messages, merges deltas, and exposes the completed request id', async () => {

@@ -353,3 +353,319 @@ textarea {
     flex-direction: column;
   }
 }
+
+/* Phase 3 Agent Trace */
+.status-agent_running {
+  color: #315efb !important;
+}
+
+.status-cancelled,
+.status-client_cancelled,
+.status-timed_out,
+.status-chat_failed,
+.status-network {
+  color: #b34a2f !important;
+}
+
+.modeSwitch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  padding: 1rem 0 0;
+}
+
+.modeSwitch button {
+  min-width: 0;
+  padding: 0.7rem 0.85rem;
+}
+
+.modeActive {
+  color: #ffffff;
+  background: #315efb;
+}
+
+.tracePanel,
+.traceContent,
+.stepTimeline,
+.traceStep,
+.traceDetails,
+.toolCard {
+  min-width: 0;
+}
+
+.traceDelivery,
+.runId {
+  overflow-wrap: anywhere;
+  text-align: right;
+  text-transform: none !important;
+}
+
+.traceContent {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-top: 1rem;
+}
+
+.traceMeta {
+  display: grid;
+  gap: 0.55rem;
+  border-radius: 18px;
+  padding: 0.9rem 1rem;
+  color: #526177;
+  background: #f5f7fb;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.compactNotice {
+  min-height: 220px;
+}
+
+.stepTimeline {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.traceStep {
+  overflow: hidden;
+  border: 1px solid #dfe6f2;
+  border-left: 4px solid #8794aa;
+  border-radius: 18px;
+  background: #fbfcff;
+}
+
+.step-completed {
+  border-left-color: #18824b;
+}
+
+.step-failed,
+.step-timed_out,
+.step-cancelled,
+.step-stopped {
+  border-left-color: #b34a2f;
+}
+
+.traceToggle {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 0;
+  padding: 0.85rem 0.95rem;
+  color: #27324a;
+  background: transparent;
+  text-align: left;
+}
+
+.traceToggle:hover:not(:disabled) {
+  background: #f1f4fa;
+  box-shadow: none;
+  transform: none;
+}
+
+.traceToggleText {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.65rem;
+  overflow-wrap: anywhere;
+}
+
+.traceBadge,
+.unknownTool,
+.toolPreviewList em {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.badge-completed,
+.badge-succeeded {
+  color: #116b3d;
+  background: #dff5e9;
+}
+
+.badge-running {
+  color: #254ed2;
+  background: #e5ebff;
+}
+
+.badge-failed,
+.badge-timed_out,
+.badge-cancelled,
+.badge-stopped {
+  color: #8f3422;
+  background: #ffe8e1;
+}
+
+.badge-unknown,
+.unknownTool,
+.toolPreviewList em {
+  color: #5e6879;
+  background: #e8edf5;
+}
+
+.toolPreviewList {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0 0.95rem 0.85rem;
+}
+
+.toolPreviewList > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.35rem 0.55rem;
+  color: #526177;
+  background: #eef2f8;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.traceDetails {
+  display: grid;
+  gap: 0.65rem;
+  border-top: 1px solid #e7ecf5;
+  padding: 0.9rem 1rem;
+  color: #526177;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.traceFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0;
+}
+
+.traceFacts > div {
+  min-width: 0;
+  border-radius: 12px;
+  padding: 0.55rem;
+  background: #f3f6fb;
+}
+
+.traceFacts dt {
+  color: #738097;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.traceFacts dd {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.srFacts {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.eventSummary {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.eventSummary ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eventSummary li {
+  border-radius: 999px;
+  padding: 0.3rem 0.55rem;
+  background: #edf1f7;
+  font-size: 0.76rem;
+}
+
+.toolCard {
+  overflow: hidden;
+  border: 1px solid #dfe6f2;
+  border-radius: 14px;
+  background: #ffffff;
+}
+
+.toolToggle {
+  padding: 0.7rem 0.8rem;
+}
+
+.safeError {
+  color: #8f3422;
+}
+
+.traceCancelled {
+  color: #8f3422;
+}
+
+.retryButton {
+  width: 100%;
+  background: #315efb;
+}
+
+@media (max-width: 520px) {
+  .shell {
+    width: min(100% - 20px, 1180px);
+    padding: 0.75rem 0;
+  }
+
+  .hero,
+  .panel,
+  .metricsBar {
+    border-radius: 20px;
+  }
+
+  .panel {
+    min-height: 500px;
+    padding: 1rem;
+  }
+
+  .modeSwitch,
+  .traceFacts {
+    grid-template-columns: 1fr;
+  }
+
+  .panelHeader,
+  .traceToggle {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .traceDelivery,
+  .runId {
+    text-align: left;
+  }
+
+  .traceBadge {
+    align-self: flex-start;
+  }
+}

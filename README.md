@@ -13,7 +13,7 @@
 - Storage: Memory 或 PostgreSQL
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
-- 前端 Agent Console：[阶段 2 普通流式聊天已完成，等待用户 Review；Agent Trace/Run/Tool/RAG UI 尚未接入](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
+- 前端 Agent Console：[阶段 3 已接入同步 Agent Run Trace 与工具调用卡片，等待用户 Review；Agent SSE 与 RAG 来源 UI 尚未接入](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -46,40 +46,44 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 
 ## Frontend Agent Console
 
-前端位于 `frontend/`，基于官方 Vite React + TypeScript 脚手架。阶段 1 的响应式 Agent Console 基础布局已完成；阶段 2 已接入真实的 OpenAI-compatible Chat SSE：`POST /v1/chat/completions?stream=true`。
+前端位于 `frontend/`，基于 Vite、React 和 TypeScript。阶段 2 的普通 Chat SSE 保持不变；阶段 3 新增独立的 Agent Run 模式，真实调用同步 `POST /api/v1/agent/runs`，并在请求完成后展示后端公开响应中的 Run 状态、步骤和工具摘要。
 
-阶段 2 当前能力：
+阶段 3 当前能力：
 
-- 会话区消息列表、用户输入和发送消息；
-- 使用真实 Chat SSE 增量渲染 assistant 文本；
-- 发送期间禁止重复提交，并支持停止当前请求；
-- 支持请求完成、停止、后端错误、网络失败和 SSE 连接中断状态；
-- 展示并支持复制后端返回的 `X-Request-ID`；Chat API 未提供 Run ID，因此前端不会伪造 Run ID；
-- 支持新建会话和清空当前会话；停止或切换会话后，旧流事件不会继续污染当前会话；
-- 右侧 Trace 区明确显示 `Agent Trace/SSE 尚未接入`，不模拟 Agent 事件、Tool Call、RAG 来源或 Run Trace。
+- 普通模式继续解析 `POST /v1/chat/completions?stream=true` 的真实 SSE 增量，不把普通聊天伪装成 Agent Trace；
+- Agent 模式使用同步 JSON 请求，等待期间明确显示“完成后加载 Trace，非实时”；
+- 左侧最终回答与右侧 Run 状态联动，支持 `completed`、`stopped`、`failed`、`cancelled`、`timed_out`，并区分浏览器中止等待与后端取消终态；
+- 领域适配层稳定排序并去重步骤/事件，组件不直接依赖后端原始 JSON；
+- 步骤卡片展示序号、决策类型、状态、工具名称和安全摘要；后端公开契约没有时间戳与耗时，因此显示“后端未提供”，不会补零或伪造；
+- Tool Call 卡片支持 `calculator` 与未知工具的成功、失败、超时、取消和未知状态；当前公开契约不包含工具输入/输出及错误详情，因此对应摘要明确显示“后端未提供”；
+- 仅在后端响应包含 `run_id` 时展示 Run ID；Token 仅在公开 `usage` 字段非空时展示实际值；
+- 支持步骤与工具摘要展开/收起、停止本地请求、失败后重新运行、新建会话和清空会话；窄屏布局避免 Trace 横向溢出；
+- 前端对 HTTP、网络、Abort 和异常响应进行安全归一化，不渲染堆栈、内部路径、API Key、Provider 原始响应或模型思维链。
+
+当前边界：后端 Agent Run API 是同步 JSON，不提供 Agent SSE，因此运行中的具体模型决策和工具状态无法实时展示；前端只在请求完成后渲染真实 Trace。公开响应也没有事件时间、步骤耗时、工具参数、工具输出或工具错误详情。Agent SSE、持久化 Trace 查询、RAG 来源 UI 和阶段 4 能力均尚未完成。
 
 启动前端开发服务器：
 
 ```bash
 cd frontend
-npm ci
+npm install
 npm run dev
 ```
 
 ### 前端鉴权与跨源边界
 
-前端通过运行时配置读取 Chat API 地址和 Bearer API Key，不把真实 API Key 写入源码、Git、默认配置或构建产物。开发时可以在页面加载前注入运行时配置，例如：
+前端通过运行时配置读取 Chat/Agent API 地址和 Bearer API Key，不把真实 API Key 写入源码、Git、默认配置或构建产物。开发时可以在页面加载前注入运行时配置：
 
 ```html
 <script>
   window.__AI_PLATFORM_RUNTIME_CONFIG__ = {
     apiBaseUrl: 'http://localhost:8000',
-    apiKey: '<runtime-injected-key>'
-  };
+    apiKey: '<runtime-injected-key>',
+  }
 </script>
 ```
 
-当前后端未启用 `CORSMiddleware`，Vite 也没有默认 proxy；因此浏览器从前端开发源直接访问后端时，需要后端显式允许对应跨源请求，否则会被浏览器 CORS 策略拦截。Bearer API Key 注入浏览器后会暴露给浏览器运行环境和网络请求，不能视为生产级密钥保护方案。生产部署应优先使用同源 BFF/服务端代理或其他受控鉴权边界；本阶段不通过前端绕过 CORS 或鉴权，也不修改后端生产逻辑。
+当前后端未启用 `CORSMiddleware`，Vite 也没有默认 proxy；浏览器跨源直连仍需后端允许对应 Origin。浏览器中的 Bearer Key 不属于生产级密钥保护方案，生产部署应优先使用同源 BFF/服务端代理或其他受控鉴权边界。本阶段不修改后端，也不通过前端绕过 CORS 或鉴权。
 
 前端验证命令：
 
@@ -92,16 +96,9 @@ npm run test
 npm run build
 ```
 
-也可以一次性运行完整前端门禁：
+阶段 3 测试覆盖空 Trace、calculator 成功/失败/超时/取消、未知工具、重复步骤与事件去重、长摘要截断与敏感内容清理、异常响应、Trace 展开/收起、回答与 Trace 状态一致、本地取消和重新运行，并保留阶段 2 的 Chat SSE 回归测试。
 
-```bash
-cd frontend
-npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build
-```
-
-阶段 2 测试覆盖初始空状态、发送、增量内容合并、完成状态、重复提交禁止、停止请求、网络失败、SSE 连接中断、旧流事件隔离、新建会话和清空会话；前端五项门禁已由主代理独立复跑并全部通过。
-
-本阶段学习总结：普通聊天接入应先固定真实 Chat SSE 契约，再把请求生命周期、取消和流解析边界封装在前端客户端中。请求 identity 校验可以避免停止、清空或切换会话后的旧流回调污染当前状态，CRLF 兼容和读取异常分类则让连接中断更接近用户实际看到的故障。浏览器端 Bearer Key 只能作为运行时边界能力，不能替代同源 BFF 或服务端鉴权代理。阶段 2 有意不扩展 Agent Trace、Run、Tool Call 和 RAG UI，等待后续独立阶段与 Review。
+阶段 3 学习总结：同步 Agent API 必须与实时 Chat SSE 在交互上明确分离，避免把请求等待状态伪装成实时 Trace。领域适配层负责去重、稳定排序、缺失字段和安全摘要，使组件只消费可审计数据。浏览器 Abort 只能证明前端停止等待，不能声称后端 Runtime 已取消。公开契约缺少时间、耗时和工具载荷时，清晰展示“后端未提供”比填充假值更可靠。
 
 ## Project rules
 
