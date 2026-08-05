@@ -96,6 +96,18 @@ describe('App', () => {
     expect(
       screen.getByText('普通回答为实时 Chat SSE；Enter 换行，Ctrl/⌘ + Enter 发送。'),
     ).toBeInTheDocument()
+    const modeGroup = screen.getByRole('group', { name: '请求模式' })
+    expect(within(modeGroup).getByRole('button', { name: '普通 Chat SSE 模式' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(within(modeGroup).getByRole('button', { name: 'Agent Run 模式' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    expect(
+      screen.getByText('普通回答为实时 Chat SSE；Enter 换行，Ctrl/⌘ + Enter 发送。'),
+    ).toHaveStyle({ color: '#64728a' })
 
     await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
 
@@ -131,6 +143,94 @@ describe('App', () => {
     const errorNotice = screen.getByRole('alert')
     expect(errorNotice).toHaveTextContent('无法连接 Agent 服务，请稍后重试。')
     expect(within(errorNotice).getByRole('button', { name: '重新运行 Agent' })).toBeInTheDocument()
+  })
+
+  it('uses semantic list and definition-list structures for accessible Agent content', async () => {
+    const user = userEvent.setup()
+    const agentClient: AgentClient = {
+      runAgent: vi.fn().mockResolvedValue({
+        runId: 'run-a11y',
+        status: 'completed',
+        answer: '基于来源的回答',
+        stopReason: null,
+        steps: [
+          {
+            id: 'step-1',
+            index: 1,
+            decisionKind: 'tool_call',
+            status: 'completed',
+            startedAt: '2026-08-05T00:00:00Z',
+            completedAt: '2026-08-05T00:00:01Z',
+            durationMs: 1000,
+            toolNames: ['knowledge_search'],
+            summary: '查询知识库',
+            events: [],
+            toolCalls: [
+              {
+                id: 'tool-1',
+                name: 'knowledge_search',
+                known: true,
+                status: 'succeeded',
+                stepIndex: 1,
+                startedAt: '2026-08-05T00:00:00Z',
+                completedAt: '2026-08-05T00:00:01Z',
+                durationMs: 1000,
+                inputSummary: '阶段六前端可访问性',
+                outputSummary: '找到 1 条来源',
+                errorCode: null,
+                errorMessage: null,
+                truncated: false,
+                rag: {
+                  status: 'success_with_sources',
+                  warning: null,
+                  errorCode: null,
+                  references: [
+                    {
+                      documentId: 'doc-1',
+                      chunkId: 'chunk-1',
+                      chunkIndex: 0,
+                      content: '语义结构应与内容类型匹配。',
+                      distance: 0.12,
+                      truncated: false,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+        events: [],
+        usage: {
+          promptTokens: null,
+          completionTokens: null,
+          totalTokens: null,
+          estimated: false,
+        },
+      }),
+    }
+    const { container } = render(<App agentClient={agentClient} />)
+
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), '检查可访问性')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+
+    await waitFor(() => expect(screen.getByText('基于来源的回答')).toBeInTheDocument())
+
+    expect(screen.getByRole('list', { name: '消息列表' })).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Agent 步骤时间线' })).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: '步骤 1 工具摘要' })).toBeInTheDocument()
+    expect(container.querySelector('dl.srFacts')).toHaveAttribute('aria-label', '步骤时间信息')
+    expect(
+      [...container.querySelectorAll('div[aria-label]')].filter(
+        (element) => !element.hasAttribute('role'),
+      ),
+    ).toHaveLength(0)
+    expect(container.querySelector('.traceFacts dt')).toHaveStyle({ color: '#526177' })
+    expect(container.querySelector('.ragReferenceFacts dt')).toHaveStyle({ color: '#526177' })
+    expect(container.querySelector('.message-user > .messageRole')).toHaveStyle({
+      color: '#ffffff',
+      opacity: '1',
+    })
   })
 
   it('sends messages, merges deltas, and exposes the completed request id', async () => {

@@ -317,8 +317,18 @@ describe('Agent Trace integration', () => {
     await user.keyboard(' ')
     expect(stepButton).toHaveAttribute('aria-expanded', 'true')
     expect(stepButton).toHaveAccessibleName(/收起/)
-    expect(within(stepContent as HTMLElement).getByText('开始时间：后端未提供')).toBeVisible()
-    expect(stepContent?.querySelector('.traceFacts dd:last-child')).toBeVisible()
+    const traceFacts = stepContent?.querySelector('.traceFacts')
+    expect(traceFacts).toBeInTheDocument()
+    expect(within(traceFacts as HTMLElement).getByText('开始时间')).toBeVisible()
+    expect([...traceFacts!.querySelectorAll('dd')].map((item) => item.textContent)).toEqual([
+      '后端未提供',
+      '后端未提供',
+      '后端未提供',
+    ])
+    const srFacts = stepContent?.querySelector('.srFacts')
+    expect(srFacts).toHaveAttribute('aria-label', '步骤时间信息')
+    expect(srFacts?.querySelector('dt')).toHaveTextContent('开始时间')
+    expect(srFacts?.querySelector('dt + dd')).toHaveTextContent('后端未提供')
 
     const toolButton = screen.getByRole('button', { name: /calculator.*成功/ })
     expect(toolButton).toHaveAccessibleName(/展开/)

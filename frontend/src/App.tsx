@@ -381,15 +381,15 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
         <span className={`traceBadge badge-${step.status}`}>{runStatusLabels[step.status]}</span>
       </button>
       {step.toolCalls.length > 0 ? (
-        <div className="toolPreviewList" aria-label={`步骤 ${step.index} 工具摘要`}>
+        <ul className="toolPreviewList" aria-label={`步骤 ${step.index} 工具摘要`}>
           {step.toolCalls.map((tool) => (
-            <span key={tool.id}>
+            <li key={tool.id}>
               <strong>{tool.name}</strong>
               {!tool.known ? <em>未知工具</em> : null}
               <span>{toolStatusLabels[tool.status]}</span>
-            </span>
+            </li>
           ))}
-        </div>
+        </ul>
       ) : null}
       <div id={contentId} className="traceDetails stepDetails" hidden={!expanded}>
         <p>{step.summary}</p>
@@ -407,11 +407,20 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
             <dd>{step.durationMs === null ? '后端未提供' : `${step.durationMs} ms`}</dd>
           </div>
         </dl>
-        <div className="srFacts" aria-label="步骤时间信息">
-          <span>开始时间：{step.startedAt ?? '后端未提供'}</span>
-          <span>完成时间：{step.completedAt ?? '后端未提供'}</span>
-          <span>耗时：{step.durationMs === null ? '后端未提供' : `${step.durationMs} ms`}</span>
-        </div>
+        <dl className="srFacts" aria-label="步骤时间信息">
+          <div>
+            <dt>开始时间</dt>
+            <dd>{step.startedAt ?? '后端未提供'}</dd>
+          </div>
+          <div>
+            <dt>完成时间</dt>
+            <dd>{step.completedAt ?? '后端未提供'}</dd>
+          </div>
+          <div>
+            <dt>耗时</dt>
+            <dd>{step.durationMs === null ? '后端未提供' : `${step.durationMs} ms`}</dd>
+          </div>
+        </dl>
         {step.events.length > 0 ? (
           <div className="eventSummary">
             <span className="metricLabel">可审计事件</span>
@@ -873,7 +882,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             ) : null}
           </div>
 
-          <div className="modeSwitch" aria-label="请求模式">
+          <div className="modeSwitch" role="group" aria-label="请求模式">
             <button
               type="button"
               className={mode === 'chat' ? 'modeActive' : 'secondaryButton'}
@@ -911,14 +920,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               </p>
             </div>
           ) : (
-            <div className="messageList" aria-label="消息列表">
+            <ol className="messageList" aria-label="消息列表">
               {messages.map((message) => (
-                <div key={message.id} className={`message message-${message.role}`}>
+                <li key={message.id} className={`message message-${message.role}`}>
                   <span className="messageRole">{message.role === 'user' ? '你' : '助手'}</span>
                   <p>{message.content || (isActive ? '…' : '（无文本内容）')}</p>
-                </div>
+                </li>
               ))}
-            </div>
+            </ol>
           )}
 
           {errorMessage ? (

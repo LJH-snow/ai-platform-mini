@@ -201,8 +201,10 @@ h1 {
   align-content: start;
   flex: 1;
   gap: 1rem;
+  margin: 0;
   overflow-y: auto;
   padding: 1.25rem 0.25rem;
+  list-style: none;
 }
 
 .message {
@@ -234,7 +236,11 @@ h1 {
   margin-bottom: 0.25rem;
   font-size: 0.75rem;
   font-weight: 800;
-  opacity: 0.72;
+}
+
+.message-user .messageRole {
+  color: #ffffff;
+  opacity: 1;
 }
 
 .composer {
@@ -270,7 +276,7 @@ textarea {
 }
 
 .composerHint {
-  color: #7a879b;
+  color: #64728a;
   font-size: 0.8rem;
 }
 
@@ -523,10 +529,12 @@ textarea {
   min-width: 0;
   flex-wrap: wrap;
   gap: 0.45rem;
+  margin: 0;
   padding: 0 0.95rem 0.85rem;
+  list-style: none;
 }
 
-.toolPreviewList > span {
+.toolPreviewList > li {
   display: inline-flex;
   min-width: 0;
   align-items: center;
@@ -565,7 +573,7 @@ textarea {
 }
 
 .traceFacts dt {
-  color: #738097;
+  color: #526177;
   font-size: 0.72rem;
   font-weight: 800;
 }
@@ -692,7 +700,7 @@ textarea {
 }
 
 .ragReferenceFacts dt {
-  color: #738097;
+  color: #526177;
   font-size: 0.7rem;
   font-weight: 800;
 }
