@@ -22,18 +22,42 @@ JSON 拆成假事件。事件由单调 `sequence` 和真实 `run_id`/`request_id
   状态转换和错误恢复。
 - 高频回答内容不进入逐字 live region；重要状态使用低频播报，Trace disclosure
   保持键盘和 `aria-expanded`/`aria-controls` 语义。
+- 开发期增加 Vite dev-only proxy：`/api` 和 `/v1` 由 Node 进程转发到
+  `AI_PLATFORM_DEV_API_BASE_URL`，并仅由 Node proxy 使用 `AI_PLATFORM_DEV_API_KEY`
+  注入后端 `Authorization` header；两个变量不进入浏览器 bundle 或生产构建。
 
 ## 验证记录
 
 后端已通过 `ruff format --check .`、`ruff check .`、`mypy app tests` 和
 `pytest -q`；集成测试按既有环境条件跳过。前端已通过 `npm run format:check`、
-`npm run lint`、`npm run typecheck`、`npm test -- --run`（7 个测试文件、76 个测试全部通过）
+`npm run lint`、`npm run typecheck`、`npm test -- --run`（7 个测试文件、79 个测试全部通过）
 和 `npm run build`。
 
 已在真实浏览器验证 320px、375px、768px、1024px、1440px 五档无横向溢出，
-并核对静态页面文案和 Agent 模式展示。键盘焦点与屏幕阅读器行为未包含在本次验证中。
-真实后端 Agent SSE 浏览器端到端仍未完成：默认前端页面没有注入 runtime API 配置，
-后端也未启用 CORS，因此不能声称浏览器已经收到并展示真实 `answer_delta`。
+并核对 Agent 模式展示。通过开发期 Vite proxy 已完成真实后端浏览器端到端验证，
+具体包括 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、
+停止等待后显示“后端终态未知”、offline 后 `connection_lost`、恢复网络后重试成功，
+以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
+
+RAG 真实浏览器路径未验证：当前默认 `RAG_ENABLED=false`，且没有可用 PostgreSQL/RAG
+服务。RAG 安全投影和状态由后端/组件测试覆盖；测试覆盖不等同于真实浏览器来源，
+不能据此伪造来源或声称回答包含精确引用。键盘焦点与屏幕阅读器行为也未完成完整浏览器级
+验证，不能把语义化控件测试或静态回归等同于辅助技术验收。
+
+开发期 proxy 的两个变量都不使用 `VITE_` 前缀，只由 Vite 的 Node 进程读取；普通 Chat
+SSE 和 Agent SSE 都通过标准 Vite proxy 转发，以保留流式响应语义。生产构建不启用该
+proxy，生产入口仍保持原有运行时配置和 Bearer Key 安全边界。
+
+## 阶段完成审计口径
+
+- 阶段 6 的“已完成”依据：后端/前端门禁通过，真实浏览器通过开发期 proxy 验证真实
+  Agent SSE 的增量、Trace、Tool Call、停止等待、断网/恢复和键盘输入路径，五档视口均无
+  横向溢出。
+- 阶段 6 的“未验证”依据：默认 `RAG_ENABLED=false` 且缺少可用 PostgreSQL/RAG 服务，
+  所以没有 RAG 真实浏览器证据；后端/组件测试只能证明安全投影与状态逻辑，不能提供真实
+  来源。键盘焦点与屏幕阅读器仍缺少完整浏览器级证据。
+- 阶段 6 不宣称回答内精确引用、持久化 Trace 查询、事件回放、精确 usage、MCP UI 或
+  复杂多 Agent 编排仍不在阶段 6 范围内。本轮已完成开发代理、重试修复、浏览器和测试验收，准备提交并等待用户 Code Review，不进入阶段 7。
 
 ## 已知限制与 Review 项
 
@@ -53,4 +77,4 @@ Observer 与 Recorder 同时存在时的兼容方式，以及断连后是否需�
 
 ## 学习总结
 
-复用 Runtime Observer 能让实时 Trace 与同步结果共享真实执行顺序，避免前端推断 Agent 状态。`answer_delta` 必须来自真实 provider chunk，不能从模型 JSON 或完整回答拆分。事件公开层必须严格投影字段，尤其是 RAG、错误和回答内容。空流、Provider 错误、超时和取消都保留各自真实语义。Abort、网络断连和后端取消是不同状态，必须由不同证据驱动。精确 usage、事件回放、持久化查询、回答内精确引用、MCP UI 和复杂编排留在后续阶段。
+复用 Runtime Observer 能让实时 Trace 与同步结果共享真实执行顺序，避免前端推断 Agent 状态。`answer_delta` 必须来自真实 provider chunk，不能从模型 JSON 或完整回答拆分。开发期 Vite proxy 说明真实浏览器验证还需要清晰的服务端鉴权边界：key 只在 Node proxy 注入，不能进入浏览器 bundle。事件公开层必须严格投影字段，尤其是 RAG、错误和回答内容；RAG 测试证据不能替代真实来源。Abort、网络断连和后端取消是不同状态，必须由不同证据驱动。精确 usage、事件回放、持久化查询、回答内精确引用、MCP UI、完整辅助技术验收和复杂编排留在后续阶段。

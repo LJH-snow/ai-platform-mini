@@ -14,7 +14,7 @@
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
-- 前端 Agent Console：[阶段 6 已接入 Agent SSE、实时 Trace、Tool/RAG 状态和错误边界；已完成浏览器五档静态页面回归，真实后端 Agent SSE 浏览器端到端仍未完成，也不提供回答内精确引用](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md)
+- 前端 Agent Console：[阶段 6 已接入 Agent SSE、实时 Trace、Tool/RAG 状态和错误边界；开发期 Vite proxy 已用于真实浏览器流式验证](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -107,9 +107,9 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - Request ID 与真实 Run ID 提供复制反馈；Chat/Agent 错误使用安全文案并支持重试，重试和会话切换隔离旧回答、Trace、来源、错误及晚到回调；
 - 响应式目标覆盖 320px、375px、768px、1024px 和 1440px，长回答与长标识支持换行或安全截断；
 - Agent SSE 解析真实的 `run_started`、Step、Tool、RAG、回答和终止事件；事件按 `run_id`/`sequence` 隔离，重复或乱序事件安全忽略；
-- 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（7 个测试文件、76 个测试全部通过）和生产构建。已在真实浏览器验证 320px、375px、768px、1024px、1440px 下无横向溢出，并核对静态页面文案和 Agent 模式展示；未据此声称键盘焦点、屏幕阅读器或真实后端 Agent SSE 浏览器端到端已通过。
+- 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（7 个测试文件、79 个测试全部通过）和生产构建。真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行；320px、375px、768px、1024px、1440px 五档均无横向溢出。键盘焦点与屏幕阅读器尚未完成完整浏览器级验证。
 
-当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 仅是 legacy/非 streaming 兼容事件，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。后端不提供事件时间、步骤耗时或精确 Token 统计/usage，前端不补造这些数据。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。默认前端页面没有注入 runtime API 配置，后端也未启用 CORS，因此真实后端 Agent SSE 浏览器端到端尚未完成，不能声称浏览器已经收到并展示真实 `answer_delta`。事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
+当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 仅是 legacy/非 streaming 兼容事件，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。后端不提供事件时间、步骤耗时或精确 Token 统计/usage，前端不补造这些数据。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。开发期 Vite proxy 的 key 只由 Node proxy 注入，不进入浏览器 bundle；RAG 真实浏览器因默认 `RAG_ENABLED=false` 且没有可用 PostgreSQL/RAG 服务而未验证，RAG 安全投影和状态仅由后端/组件测试覆盖，不能伪造来源。事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
 
 > [Agent SSE 事件契约](docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md) 和 [阶段 6 开发记录](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md) 记录真实事件、字段、顺序、终止与取消边界。
 
@@ -121,9 +121,20 @@ npm install
 npm run dev
 ```
 
+连接本地后端和开发 API Key：
+
+```bash
+cd frontend
+AI_PLATFORM_DEV_API_BASE_URL=http://127.0.0.1:8000 \
+AI_PLATFORM_DEV_API_KEY=sk-your-dev-key \
+npm run dev
+```
+
 ### 前端鉴权与跨源边界
 
-前端通过运行时配置读取 Chat/Agent API 地址和 Bearer API Key，不把真实 API Key 写入源码、Git、默认配置或构建产物。开发时可以在页面加载前注入运行时配置：
+开发期 Vite dev server 会把同源 `/api` 和 `/v1` 转发到 `AI_PLATFORM_DEV_API_BASE_URL`（默认 `http://127.0.0.1:8000`），并从 Node 进程环境变量 `AI_PLATFORM_DEV_API_KEY` 注入后端请求的 `Authorization` header。它们不使用 `VITE_` 前缀，不进入 `import.meta.env`，也不会写入浏览器源码、Git、默认配置或生产构建；普通 Chat SSE 和 Agent SSE 都通过标准 Vite proxy 保持流式。
+
+生产入口仍通过运行时配置读取 Chat/Agent API 地址和 Bearer API Key。开发时如需绕过 dev proxy，也可以在页面加载前注入运行时配置：
 
 ```html
 <script>
@@ -134,7 +145,7 @@ npm run dev
 </script>
 ```
 
-当前后端未启用 `CORSMiddleware`，Vite 也没有默认 proxy；浏览器跨源直连仍需后端允许对应 Origin。浏览器中的 Bearer Key 不属于生产级密钥保护方案，生产部署应优先使用同源 BFF/服务端代理或其他受控鉴权边界。本阶段不修改后端，也不通过前端绕过 CORS 或鉴权。
+生产构建不启用 Vite dev proxy；浏览器跨源直连仍需后端允许对应 Origin。浏览器中的 Bearer Key 不属于生产级密钥保护方案，生产部署应优先使用同源 BFF/服务端代理或其他受控鉴权边界。本阶段不修改后端，也不通过前端绕过 CORS 或鉴权。
 
 前端验证命令：
 
@@ -761,12 +772,13 @@ RAG Tool 化的关键不是复制一套检索代码，而是把现有 `RAGServic
 
 Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制一套 Agent Loop。单 run Recorder 加上显式 `recorder_factory` 边界，可以在保持简单的同时避免并发状态污染。脱敏和截断必须位于记录边界，默认不保存 prompt、工具参数和外部检索原文。持久化、实时推送和查询接口应作为后续 Sprint 的独立能力演进。
 
-### 阶段 5 / Agent Console 收口
+### 阶段 5 / Agent Console 收口与阶段 6 浏览器验收
 
 - 完成键盘可访问性、单独低频 live region、非颜色状态表达、Step/Tool/RAG disclosure、Request ID/Run ID 复制反馈、Chat/Agent 错误恢复和旧 Run 隔离。
-- 前端五项门禁通过：format、lint、typecheck、7 个测试文件中的 76 个测试和 build；真实浏览器已验证 320/375/768/1024/1440 五档无横向溢出，并核对静态页面文案和 Agent 模式展示。真实后端 Agent SSE 浏览器端到端因默认前端没有 runtime API 注入且后端未启用 CORS 而未完成。
+- 前端五项门禁通过：format、lint、typecheck、7 个测试文件中的 79 个测试和 build；真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
+- 真实浏览器已验证 320/375/768/1024/1440 五档无横向溢出，并核对 Agent 模式展示。当前默认 `RAG_ENABLED=false`，且没有可用 PostgreSQL/RAG 服务，因此 RAG 真实浏览器路径未验证；RAG 安全投影和状态由后端/组件测试覆盖，不能把测试结果写成真实来源或浏览器来源。
 - 保留阶段 2—5 的 Chat SSE、同步 Agent Trace、Tool 状态和 RAG 来源契约；阶段 6 已实现 Agent SSE、实时 Trace 和实时 RAG 状态投影，持久化查询和回答内精确引用仍未实现。
 
 #### 阶段 5 学习总结
 
-本阶段确认可访问性状态应与视觉增量渲染分离，避免 SSE 内容更新造成过度播报。错误恢复必须同时处理安全文案、旧请求隔离和可重试路径，不能只补一个按钮。RAG disclosure 通过稳定的 `aria-controls` 目标和 `hidden` 控制保持语义一致。浏览器五档静态页面回归已覆盖横向溢出、文案和 Agent 模式展示；真实后端 Agent SSE、键盘焦点和屏幕阅读器行为仍需独立端到端验证。
+本阶段确认可访问性状态应与视觉增量渲染分离，避免 SSE 内容更新造成过度播报；真实浏览器验证也必须覆盖代理、断连、重试和停止等待等状态边界。开发期 Vite proxy 让浏览器能够在不把 key 注入 bundle 的前提下观察真实 `answer_delta`、Trace 和 Tool Call，但 RAG 真实浏览器验证仍受默认开关和基础设施限制。浏览器五档回归已覆盖横向溢出、文案和 Agent 模式展示；键盘焦点与屏幕阅读器尚未完成完整浏览器级验证，因此不能把语义化控件测试等同于辅助技术验收。

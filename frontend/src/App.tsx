@@ -819,7 +819,15 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     !isActive &&
     ((mode === 'agent' && lastAgentInput !== null) ||
       (mode === 'chat' && lastChatInput !== null)) &&
-    ['failed', 'network', 'timed_out', 'chat_failed', 'interrupted'].includes(requestStatus)
+    [
+      'failed',
+      'network',
+      'timed_out',
+      'chat_failed',
+      'interrupted',
+      'connection_lost',
+      'response_format_error',
+    ].includes(requestStatus)
 
   return (
     <main className="shell">

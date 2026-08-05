@@ -63,9 +63,9 @@
 ### 响应式目标与验证
 
 - 响应式目标宽度为 **320px、375px、768px、1024px 和 1440px**；长回答、Run ID、call ID、chunk ID、Tool 摘要和 RAG 内容允许换行或安全截断，操作区和触摸目标保持可用。
-- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **7 个测试文件、76 个测试全部通过**。
+- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **7 个测试文件、79 个测试全部通过**。
 - 已在真实浏览器验证 320/375/768/1024/1440 五档无横向溢出，并核对静态页面文案和 Agent 模式展示。该回归不等同于键盘焦点或屏幕阅读器验证。
-- 真实后端 Agent SSE 浏览器端到端尚未完成：默认前端页面没有注入 runtime API 配置，后端也未启用 CORS，因此不能声称浏览器已经收到并展示真实 `answer_delta`。
+- 开发期 Vite proxy 已提供同源真实后端边界；本轮真实浏览器已通过代理验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后显示“后端终态未知”、offline 后显示 `connection_lost`、恢复网络后重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
 
 ## 阶段 6 实时 Agent Run
 
@@ -74,6 +74,13 @@
 - 前端状态覆盖 connecting、running、waiting、tool running/completed/failed、RAG loading/completed、completed、failed、timeout、cancelled、connection lost 和 response format error；状态不只依赖颜色。
 - 前端 Abort/停止等待不等于后端取消，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和 `stream_error` 分别表示连接/启动边界，不伪造 Run 终态。
 - RAG 仅显示 `knowledge_search` 的 loading、真实安全来源和真实失败状态；不显示 Prompt、工具输入输出、Provider 原始响应、堆栈、密钥、时间、耗时或假 Token。空回答流不会生成补充文本；Provider 错误、超时或取消只展示相应真实错误/终止状态，已知增量不会被伪装成完整成功回答。
+
+### 阶段 6 真实浏览器验证边界
+
+- 本轮通过开发期 Vite proxy 完成真实 Agent SSE 浏览器验证；proxy 使用 Node 进程环境变量 `AI_PLATFORM_DEV_API_BASE_URL` 和 `AI_PLATFORM_DEV_API_KEY`，key 只由 Node proxy 注入后端请求，不进入浏览器 bundle 或 `import.meta.env`。
+- 已验证真实增量回答、实时 Trace、两步 calculator Tool Call、停止等待与后端终态未知、网络断开后的 `connection_lost`、恢复网络后的重试，以及键盘多行和运行快捷键。
+- RAG 真实浏览器未验证：当前默认 `RAG_ENABLED=false`，且没有可用 PostgreSQL/RAG 服务。RAG 安全投影和状态由后端/组件测试覆盖；这些测试不能被记录为真实浏览器来源，也不能伪造来源。
+- 320/375/768/1024/1440 五档均无横向溢出。键盘焦点与屏幕阅读器仍未完成完整浏览器级验证，不能把语义化控件测试或静态回归等同于辅助技术验收。
 
 ## 尚未实现或不在阶段 6 范围
 
@@ -86,7 +93,17 @@
 
 ## 鉴权与跨源运行时边界
 
-后端 Chat 和 Agent API 使用 Bearer API Key，但当前后端没有配置 `CORSMiddleware`，Vite 也没有默认 proxy。浏览器跨源直连时除了有效的 `Authorization: Bearer ...`，还需要后端允许前端 Origin。
+后端 Chat 和 Agent API 使用 Bearer API Key。开发期 `npm run dev` 会启用 Vite dev-only proxy：同源 `/api` 和 `/v1` 请求会转发到 Node 进程环境变量 `AI_PLATFORM_DEV_API_BASE_URL`，未设置时默认 `http://127.0.0.1:8000`。如果 Node 进程环境变量 `AI_PLATFORM_DEV_API_KEY` 非空，proxy 会在转发到后端时注入 `Authorization: Bearer ...`。
+
+开发启动示例：
+
+```bash
+AI_PLATFORM_DEV_API_BASE_URL=http://127.0.0.1:8000 \
+AI_PLATFORM_DEV_API_KEY=sk-your-dev-key \
+npm run dev
+```
+
+这些变量刻意不使用 `VITE_` 前缀，只由 Vite 的 Node 进程读取，不通过 `import.meta.env`、源码默认值、runtime config 或生产构建暴露给浏览器。普通 Chat SSE 和 Agent SSE 都走标准 Vite proxy 路径，保持流式响应，不在前端代码中改写 SSE 传输。
 
 前端不把 API Key 写入源码、Git、默认配置或编译产物。生产入口可以在 bundle 加载前注入运行时配置：
 
@@ -99,7 +116,7 @@
 </script>
 ```
 
-运行时注入不改变浏览器暴露 Bearer Key 的安全边界。高权限长期密钥应由同源 BFF、服务端代理或其他受控鉴权边界持有；本阶段不修改后端，也不默认加入 Vite proxy。
+运行时注入不改变浏览器暴露 Bearer Key 的安全边界。生产构建不启用 Vite dev proxy，生产入口仍保持运行时配置不变；高权限长期密钥应由同源 BFF、服务端代理或其他受控鉴权边界持有。浏览器跨源直连时除了有效的 `Authorization: Bearer ...`，仍需要后端允许前端 Origin。
 
 `App` 支持注入 `chatClient` 和 `agentClient` 作为测试边界；真实应用使用 `window.__AI_PLATFORM_RUNTIME_CONFIG__`。未配置 `apiBaseUrl` 时，前端使用同源 `/v1/chat/completions` 与 `/api/v1/agent/runs`。
 

@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App.tsx'
+import { AgentNetworkError, type AgentClient } from './agent/client.ts'
 import { ChatBackendError, ChatNetworkError, type ChatClient } from './chat/client.ts'
 import type { ChatApiMessage, ChatStreamHandlers, ChatStreamResult } from './chat/types.ts'
 
@@ -63,6 +64,15 @@ const createControlledClient = (): {
   }
 }
 
+const createNetworkFailingAgentClient = (): AgentClient => ({
+  runAgent: async () => {
+    throw new AgentNetworkError()
+  },
+  streamAgent: async () => {
+    throw new AgentNetworkError()
+  },
+})
+
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
@@ -107,6 +117,20 @@ describe('App', () => {
     expect(screen.getByText('实时 Agent SSE')).toBeInTheDocument()
     expect(screen.queryByText(/同步请求|完成后加载 Trace|非实时/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Run ID：/)).not.toBeInTheDocument()
+  })
+
+  it('shows the Agent retry action when an Agent network request fails', async () => {
+    const user = userEvent.setup()
+    render(<App agentClient={createNetworkFailingAgentClient()} />)
+
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), '网络失败')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('连接已断开'))
+    const errorNotice = screen.getByRole('alert')
+    expect(errorNotice).toHaveTextContent('无法连接 Agent 服务，请稍后重试。')
+    expect(within(errorNotice).getByRole('button', { name: '重新运行 Agent' })).toBeInTheDocument()
   })
 
   it('sends messages, merges deltas, and exposes the completed request id', async () => {

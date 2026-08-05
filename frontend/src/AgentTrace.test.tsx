@@ -586,6 +586,28 @@ describe('Agent Trace integration', () => {
     expect(screen.queryByText('Run ID：run-real-123')).not.toBeInTheDocument()
   })
 
+  it('allows retrying an Agent request after the connection is lost', async () => {
+    const controlled = createControlledAgentClient()
+    await startAgentRun(controlled)
+    controlled.getRequest().reject(new AgentNetworkError())
+
+    expect(await screen.findByRole('button', { name: '重新运行 Agent' })).toBeInTheDocument()
+  })
+
+  it('allows retrying an Agent request after an SSE response format error', async () => {
+    const controlled = createControlledAgentStreamClient()
+    const user = userEvent.setup()
+    render(<App chatClient={idleChatClient} agentClient={controlled.client} />)
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), '触发格式错误')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+
+    controlled.getRequest().complete()
+
+    expect(await screen.findByRole('button', { name: '重新运行 Agent' })).toBeInTheDocument()
+  })
+
   it.each([
     ['HTTP', new AgentBackendError('Agent 服务暂时不可用，请稍后重试。', 502, null)],
     ['网络', new AgentNetworkError()],
