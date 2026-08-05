@@ -37,12 +37,16 @@ JSON 拆成假事件。事件由单调 `sequence` 和真实 `run_id`/`request_id
 并核对 Agent 模式展示。通过开发期 Vite proxy 已完成真实后端浏览器端到端验证，
 具体包括 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、
 停止等待后显示“后端终态未知”、offline 后 `connection_lost`、恢复网络后重试成功，
-以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
+以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。Trace 步骤按钮已在真实浏览器核对
+`aria-expanded`/`aria-controls`；点击后按钮焦点保持不变，Trace 内容正确展开。普通
+键盘输入与提交路径也已验证。
 
 RAG 真实浏览器路径未验证：当前默认 `RAG_ENABLED=false`，且没有可用 PostgreSQL/RAG
-服务。RAG 安全投影和状态由后端/组件测试覆盖；测试覆盖不等同于真实浏览器来源，
-不能据此伪造来源或声称回答包含精确引用。键盘焦点与屏幕阅读器行为也未完成完整浏览器级
-验证，不能把语义化控件测试或静态回归等同于辅助技术验收。
+服务。为补齐环境进行的尝试中，Docker Desktop 可以启动，但 Compose 拉取 Ollama
+镜像超过 1.5GB 后停止，未形成可用的 PostgreSQL/pgvector+embedding 服务。RAG 安全
+投影和状态由后端/组件测试覆盖；测试覆盖不等同于真实浏览器来源，不能据此伪造来源或
+声称回答包含精确引用。Trace 按钮的焦点保持和展开语义已完成浏览器验证，但完整屏幕
+阅读器验证仍未完成，不能把语义化控件测试或静态回归等同于辅助技术验收。
 
 开发期 proxy 的两个变量都不使用 `VITE_` 前缀，只由 Vite 的 Node 进程读取；普通 Chat
 SSE 和 Agent SSE 都通过标准 Vite proxy 转发，以保留流式响应语义。生产构建不启用该
@@ -51,13 +55,16 @@ proxy，生产入口仍保持原有运行时配置和 Bearer Key 安全边界。
 ## 阶段完成审计口径
 
 - 阶段 6 的“已完成”依据：后端/前端门禁通过，真实浏览器通过开发期 proxy 验证真实
-  Agent SSE 的增量、Trace、Tool Call、停止等待、断网/恢复和键盘输入路径，五档视口均无
-  横向溢出。
-- 阶段 6 的“未验证”依据：默认 `RAG_ENABLED=false` 且缺少可用 PostgreSQL/RAG 服务，
-  所以没有 RAG 真实浏览器证据；后端/组件测试只能证明安全投影与状态逻辑，不能提供真实
-  来源。键盘焦点与屏幕阅读器仍缺少完整浏览器级证据。
+  Agent SSE 的增量、Trace、Tool Call、停止等待、断网/恢复、普通键盘输入/提交和
+  Trace disclosure 交互路径，包含 `aria-expanded`/`aria-controls`、点击后焦点保持及
+  正确展开；五档视口均无横向溢出。
+- 阶段 6 的“未验证”依据：默认 `RAG_ENABLED=false`；Docker Desktop 虽可启动，但
+  Compose 拉取 Ollama 镜像超过 1.5GB 后停止，未形成可用 PostgreSQL/pgvector+embedding
+  服务，所以没有 RAG 真实浏览器证据。后端/组件测试只能证明安全投影与状态逻辑，不能
+  提供真实来源。完整屏幕阅读器验证仍未完成。
 - 阶段 6 不宣称回答内精确引用、持久化 Trace 查询、事件回放、精确 usage、MCP UI 或
-  复杂多 Agent 编排仍不在阶段 6 范围内。本轮已完成开发代理、重试修复、浏览器和测试验收，准备提交并等待用户 Code Review，不进入阶段 7。
+ 复杂多 Agent 编排仍不在阶段 6 范围内。本轮已完成开发代理、重试修复、浏览器和测试验收，
+  已有 commits `a810254` 和 `73c4d3d` 已提交并推送；本轮验收记录已补录，当前文档变更待提交/推送，等待用户 Code Review，不进入阶段 7。
 
 ## 已知限制与 Review 项
 
