@@ -109,7 +109,7 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - Agent SSE 解析真实的 `run_started`、Step、Tool、RAG、回答和终止事件；事件按 `run_id`/`sequence` 隔离，重复或乱序事件安全忽略；
 - 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（7 个测试文件、79 个测试全部通过）和生产构建。真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行；320px、375px、768px、1024px、1440px 五档均无横向溢出。键盘焦点与屏幕阅读器尚未完成完整浏览器级验证。
 
-当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 仅是 legacy/非 streaming 兼容事件，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。后端不提供事件时间、步骤耗时或精确 Token 统计/usage，前端不补造这些数据。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。开发期 Vite proxy 的 key 只由 Node proxy 注入，不进入浏览器 bundle；RAG 真实浏览器因默认 `RAG_ENABLED=false` 且没有可用 PostgreSQL/RAG 服务而未验证，RAG 安全投影和状态仅由后端/组件测试覆盖，不能伪造来源。事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
+当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 仅是 legacy/非 streaming 兼容事件，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。后端不提供事件时间、步骤耗时或精确 Token 统计/usage，前端不补造这些数据。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。开发期 Vite proxy 的 key 只由 Node proxy 注入，不进入浏览器 bundle；真实浏览器已验证 RAG 来源加载、来源暂不可用、`embedding_failed` 和最终 `no_relevant_sources` 状态，但 `success_with_sources` 成功来源与 `knowledge_base_empty` 空知识库路径仍未验证。当前默认 `RAG_ENABLED=false`，且 Ollama embedding `/api/embed` 不可用，因此不能声称已验证真实来源；RAG 安全投影和状态仅由后端/组件测试覆盖，不能伪造来源。事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
 
 > [Agent SSE 事件契约](docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md) 和 [阶段 6 开发记录](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md) 记录真实事件、字段、顺序、终止与取消边界。
 
@@ -776,9 +776,9 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 
 - 完成键盘可访问性、单独低频 live region、非颜色状态表达、Step/Tool/RAG disclosure、Request ID/Run ID 复制反馈、Chat/Agent 错误恢复和旧 Run 隔离。
 - 前端五项门禁通过：format、lint、typecheck、7 个测试文件中的 79 个测试和 build；真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
-- 真实浏览器已验证 320/375/768/1024/1440 五档无横向溢出，并核对 Agent 模式展示。当前默认 `RAG_ENABLED=false`，且没有可用 PostgreSQL/RAG 服务，因此 RAG 真实浏览器路径未验证；RAG 安全投影和状态由后端/组件测试覆盖，不能把测试结果写成真实来源或浏览器来源。
+- 真实浏览器已验证 320/375/768/1024/1440 五档无横向溢出，并核对 Agent 模式展示；RAG 已验证来源加载、来源暂不可用、`embedding_failed` 和最终 `no_relevant_sources` 状态。`success_with_sources` 成功来源与 `knowledge_base_empty` 空知识库路径仍未验证。当前默认 `RAG_ENABLED=false`，且 Ollama embedding `/api/embed` 不可用，因此不能声称已验证真实来源；RAG 安全投影和状态由后端/组件测试覆盖，不能把测试结果写成真实来源或浏览器来源。
 - 保留阶段 2—5 的 Chat SSE、同步 Agent Trace、Tool 状态和 RAG 来源契约；阶段 6 已实现 Agent SSE、实时 Trace 和实时 RAG 状态投影，持久化查询和回答内精确引用仍未实现。
 
 #### 阶段 5 学习总结
 
-本阶段确认可访问性状态应与视觉增量渲染分离，避免 SSE 内容更新造成过度播报；真实浏览器验证也必须覆盖代理、断连、重试和停止等待等状态边界。开发期 Vite proxy 让浏览器能够在不把 key 注入 bundle 的前提下观察真实 `answer_delta`、Trace 和 Tool Call，但 RAG 真实浏览器验证仍受默认开关和基础设施限制。浏览器五档回归已覆盖横向溢出、文案和 Agent 模式展示；键盘焦点与屏幕阅读器尚未完成完整浏览器级验证，因此不能把语义化控件测试等同于辅助技术验收。
+本阶段确认可访问性状态应与视觉增量渲染分离，避免 SSE 内容更新造成过度播报；真实浏览器验证也必须覆盖代理、断连、重试和停止等待等状态边界。开发期 Vite proxy 让浏览器能够在不把 key 注入 bundle 的前提下观察真实 `answer_delta`、Trace 和 Tool Call；RAG 真实浏览器已验证来源加载、来源暂不可用、`embedding_failed` 和最终 `no_relevant_sources` 状态，但成功来源与空知识库路径仍未验证。由于当前默认 `RAG_ENABLED=false` 且 Ollama embedding `/api/embed` 不可用，不能声称已验证真实来源。浏览器五档回归已覆盖横向溢出、文案和 Agent 模式展示；键盘焦点与屏幕阅读器尚未完成完整浏览器级验证，因此不能把语义化控件测试等同于辅助技术验收。

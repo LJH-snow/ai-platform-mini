@@ -79,7 +79,7 @@
 
 - 本轮通过开发期 Vite proxy 完成真实 Agent SSE 浏览器验证；proxy 使用 Node 进程环境变量 `AI_PLATFORM_DEV_API_BASE_URL` 和 `AI_PLATFORM_DEV_API_KEY`，key 只由 Node proxy 注入后端请求，不进入浏览器 bundle 或 `import.meta.env`。
 - 已验证真实增量回答、实时 Trace、两步 calculator Tool Call、停止等待与后端终态未知、网络断开后的 `connection_lost`、恢复网络后的重试，以及键盘多行和运行快捷键。
-- RAG 真实浏览器未验证：当前默认 `RAG_ENABLED=false`，且没有可用 PostgreSQL/RAG 服务。RAG 安全投影和状态由后端/组件测试覆盖；这些测试不能被记录为真实浏览器来源，也不能伪造来源。
+- RAG 真实浏览器验证已覆盖来源加载、来源暂不可用、`embedding_failed` 和最终 `no_relevant_sources` 状态；`success_with_sources` 成功来源与 `knowledge_base_empty` 空知识库路径仍未验证。当前默认 `RAG_ENABLED=false`，且 Ollama embedding `/api/embed` 不可用，因此不能声称已验证真实来源。RAG 安全投影和状态由后端/组件测试覆盖；这些测试不能被记录为真实浏览器来源，也不能伪造来源。
 - 320/375/768/1024/1440 五档均无横向溢出。键盘焦点与屏幕阅读器仍未完成完整浏览器级验证，不能把语义化控件测试或静态回归等同于辅助技术验收。
 
 ## 尚未实现或不在阶段 6 范围
