@@ -195,6 +195,24 @@ def test_rag_reference_missing_distance_stays_none() -> None:
     assert summary.references[0].distance is None
 
 
+def test_rag_summary_drops_reference_without_stable_identifier() -> None:
+    summary = _rag_summary(
+        {
+            "ok": True,
+            "results": [
+                {
+                    "chunk_index": 3,
+                    "content": "content without a document or chunk identifier",
+                    "distance": 0.12,
+                }
+            ],
+        }
+    )
+
+    assert summary.status == "no_relevant_sources"
+    assert summary.references == []
+
+
 def test_rag_reference_long_content_is_limited_to_1200_characters() -> None:
     long_content = "x" * 1201
 
@@ -215,6 +233,43 @@ def test_rag_reference_long_content_is_limited_to_1200_characters() -> None:
 
     reference = summary.references[0]
     assert reference.content == "x" * 1200
+    assert reference.truncated is True
+
+
+def test_rag_reference_content_redacts_sensitive_patterns_and_keeps_plain_text() -> (
+    None
+):
+    summary = _rag_summary(
+        {
+            "ok": True,
+            "results": [
+                {
+                    "document_id": "doc-safe-cleaning",
+                    "chunk_id": "chunk-safe-cleaning",
+                    "chunk_index": 0,
+                    "content": (
+                        "Keep this ordinary sentence. "
+                        "api_key=sk-test-secret-token "
+                        "Bearer abc.def.ghi\n"
+                        "Traceback (most recent call last):\n"
+                        '  File "/Users/Admin/project/app.py", line 10, in <module>\n'
+                        "See /private/secret/config.env for details."
+                    ),
+                    "distance": 0.12,
+                }
+            ],
+        }
+    )
+
+    reference = summary.references[0]
+    assert reference.content is not None
+    assert "Keep this ordinary sentence." in reference.content
+    assert "sk-test-secret-token" not in reference.content
+    assert "Bearer abc.def.ghi" not in reference.content
+    assert "Traceback" not in reference.content
+    assert "/Users/Admin/project/app.py" not in reference.content
+    assert "/private/secret/config.env" not in reference.content
+    assert len(reference.content) <= 1200
     assert reference.truncated is True
 
 
@@ -432,6 +487,44 @@ def _post_single_tool_result(result: ToolResult) -> dict[str, object]:
         _clear_override()
     assert response.status_code == 200
     return cast(dict[str, object], response.json())
+
+
+def test_http_response_redacts_sensitive_rag_content_but_keeps_plain_text() -> None:
+    body = _post_single_tool_result(
+        _knowledge_result(
+            "sensitive-content",
+            {
+                "ok": True,
+                "results": [
+                    {
+                        "document_id": "doc-http-cleaning",
+                        "chunk_id": "chunk-http-cleaning",
+                        "chunk_index": 0,
+                        "content": (
+                            "Keep this ordinary sentence. "
+                            "api_key=sk-http-secret-token "
+                            "Bearer http.token.value\n"
+                            "Traceback (most recent call last):\n"
+                            '  File "/Users/Admin/project/app.py", line 10\n'
+                            "See /private/secret/config.env."
+                        ),
+                    }
+                ],
+            },
+        )
+    )
+
+    encoded = json.dumps(body)
+    assert "Keep this ordinary sentence." in encoded
+    for forbidden in (
+        "api_key=sk-http-secret-token",
+        "sk-http-secret-token",
+        "Bearer http.token.value",
+        "Traceback",
+        "/Users/Admin/project/app.py",
+        "/private/secret/config.env",
+    ):
+        assert forbidden not in encoded
 
 
 @pytest.mark.parametrize(
