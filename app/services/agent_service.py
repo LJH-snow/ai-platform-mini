@@ -23,6 +23,7 @@ from app.exceptions.base import ProviderError, QuotaExceededError
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.service import QuotaService
 from app.quota.token_estimator import estimate_prompt_tokens
+from app.runs.protocols import RunTraceRecorderFactory
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
@@ -62,6 +63,7 @@ class AgentRuntimeFactory(Protocol):
         tools: Mapping[str, AgentTool] | None,
         *,
         tool_executor: ToolExecutor | None = None,
+        recorder_factory: RunTraceRecorderFactory | None = None,
     ) -> AgentRuntime: ...
 
 
@@ -227,7 +229,12 @@ class _ChatServiceAgentModel:
 
 
 class AgentService:
-    """Application service connecting the Agent Runtime to platform boundaries."""
+    """Connect the Agent Runtime to platform boundaries.
+
+    ``recorder_factory`` is the production injection boundary for run traces.
+    It must return a fresh single-run recorder for every runtime invocation;
+    leaving it unset preserves the existing no-recorder behavior.
+    """
 
     def __init__(
         self,
@@ -237,11 +244,13 @@ class AgentService:
         runtime_factory: AgentRuntimeFactory = AgentRuntime,
         tool_registry: ToolRegistry | None = None,
         granted_permissions: frozenset[str] = frozenset(),
+        recorder_factory: RunTraceRecorderFactory | None = None,
     ) -> None:
         self._chat_service = chat_service
         self._quota_service = quota_service
         self._usage_collector = usage_collector
         self._runtime_factory = runtime_factory
+        self._recorder_factory = recorder_factory
         self._tool_registry = (
             tool_registry
             if tool_registry is not None
@@ -289,11 +298,19 @@ class AgentService:
             reserved_prompt_tokens = prompt_tokens
 
         model.set_prompt_reservation_guard(ensure_prompt_reservation)
-        runtime = self._runtime_factory(
-            model,
-            None,
-            tool_executor=self._tool_executor,
-        )
+        if self._recorder_factory is None:
+            runtime = self._runtime_factory(
+                model,
+                None,
+                tool_executor=self._tool_executor,
+            )
+        else:
+            runtime = self._runtime_factory(
+                model,
+                None,
+                tool_executor=self._tool_executor,
+                recorder_factory=self._recorder_factory,
+            )
         started = time.monotonic()
 
         async with ReservationLifecycle(reservation, self._quota_service) as lifecycle:
@@ -304,6 +321,8 @@ class AgentService:
                         max_steps=request.max_steps,
                         timeout=request.timeout_seconds,
                         token_budget=request.token_budget,
+                        request_id=context.request_id,
+                        model=model.actual_model,
                     )
                 )
             except QuotaExceededError:

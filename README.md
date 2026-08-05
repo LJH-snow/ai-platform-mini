@@ -13,6 +13,7 @@
 - Storage: Memory 或 PostgreSQL
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
+- 前端 Agent Console：[阶段 3 已接入同步 Agent Run Trace 与工具调用卡片，等待用户 Review；Agent SSE 与 RAG 来源 UI 尚未接入](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -36,6 +37,68 @@
 - MCP foundation：提供 stdio JSON-RPC Client、工具发现、allowlist、`MCPToolAdapter`、生命周期 health/readiness 查询，以及运行时调用失败/断线的确定性测试；不接入默认生产配置
 - Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
+
+## Evaluation Foundation
+
+Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序执行 runner：评测用例通过 JSONL 保存，runner 接受可注入的异步 `run_case`，不会调用真实 LLM 或外网。单用例结果记录状态、成功与否、答案/工具判定、工具序列、步骤、延迟、Token 用量和错误；汇总提供任务成功率、声明工具期望用例的 tool selection accuracy、平均步骤、p95 延迟和 Token 总量/均值。`tests/fixtures/evals/agent_golden.jsonl` 是 30 条本地契约 fixture，覆盖 direct-answer、calculator 和 knowledge_search，它明确不是线上模型结果，也不包含密钥。当前尚未接入真实模型 CI、数据库报表或 RAG Recall@K。
+
+学习总结：本 Sprint 学到应先固定可序列化的评测数据契约，再通过依赖注入让 runner 保持离线和可重复。将答案包含判断与完整有序工具序列判断拆开，使失败原因和聚合指标更清晰。p95 对空集返回 `0.0`，tool accuracy 在没有声明 expected_tools 时返回 `None`，避免制造误导性统计。通过 JSON 标准库解析而不是 `eval`，并用异常隔离保证单个 case 不会阻断整批评测。
+
+## Frontend Agent Console
+
+前端位于 `frontend/`，基于 Vite、React 和 TypeScript。阶段 2 的普通 Chat SSE 保持不变；阶段 3 新增独立的 Agent Run 模式，真实调用同步 `POST /api/v1/agent/runs`，并在请求完成后展示后端公开响应中的 Run 状态、步骤和工具摘要。
+
+阶段 3 当前能力：
+
+- 普通模式继续解析 `POST /v1/chat/completions?stream=true` 的真实 SSE 增量，不把普通聊天伪装成 Agent Trace；
+- Agent 模式使用同步 JSON 请求，等待期间明确显示“完成后加载 Trace，非实时”；
+- 左侧最终回答与右侧 Run 状态联动，支持 `completed`、`stopped`、`failed`、`cancelled`、`timed_out`，并区分浏览器中止等待与后端取消终态；
+- 领域适配层稳定排序并去重步骤/事件，组件不直接依赖后端原始 JSON；
+- 步骤卡片展示序号、决策类型、状态、工具名称和安全摘要；后端公开契约没有时间戳与耗时，因此显示“后端未提供”，不会补零或伪造；
+- Tool Call 卡片支持 `calculator` 与未知工具的成功、失败、超时、取消和未知状态；当前公开契约不包含工具输入/输出及错误详情，因此对应摘要明确显示“后端未提供”；
+- 仅在后端响应包含 `run_id` 时展示 Run ID；Token 仅在公开 `usage` 字段非空时展示实际值；
+- 支持步骤与工具摘要展开/收起、停止本地请求、失败后重新运行、新建会话和清空会话；窄屏布局避免 Trace 横向溢出；
+- 前端对 HTTP、网络、Abort 和异常响应进行安全归一化，不渲染堆栈、内部路径、API Key、Provider 原始响应或模型思维链。
+
+当前边界：后端 Agent Run API 是同步 JSON，不提供 Agent SSE，因此运行中的具体模型决策和工具状态无法实时展示；前端只在请求完成后渲染真实 Trace。公开响应也没有事件时间、步骤耗时、工具参数、工具输出或工具错误详情。Agent SSE、持久化 Trace 查询、RAG 来源 UI 和阶段 4 能力均尚未完成。
+
+启动前端开发服务器：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 前端鉴权与跨源边界
+
+前端通过运行时配置读取 Chat/Agent API 地址和 Bearer API Key，不把真实 API Key 写入源码、Git、默认配置或构建产物。开发时可以在页面加载前注入运行时配置：
+
+```html
+<script>
+  window.__AI_PLATFORM_RUNTIME_CONFIG__ = {
+    apiBaseUrl: 'http://localhost:8000',
+    apiKey: '<runtime-injected-key>',
+  }
+</script>
+```
+
+当前后端未启用 `CORSMiddleware`，Vite 也没有默认 proxy；浏览器跨源直连仍需后端允许对应 Origin。浏览器中的 Bearer Key 不属于生产级密钥保护方案，生产部署应优先使用同源 BFF/服务端代理或其他受控鉴权边界。本阶段不修改后端，也不通过前端绕过 CORS 或鉴权。
+
+前端验证命令：
+
+```bash
+cd frontend
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test
+npm run build
+```
+
+阶段 3 测试覆盖空 Trace、calculator 成功/失败/超时/取消、未知工具、重复步骤与事件去重、长摘要截断与敏感内容清理、异常响应、Trace 展开/收起、回答与 Trace 状态一致、本地取消和重新运行，并保留阶段 2 的 Chat SSE 回归测试。
+
+阶段 3 学习总结：同步 Agent API 必须与实时 Chat SSE 在交互上明确分离，避免把请求等待状态伪装成实时 Trace。领域适配层负责去重、稳定排序、缺失字段和安全摘要，使组件只消费可审计数据。浏览器 Abort 只能证明前端停止等待，不能声称后端 Runtime 已取消。公开契约缺少时间、耗时和工具载荷时，清晰展示“后端未提供”比填充假值更可靠。
 
 ## Project rules
 
@@ -634,3 +697,15 @@ MCP foundation 的关键是把外部协议限制在 Client 和 Adapter 边界内
 RAG Tool 化的关键不是复制一套检索代码，而是把现有 `RAGService.prepare` 作为唯一检索入口，再通过结构化引用把结果交给 Agent。将来源、距离和清洗后的内容一起返回，既便于模型使用，也为后续引用展示和评测保留证据。容器根据 RAG 能力是否可用动态注册工具，使功能开关不会改变默认 Agent 的安全边界。通过区分可预期的知识库、存储和 embedding 错误与未知异常，Tool 层可以给模型稳定反馈，同时避免暴露内部实现细节。
 
 > [Sprint 10 RAG Tool 化设计说明](docs/superpowers/specs/2026-08-04-rag-tool-design.md)
+
+### Run Trace Foundation（当前切片）
+
+本切片新增 `app/runs/`，基于现有 `AgentEvent` 和 `AgentRunResult` 生成安全的 Run Trace，当前仅支持**单 run 的脱敏内存 Recorder**以及 JSONL 导出/读取。Trace 会保留 run_id、可选 request_id/model、状态、停止原因、token usage、步数、工具摘要、耗时和经过截断的错误/消息摘要；默认不保存完整 prompt、API key、原始 tool arguments、完整 tool output、RAG 原文或 MCP 原文。
+
+`AgentService` 的 Recorder 注入边界是可选的 `recorder_factory`：工厂必须为每次 `runtime.run()` 返回新的单 run Recorder；未配置时保持原有 Agent 行为。单个 `InMemoryRunTraceRecorder` 不得跨 run 复用，同一个 `AgentRuntime` 并发执行多个 run 时应使用 `recorder_factory` 隔离各自 trace，避免 request_id、事件和终态互相污染。
+
+当前切片已覆盖直接回答、工具成功/失败、max steps、timeout/cancel、model error、Recorder 异常隔离、脱敏截断、JSONL round-trip 以及并发 request_id 隔离测试。后续 Sprint 13 的 PostgreSQL 持久化、SSE 推送和公开查询 API 均未实现，本切片也不提供这些能力。
+
+#### Run Trace Foundation 学习总结
+
+Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制一套 Agent Loop。单 run Recorder 加上显式 `recorder_factory` 边界，可以在保持简单的同时避免并发状态污染。脱敏和截断必须位于记录边界，默认不保存 prompt、工具参数和外部检索原文。持久化、实时推送和查询接口应作为后续 Sprint 的独立能力演进。
