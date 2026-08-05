@@ -19,6 +19,7 @@ from app.agents import (
     AgentTool,
     ToolCall,
 )
+from app.agents.runtime import AGENT_QUOTA_FAILURE
 from app.auth.models import APIKey
 from app.core.context import RequestContext
 from app.exceptions.base import ProviderError, QuotaExceededError
@@ -449,7 +450,8 @@ class AgentService:
                             model=model.actual_model,
                             cancel_event=cancel_event,
                             **runtime_kwargs,
-                        )
+                        ),
+                        return_quota_failure_result=True,
                     )
                 else:
                     result = await lifecycle.run(
@@ -461,7 +463,8 @@ class AgentService:
                             request_id=context.request_id,
                             model=model.actual_model,
                             **runtime_kwargs,
-                        )
+                        ),
+                        return_quota_failure_result=True,
                     )
             except QuotaExceededError:
                 if model.has_model_call:
@@ -476,19 +479,25 @@ class AgentService:
                 raise
 
             elapsed_ms = (time.monotonic() - started) * 1000
+            quota_failure = result.error == AGENT_QUOTA_FAILURE
             await self._record_usage(
                 context=context,
                 model=model,
                 answer=result.answer,
-                stop_reason=result.stop_reason.value,
+                stop_reason=(
+                    "quota_exceeded" if quota_failure else result.stop_reason.value
+                ),
                 latency_ms=elapsed_ms,
             )
-            await lifecycle.settle()
+            if quota_failure:
+                await lifecycle.release()
+            else:
+                await lifecycle.settle()
 
-        if result.status.value == "failed":
+        if result.status.value == "failed" and not quota_failure:
             raise self._map_runtime_failure(result)
 
-        return AgentRunOutcome(
+        outcome = AgentRunOutcome(
             result=result,
             model=model.actual_model,
             prompt_tokens=model.prompt_tokens,
@@ -497,6 +506,9 @@ class AgentService:
                 model.prompt_tokens is None or model.completion_tokens is None
             ),
         )
+        if quota_failure and observer is None and not streaming:
+            raise QuotaExceededError("Quota exceeded.")
+        return outcome
 
     async def _record_usage(
         self,

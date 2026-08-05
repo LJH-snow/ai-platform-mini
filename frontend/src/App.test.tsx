@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App.tsx'
 import { AgentNetworkError, type AgentClient } from './agent/client.ts'
+import type { AgentRunInput } from './agent/types.ts'
+import type { AgentStreamEvent } from './agent/stream.ts'
 import { ChatBackendError, ChatNetworkError, type ChatClient } from './chat/client.ts'
 import type { ChatApiMessage, ChatStreamHandlers, ChatStreamResult } from './chat/types.ts'
 
@@ -73,6 +75,63 @@ const createNetworkFailingAgentClient = (): AgentClient => ({
   },
 })
 
+type ControlledAgentRequest = {
+  input: AgentRunInput
+  onEvent: (event: AgentStreamEvent) => void
+  signal: AbortSignal
+  resolve: () => void
+  reject: (error: Error) => void
+}
+
+const createControlledAgentClient = (): {
+  client: AgentClient
+  emit: (event: AgentStreamEvent, index?: number) => void
+  finish: (index?: number) => void
+  getRequestCount: () => number
+} => {
+  const requests: ControlledAgentRequest[] = []
+  const client: AgentClient = {
+    runAgent: async () => {
+      throw new Error('Controlled Agent client does not support non-streaming runs')
+    },
+    streamAgent: vi.fn(
+      (
+        input: AgentRunInput,
+        handlers: { onEvent: (event: AgentStreamEvent) => void },
+        signal: AbortSignal,
+      ): Promise<void> =>
+        new Promise((resolve, reject) => {
+          requests.push({ input, onEvent: handlers.onEvent, signal, resolve, reject })
+        }),
+    ),
+  }
+
+  const getRequest = (index = requests.length - 1): ControlledAgentRequest => {
+    const request = requests[index]
+    if (!request) throw new Error(`Missing controlled Agent request at index ${index}`)
+    return request
+  }
+
+  return {
+    client,
+    emit: (event, index) => getRequest(index).onEvent(event),
+    finish: (index) => getRequest(index).resolve(),
+    getRequestCount: () => requests.length,
+  }
+}
+
+const agentEvent = (
+  runId: string,
+  event: AgentStreamEvent['event'],
+  sequence: number,
+  extra: Partial<AgentStreamEvent> = {},
+): AgentStreamEvent => ({
+  event,
+  run_id: runId,
+  sequence,
+  ...extra,
+})
+
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
@@ -129,6 +188,90 @@ describe('App', () => {
     expect(screen.getByText('实时 Agent SSE')).toBeInTheDocument()
     expect(screen.queryByText(/同步请求|完成后加载 Trace|非实时/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Run ID：/)).not.toBeInTheDocument()
+  })
+
+  it.each(['tool_completed', 'tool_failed'] as const)(
+    'keeps the Agent SSE active after %s until a run terminal event',
+    async (toolEvent) => {
+      const user = userEvent.setup()
+      const controlled = createControlledAgentClient()
+      render(<App agentClient={controlled.client} />)
+
+      await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+      const input = screen.getByLabelText('输入消息')
+      await user.type(input, '继续执行多步骤 Agent')
+      await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+      await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+
+      controlled.emit(agentEvent('run-1', 'run_started', 0))
+      controlled.emit(agentEvent('run-1', 'step_started', 1, { step_index: 1 }))
+      controlled.emit(
+        agentEvent('run-1', 'tool_started', 2, {
+          step_index: 1,
+          call_id: 'tool-1',
+          tool_name: 'calculator',
+        }),
+      )
+      controlled.emit(
+        agentEvent('run-1', toolEvent, 3, {
+          step_index: 1,
+          call_id: 'tool-1',
+          tool_name: 'calculator',
+          succeeded: toolEvent === 'tool_completed',
+        }),
+      )
+
+      await waitFor(() =>
+        expect(screen.getByRole('status')).toHaveTextContent(
+          toolEvent === 'tool_completed' ? '工具调用完成' : '工具调用失败',
+        ),
+      )
+      expect(input).toBeDisabled()
+      expect(screen.getByRole('button', { name: '停止请求' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '运行 Agent' })).not.toBeInTheDocument()
+
+      controlled.emit(agentEvent('run-1', 'answer_delta', 4, { delta: '后续回答' }))
+      await waitFor(() => expect(screen.getByText('后续回答')).toBeInTheDocument())
+    },
+  )
+
+  it('isolates the stream reducer when starting a second Agent Run in the same session', async () => {
+    const user = userEvent.setup()
+    const controlled = createControlledAgentClient()
+    render(<App agentClient={controlled.client} />)
+
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), '第一次运行')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+
+    controlled.emit(agentEvent('run-1', 'run_started', 0))
+    controlled.emit(agentEvent('run-1', 'step_started', 1, { step_index: 1 }))
+    controlled.emit(agentEvent('run-1', 'answer_delta', 2, { delta: '第一次回答' }))
+    controlled.emit(agentEvent('run-1', 'run_completed', 3, { status: 'completed' }))
+    controlled.finish(0)
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('已完成')
+      expect(screen.getByText('Run ID：run-1')).toBeInTheDocument()
+    })
+
+    await user.type(screen.getByLabelText('输入消息'), '第二次运行')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(2))
+
+    controlled.emit(agentEvent('run-2', 'run_started', 0), 1)
+    controlled.emit(agentEvent('run-2', 'answer_delta', 1, { delta: '第二次回答' }), 1)
+    controlled.emit(agentEvent('run-2', 'run_completed', 2, { status: 'completed' }), 1)
+    controlled.finish(1)
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('已完成')
+      expect(screen.getByText('Run ID：run-2')).toBeInTheDocument()
+      expect(screen.getByText('第二次回答')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('步骤 1')).not.toBeInTheDocument()
+    expect(screen.getByText('后端返回空 Trace')).toBeInTheDocument()
   })
 
   it('shows the Agent retry action when an Agent network request fails', async () => {

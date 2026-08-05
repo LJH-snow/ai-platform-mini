@@ -467,6 +467,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const [sessionCount, setSessionCount] = useState(0)
   const [clearedCount, setClearedCount] = useState(0)
   const [requestStatus, setRequestStatus] = useState<RequestStatus>('idle')
+  const [agentSseActive, setAgentSseActive] = useState(false)
   const [requestId, setRequestId] = useState<string | null>(null)
   const [agentRun, setAgentRun] = useState<AgentRun | null>(null)
   const [traceUnavailableMessage, setTraceUnavailableMessage] = useState<string | null>(null)
@@ -484,6 +485,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
 
   const sessionLabel = sessionCount === 0 ? '未命名会话' : `本地会话 ${sessionCount}`
   const isActive =
+    agentSseActive ||
     requestStatus === 'sending' ||
     requestStatus === 'agent_running' ||
     ['connecting', 'waiting', 'running', 'tool_running', 'rag_loading'].includes(requestStatus)
@@ -517,6 +519,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setCopyFeedback(null)
     setAnnouncement(action === 'new' ? '已新建会话。' : '已清空当前会话。')
     setRequestStatus('idle')
+    setAgentSseActive(false)
 
     if (action === 'new') {
       setSessionCount((count) => count + 1)
@@ -532,6 +535,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     request.stopped = true
     request.controller.abort()
     activeRequest.current = null
+    setAgentSseActive(false)
     if (request.kind === 'agent') {
       replaceAssistantContent(request.assistantMessageId, '请求已取消；后端终态未知。')
       setRequestStatus('client_cancelled')
@@ -553,6 +557,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       assistantMessageId: assistantMessage.id,
     }
     activeRequest.current = request
+    setAgentSseActive(false)
     setRequestId(null)
     setAgentRun(null)
     agentStreamState.current = initialAgentStreamState
@@ -626,8 +631,10 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       assistantMessageId: assistantMessage.id,
     }
     activeRequest.current = request
+    setAgentSseActive(resolvedAgentClient.streamAgent !== undefined)
     setRequestId(null)
     setAgentRun(null)
+    agentStreamState.current = initialAgentStreamState
     setTraceUnavailableMessage(null)
     setErrorMessage(null)
     setCopyFeedback(null)
@@ -736,7 +743,10 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         setAnnouncement('Agent 请求失败，可重试。')
       }
     } finally {
-      if (activeRequest.current === request) activeRequest.current = null
+      if (activeRequest.current === request) {
+        activeRequest.current = null
+        setAgentSseActive(false)
+      }
     }
   }
 

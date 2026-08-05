@@ -23,7 +23,7 @@ from app.agents.models import (
     ToolResult,
 )
 from app.agents.protocols import AgentModel, AgentTool, ToolContext
-from app.exceptions.base import QuotaExceededError
+from app.exceptions.base import QuotaExceededError, QuotaReservationError
 from app.runs.protocols import AgentEventObserver, RunTraceRecorderProtocol
 from app.tools.executor import ToolExecutor
 
@@ -33,8 +33,13 @@ _TOOL_OUTPUT_TRUNCATION_MARKER = "...[tool output truncated]"
 _TOOL_EXECUTION_ERROR = "tool_execution_failed"
 _TOOL_FAILURE_MESSAGE = "Tool execution failed."
 _TOOL_NOT_FOUND_MESSAGE = "Requested tool is unavailable."
+AGENT_QUOTA_FAILURE = "quota_exceeded"
 
 logger = logging.getLogger(__name__)
+
+
+def _is_quota_renewal_cancellation(error: asyncio.CancelledError) -> bool:
+    return any(isinstance(argument, QuotaReservationError) for argument in error.args)
 
 
 class AgentRuntime:
@@ -165,7 +170,16 @@ class AgentRuntime:
                         status=self._status_for(stop.reason),
                         stop_reason=stop.reason,
                     )
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as cancellation:
+                    if _is_quota_renewal_cancellation(cancellation):
+                        return self._finish(
+                            recorder=recorder,
+                            state=state,
+                            events=events,
+                            status=RunStatus.FAILED,
+                            stop_reason=StopReason.MODEL_ERROR,
+                            error=AGENT_QUOTA_FAILURE,
+                        )
                     return self._finish(
                         recorder=recorder,
                         state=state,
@@ -174,7 +188,14 @@ class AgentRuntime:
                         stop_reason=StopReason.EXTERNAL_CANCELLED,
                     )
                 except QuotaExceededError:
-                    raise
+                    return self._finish(
+                        recorder=recorder,
+                        state=state,
+                        events=events,
+                        status=RunStatus.FAILED,
+                        stop_reason=StopReason.MODEL_ERROR,
+                        error=AGENT_QUOTA_FAILURE,
+                    )
                 except Exception as exc:
                     return self._finish(
                         recorder=recorder,
@@ -249,13 +270,31 @@ class AgentRuntime:
                                 status=self._status_for(stop.reason),
                                 stop_reason=stop.reason,
                             )
-                        except asyncio.CancelledError:
+                        except asyncio.CancelledError as cancellation:
+                            if _is_quota_renewal_cancellation(cancellation):
+                                return self._finish(
+                                    recorder=recorder,
+                                    state=state,
+                                    events=events,
+                                    status=RunStatus.FAILED,
+                                    stop_reason=StopReason.MODEL_ERROR,
+                                    error=AGENT_QUOTA_FAILURE,
+                                )
                             return self._finish(
                                 recorder=recorder,
                                 state=state,
                                 events=events,
                                 status=RunStatus.CANCELLED,
                                 stop_reason=StopReason.EXTERNAL_CANCELLED,
+                            )
+                        except QuotaExceededError:
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.FAILED,
+                                stop_reason=StopReason.MODEL_ERROR,
+                                error=AGENT_QUOTA_FAILURE,
                             )
                         except Exception as exc:
                             return self._finish(
@@ -347,7 +386,16 @@ class AgentRuntime:
                             status=self._status_for(stop.reason),
                             stop_reason=stop.reason,
                         )
-                    except asyncio.CancelledError:
+                    except asyncio.CancelledError as cancellation:
+                        if _is_quota_renewal_cancellation(cancellation):
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.FAILED,
+                                stop_reason=StopReason.MODEL_ERROR,
+                                error=AGENT_QUOTA_FAILURE,
+                            )
                         return self._finish(
                             recorder=recorder,
                             state=state,
@@ -402,7 +450,25 @@ class AgentRuntime:
                 status=RunStatus.STOPPED,
                 stop_reason=StopReason.MAX_STEPS,
             )
-        except asyncio.CancelledError:
+        except QuotaExceededError:
+            return self._finish(
+                recorder=recorder,
+                state=state,
+                events=events,
+                status=RunStatus.FAILED,
+                stop_reason=StopReason.MODEL_ERROR,
+                error=AGENT_QUOTA_FAILURE,
+            )
+        except asyncio.CancelledError as cancellation:
+            if _is_quota_renewal_cancellation(cancellation):
+                return self._finish(
+                    recorder=recorder,
+                    state=state,
+                    events=events,
+                    status=RunStatus.FAILED,
+                    stop_reason=StopReason.MODEL_ERROR,
+                    error=AGENT_QUOTA_FAILURE,
+                )
             return self._finish(
                 recorder=recorder,
                 state=state,

@@ -782,3 +782,15 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 #### 阶段 5 学习总结
 
 本阶段确认可访问性状态应与视觉增量渲染分离，避免 SSE 内容更新造成过度播报；真实浏览器验证也必须覆盖代理、断连、重试和停止等待等状态边界。开发期 Vite proxy 让浏览器能够在不把 key 注入 bundle 的前提下观察真实 `answer_delta`、Trace 和 Tool Call；RAG 已通过真实 embedding、空库查询、53 个 chunks ingest、5 条安全来源和真实超时终止路径验证。成功来源那次 UI Run 因 `token_budget_exceeded` 停止，直接 SSE 验证则以唯一 `run_timed_out(deadline_exceeded)` 终止，不能改写为成功完成。浏览器 DOM、键盘、ARIA、live region 和五档响应式已验证，但完整屏幕阅读器仍受环境限制未完成；阶段 7 未进入，当前等待人工 Code Review。
+
+### 阶段 6 Review 修复收口（待人工 Code Review）
+
+- 将 Agent SSE 的“仍在执行”状态与最后展示事件状态分离，`tool_completed`/`tool_failed` 后不会误启用输入或覆盖活动请求。
+- 每次新的 Agent Run 都重置流式 reducer，保证 sequence、terminal、run_id、回答和 Trace 不跨 Run 污染。
+- Run 启动后发生 prompt quota 扩展或 reservation 续期失败时，Runtime、Service 和 SSE 统一以唯一 `run_failed` 终态收口；setup failure 只保留给 Run 尚未启动的初始化失败。
+- Agent SSE 显式把 `X-RateLimit-Limit`、`X-RateLimit-Remaining` 和 `X-RateLimit-Reset` 传入实际的 `StreamingResponse`。
+- 新增前后端回归测试；当前后端门禁为 476 passed、28 skipped，前端门禁为 7 个测试文件 83 passed，完整验证结果等待本轮最终复跑确认。
+
+#### 阶段 6 Review 修复学习总结
+
+这轮修复确认了 SSE 的生命周期真相不能由最后一个展示事件推导，必须单独维护流是否仍在执行。流式 reducer 的 terminal 状态属于单个 Run，下一次执行前必须显式初始化，而不能依赖上次终态自然覆盖。配额续期失败通过带有领域异常标记的任务取消传递给 Runtime，并由 Service 统一记录用量、释放 reservation 和输出唯一失败终态，同时保留普通 Chat SSE 的既有异常语义。实际响应 Header 必须写入最终返回的 `StreamingResponse`，不能只修改 FastAPI 注入的临时 `Response`。

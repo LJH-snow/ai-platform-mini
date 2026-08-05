@@ -45,7 +45,9 @@ class ReservationLifecycle:
         if not self._finalized:
             await self.release()
 
-    async def run(self, operation: Awaitable[T]) -> T:
+    async def run(
+        self, operation: Awaitable[T], *, return_quota_failure_result: bool = False
+    ) -> T:
         """Await an operation unless the reservation renewal fails first."""
         if self._renewal_failure is None:
             return await operation
@@ -64,8 +66,15 @@ class ReservationLifecycle:
             await self._cancel_operation(operation_task)
             raise
         if self._renewal_failure in done:
-            await self._cancel_operation(operation_task)
-            self._raise_renewal_failure()
+            renewal_failure = self._renewal_failure.exception()
+            if renewal_failure is None:
+                raise RuntimeError(
+                    "Quota renewal failure signal completed without an error."
+                )
+            await self._cancel_operation(operation_task, cancel_message=renewal_failure)
+            if return_quota_failure_result and not operation_task.cancelled():
+                return await operation_task
+            raise renewal_failure
         return await operation_task
 
     async def settle(self) -> None:
@@ -131,9 +140,13 @@ class ReservationLifecycle:
         raise RuntimeError("Quota renewal failure signal completed without an error.")
 
     @staticmethod
-    async def _cancel_operation(operation_task: asyncio.Future[T]) -> None:
+    async def _cancel_operation(
+        operation_task: asyncio.Future[T],
+        *,
+        cancel_message: object | None = None,
+    ) -> None:
         if not operation_task.done():
-            operation_task.cancel()
+            operation_task.cancel(cancel_message)
         await asyncio.gather(operation_task, return_exceptions=True)
 
     def _reservation_id(self) -> str:

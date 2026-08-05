@@ -162,7 +162,16 @@ async def stream_agent_run(
 
     task = asyncio.create_task(produce())
 
-    _set_rate_limit_headers(http_request, response)
+    remaining = getattr(http_request.state, "rate_limit_remaining", None)
+    limit = getattr(http_request.state, "rate_limit_limit", None)
+    reset_after = getattr(http_request.state, "rate_limit_reset_after", None)
+    rate_headers: dict[str, str] = {}
+    if remaining is not None and limit is not None:
+        rate_headers["X-RateLimit-Limit"] = str(limit)
+        rate_headers["X-RateLimit-Remaining"] = str(remaining)
+        if reset_after is not None:
+            rate_headers["X-RateLimit-Reset"] = str(reset_after)
+
     return StreamingResponse(
         _stream_events(
             http_request,
@@ -172,7 +181,11 @@ async def stream_agent_run(
             cancel_event,
         ),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            **rate_headers,
+        },
     )
 
 

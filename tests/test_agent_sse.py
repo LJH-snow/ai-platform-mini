@@ -1,9 +1,10 @@
 import asyncio
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from fastapi import Request
+from fastapi import Request, Response
 
 from app.agents.models import (
     AgentDecision,
@@ -16,7 +17,16 @@ from app.agents.models import (
 )
 from app.agents.runtime import AgentRuntime
 from app.agents.stream import AgentEventStream, AgentStreamSetupError
-from app.api.agent import _serialize_sse, _stream_events, _to_stream_event
+from app.api.agent import (
+    _serialize_sse,
+    _stream_events,
+    _to_stream_event,
+    stream_agent_run,
+)
+from app.auth.models import APIKey
+from app.core.context import RequestContext
+from app.schemas.agent import AgentRunRequest
+from app.services.agent_service import AgentService
 
 
 def _event(
@@ -419,3 +429,57 @@ async def test_disconnect_requests_cancel_without_forging_terminal_event() -> No
     assert cancel_event.is_set()
     assert producer_finished.is_set()
     assert all("run_cancelled" not in frame for frame in frames)
+
+
+class _StreamingAgentService:
+    async def run(
+        self,
+        request: object,
+        *,
+        context: object,
+        api_key: object,
+        observer: AgentEventStream,
+        cancel_event: asyncio.Event,
+        streaming: bool,
+    ) -> None:
+        del request, context, api_key, cancel_event, streaming
+        observer.observe(_event(AgentEventKind.RUN_STARTED, 1))
+        observer.observe(
+            _event(
+                AgentEventKind.RUN_STOPPED,
+                2,
+                status=RunStatus.COMPLETED,
+                stop_reason=StopReason.DIRECT_ANSWER,
+            )
+        )
+
+
+class _RateLimitedRequest:
+    def __init__(self) -> None:
+        self.state = SimpleNamespace(
+            context=RequestContext(request_id="request-1"),
+            rate_limit_limit=60,
+            rate_limit_remaining=59,
+            rate_limit_reset_after=42,
+        )
+
+    async def is_disconnected(self) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_agent_sse_response_includes_rate_limit_headers() -> None:
+    response = await stream_agent_run(
+        AgentRunRequest(message="hello"),
+        cast(Request, _RateLimitedRequest()),
+        Response(),
+        cast(AgentService, _StreamingAgentService()),
+        APIKey(key="sk-test", name="test"),
+    )
+
+    assert response.headers["X-RateLimit-Limit"] == "60"
+    assert response.headers["X-RateLimit-Remaining"] == "59"
+    assert response.headers["X-RateLimit-Reset"] == "42"
+
+    async for _ in response.body_iterator:
+        pass
