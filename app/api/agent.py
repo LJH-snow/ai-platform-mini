@@ -152,9 +152,7 @@ async def stream_agent_run(
                 streaming=True,
             )
         except Exception:
-            # A failure before Runtime emits run_started is an SSE setup error,
-            # not an Agent Run failure and must not claim a backend cancellation.
-            stream.fail_setup()
+            stream.fail_unexpected()
             return
         finally:
             if not stream.terminal_observed:

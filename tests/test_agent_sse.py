@@ -454,6 +454,71 @@ class _StreamingAgentService:
         )
 
 
+class _UnexpectedFailureAgentService:
+    async def run(
+        self,
+        request: object,
+        *,
+        context: object,
+        api_key: object,
+        observer: AgentEventStream,
+        cancel_event: asyncio.Event,
+        streaming: bool,
+    ) -> None:
+        del request, context, api_key, cancel_event, streaming
+        observer.observe(_event(AgentEventKind.RUN_STARTED, 1))
+        raise RuntimeError("unexpected producer failure")
+
+
+class _SetupFailureAgentService:
+    async def run(
+        self,
+        request: object,
+        *,
+        context: object,
+        api_key: object,
+        observer: AgentEventStream,
+        cancel_event: asyncio.Event,
+        streaming: bool,
+    ) -> None:
+        del request, context, api_key, observer, cancel_event, streaming
+        raise RuntimeError("setup failure")
+
+
+@pytest.mark.asyncio
+async def test_started_run_unexpected_producer_error_emits_one_run_failed() -> None:
+    response = await stream_agent_run(
+        AgentRunRequest(message="hello"),
+        cast(Request, _RateLimitedRequest()),
+        Response(),
+        cast(AgentService, _UnexpectedFailureAgentService()),
+        APIKey(key="sk-test", name="test"),
+    )
+
+    frames = [cast(str, frame) async for frame in response.body_iterator]
+    event_names = [frame.splitlines()[0] for frame in frames]
+
+    assert "event: stream_error" not in event_names
+    assert event_names.count("event: run_failed") == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_start_producer_error_remains_setup_failure() -> None:
+    response = await stream_agent_run(
+        AgentRunRequest(message="hello"),
+        cast(Request, _RateLimitedRequest()),
+        Response(),
+        cast(AgentService, _SetupFailureAgentService()),
+        APIKey(key="sk-test", name="test"),
+    )
+
+    frames = [cast(str, frame) async for frame in response.body_iterator]
+
+    assert len(frames) == 1
+    assert frames[0].startswith("event: stream_error\n")
+    assert '"error_code":"stream_setup_failed"' in frames[0]
+
+
 class _RateLimitedRequest:
     def __init__(self) -> None:
         self.state = SimpleNamespace(
