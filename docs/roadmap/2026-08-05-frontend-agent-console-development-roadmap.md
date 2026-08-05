@@ -135,7 +135,7 @@ Next.js 是成熟的 React 框架，未来如果需要 SSR、复杂路由、登�
 本项目文档只允许使用如下强度的表述：
 
 - OpenAI 的公开岗位信息体现了对 TypeScript、React 和现代 Web 应用开发经验的要求；
-- Anthropic 的公开岗位信息体现了 React、TypeScript、Next.js 等现代 Web 技术要求；
+- Anthropic 的公开 Web Product 岗位体现 React、TypeScript、Python、Node.js 等技术要求；该公开页面不能证明 Claude.ai 或 Claude Code 的完整框架选择。
 - 这些信息可以作为行业岗位技能匹配的参考，但不能推导出 ChatGPT 或 Claude.ai 的完整内部技术架构；
 - 本项目选择 React + TypeScript，是基于公开岗位信息、项目交互需求和作品集目标做出的工程选择，不是对任何公司内部实现的复刻声明。
 
@@ -144,7 +144,7 @@ Next.js 是成熟的 React 框架，未来如果需要 SSR、复杂路由、登�
 截至本文档版本日期，公开页面可以支持以下有限结论：
 
 - OpenAI 的公开岗位“Full Stack Software Engineer, API Experience”明确提到 Strong experience with TypeScript、React 和现代 Web 应用开发，并且岗位涉及 API Playground、文档、开发者体验和 API 工作流；
-- Anthropic 的公开岗位“Software Engineer, Web Product”明确提到现代 Web 技术栈中的 React、TypeScript、Python、Node.js；相关公开岗位信息也体现了 Next.js 方向；
+- Anthropic 的公开 Web Product 岗位体现 React、TypeScript、Python、Node.js 等技术要求；该公开页面不能证明 Claude.ai 或 Claude Code 的完整框架选择。
 - React 官方文档提供 React 与 TypeScript 的使用说明；Vue 官方文档提供 Vue 与 TypeScript 以及基于 Vite 的项目创建说明。
 
 参考链接：
