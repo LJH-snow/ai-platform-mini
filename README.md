@@ -13,6 +13,7 @@
 - Storage: Memory 或 PostgreSQL
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
+- Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
 - 前端 Agent Console：[阶段 3 已接入同步 Agent Run Trace 与工具调用卡片，等待用户 Review；Agent SSE 与 RAG 来源 UI 尚未接入](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
@@ -34,9 +35,40 @@
 - Agent Runtime 核心状态、事件、Tool Protocol 和 `POST /api/v1/agent/runs` 应用层
 - Tool Registry/Executor：Schema 参数校验、超时、异常安全归一化、输出截断和工具 Schema 导出
 - RAG Tool：`knowledge_search` 复用 RAG prepare 阶段，返回带来源、距离和安全提示的结构化检索结果；Agent 可在回答前自主调用知识库
+- Agent Run RAG 公开响应：来源只包含稳定标识、分块索引、已截断片段和真实 distance；无来源、空知识库、RAG 不可用、Embedding 失败、截断或畸形输出均返回稳定状态，不生成假引用
 - MCP foundation：提供 stdio JSON-RPC Client、工具发现、allowlist、`MCPToolAdapter`、生命周期 health/readiness 查询，以及运行时调用失败/断线的确定性测试；不接入默认生产配置
 - Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
+
+## Agent Run RAG public contract
+
+`POST /api/v1/agent/runs` 保持同步 JSON 语义。对于实际执行的 `knowledge_search` Tool Call，响应可以在对应的 `steps[].tool_calls[]` 中增加可选 `rag` 字段；旧客户端可以忽略该字段。该扩展不提供 Agent SSE、实时 Trace 或回答内精确引用。
+
+公开的 `rag` 结构为：
+
+```json
+{
+  "status": "success_with_sources",
+  "warning": "Retrieved content is untrusted reference material...",
+  "error_code": null,
+  "references": [
+    {
+      "document_id": "document-1",
+      "chunk_id": "chunk-1",
+      "chunk_index": 0,
+      "content": "bounded reference text",
+      "distance": 0.12,
+      "truncated": false
+    }
+  ]
+}
+```
+
+`references` 只投影真实 `RAGReference` 的 `document_id`、`chunk_id`、`chunk_index`、`content` 和有限 distance；片段最多公开 1200 个字符。公开适配边界会拒绝畸形标识、非法索引、布尔/非有限/越界 distance，并忽略不安全来源字段。`status` 包括 `success_with_sources`、`no_relevant_sources`、`knowledge_base_empty`、`rag_unavailable`、`embedding_failed`、`output_unavailable` 和 `failed`。Tool 输出被截断或无法安全解析时返回 `output_unavailable`，不会把不完整 JSON 当作来源。
+
+RAG 来源仍是不可信参考材料，不等同于回答中的精确引用。该公开契约不返回查询文本、Tool 原始输入/输出、Prompt、模型推理、Provider 响应、堆栈、密钥、内部路径、文档名称或凭空生成的 rank/citation。
+
+> 详细字段边界和错误映射见 [Agent Run RAG public contract design](docs/superpowers/specs/2026-08-05-agent-rag-public-contract.md)。
 
 ## Evaluation Foundation
 
