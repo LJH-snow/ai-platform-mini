@@ -1,5 +1,11 @@
 import { adaptAgentRunResponse } from './adapter.ts'
-import type { AgentRunApiRequest, AgentRunApiResponse } from './api-types.ts'
+import type {
+  AgentRagApiErrorCode,
+  AgentRagApiStatus,
+  AgentRunApiRequest,
+  AgentRunApiResponse,
+  AgentToolApiErrorCode,
+} from './api-types.ts'
 import type { AgentRun, AgentRunInput } from './types.ts'
 
 export type AgentClientOptions = {
@@ -75,11 +81,109 @@ const getErrorCode = async (response: Response): Promise<string | null> => {
 const isNullableString = (value: unknown): value is string | null =>
   typeof value === 'string' || value === null
 
+const isOptionalNullableString = (value: unknown): value is string | null | undefined =>
+  value === undefined || isNullableString(value)
+
 const isNullableNumber = (value: unknown): value is number | null =>
   (typeof value === 'number' && Number.isFinite(value) && value >= 0) || value === null
 
+const isOptionalNullableNumber = (value: unknown): value is number | null | undefined =>
+  value === undefined || isNullableNumber(value)
+
 const isApiStatus = (value: unknown): boolean =>
   ['completed', 'stopped', 'failed', 'cancelled', 'timed_out'].includes(String(value))
+
+const ragStatuses = new Set<AgentRagApiStatus>([
+  'success_with_sources',
+  'no_relevant_sources',
+  'knowledge_base_empty',
+  'rag_unavailable',
+  'embedding_failed',
+  'output_unavailable',
+  'failed',
+])
+const ragErrorCodes = new Set<AgentRagApiErrorCode>([
+  'invalid_query',
+  'no_relevant_context',
+  'knowledge_base_empty',
+  'rag_storage_unavailable',
+  'embedding_unavailable',
+  'embedding_failed',
+  'rag_unavailable',
+  'output_truncated',
+  'output_malformed',
+  'failed',
+])
+const toolErrorCodes = new Set<AgentToolApiErrorCode>([
+  'invalid_tool_arguments',
+  'tool_permission_denied',
+  'tool_timeout',
+  'tool_output_too_large',
+  'tool_not_found',
+  'tool_execution_failed',
+])
+
+const isNullableBoolean = (value: unknown): value is boolean | null =>
+  typeof value === 'boolean' || value === null
+
+const isOptionalNullableBoolean = (value: unknown): value is boolean | null | undefined =>
+  value === undefined || isNullableBoolean(value)
+
+const isApiRagReference = (value: unknown): boolean => {
+  if (typeof value !== 'object' || value === null) return false
+  const reference = value as Record<string, unknown>
+  return (
+    isOptionalNullableString(reference.document_id) &&
+    isOptionalNullableString(reference.chunk_id) &&
+    isOptionalNullableNumber(reference.chunk_index) &&
+    (reference.chunk_index === undefined ||
+      reference.chunk_index === null ||
+      (typeof reference.chunk_index === 'number' &&
+        Number.isInteger(reference.chunk_index) &&
+        reference.chunk_index <= 1_000_000)) &&
+    isOptionalNullableString(reference.content) &&
+    isOptionalNullableNumber(reference.distance) &&
+    (reference.distance === undefined ||
+      reference.distance === null ||
+      (typeof reference.distance === 'number' && reference.distance <= 2)) &&
+    isOptionalNullableBoolean(reference.truncated)
+  )
+}
+
+const isApiRag = (value: unknown): boolean => {
+  if (typeof value !== 'object' || value === null) return false
+  const rag = value as Record<string, unknown>
+  return (
+    typeof rag.status === 'string' &&
+    ragStatuses.has(rag.status as AgentRagApiStatus) &&
+    isOptionalNullableString(rag.warning) &&
+    (rag.error_code === undefined ||
+      rag.error_code === null ||
+      (typeof rag.error_code === 'string' &&
+        ragErrorCodes.has(rag.error_code as AgentRagApiErrorCode))) &&
+    Array.isArray(rag.references) &&
+    rag.references.every(isApiRagReference)
+  )
+}
+
+const isApiToolCall = (value: unknown): boolean => {
+  if (typeof value !== 'object' || value === null) return false
+  const call = value as Record<string, unknown>
+  const ragIsAllowed =
+    call.name === 'knowledge_search'
+      ? call.rag === undefined || call.rag === null || isApiRag(call.rag)
+      : call.rag === undefined || call.rag === null
+  return (
+    typeof call.call_id === 'string' &&
+    typeof call.name === 'string' &&
+    isNullableBoolean(call.succeeded) &&
+    isNullableBoolean(call.truncated) &&
+    (typeof call.error_code === 'string' || call.error_code === null) &&
+    (call.error_code === null || toolErrorCodes.has(call.error_code as AgentToolApiErrorCode)) &&
+    (typeof call.error_message === 'string' || call.error_message === null) &&
+    ragIsAllowed
+  )
+}
 
 const isApiStep = (value: unknown): boolean => {
   if (typeof value !== 'object' || value === null) return false
@@ -91,7 +195,10 @@ const isApiStep = (value: unknown): boolean => {
     ['final_answer', 'tool_call', 'invalid'].includes(String(step.decision_kind)) &&
     Array.isArray(step.tool_names) &&
     step.tool_names.every((name) => typeof name === 'string') &&
-    (typeof step.tool_succeeded === 'boolean' || step.tool_succeeded === null)
+    (typeof step.tool_succeeded === 'boolean' || step.tool_succeeded === null) &&
+    (step.tool_calls === undefined ||
+      step.tool_calls === null ||
+      (Array.isArray(step.tool_calls) && step.tool_calls.every(isApiToolCall)))
   )
 }
 

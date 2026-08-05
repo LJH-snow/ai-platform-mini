@@ -8,6 +8,7 @@ from app.exceptions.base import (
     ProviderError,
     ProviderUnavailableError,
     RAGStorageUnavailableError,
+    RAGUnavailableError,
 )
 from app.rag.service import PreparedRAGRequest, RAGReference, RAGService
 from app.schemas.chat import ChatRequest
@@ -106,6 +107,12 @@ class KnowledgeSearchTool:
                 query=normalized_query,
                 error_code="no_relevant_context",
                 message=_NO_RELEVANT_CONTEXT_MESSAGE,
+            )
+        except RAGUnavailableError:
+            return self._error_result(
+                query=normalized_query,
+                error_code="rag_unavailable",
+                message="The knowledge search service is temporarily unavailable.",
             )
         except RAGStorageUnavailableError:
             return self._error_result(

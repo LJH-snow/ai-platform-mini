@@ -12,6 +12,7 @@ from app.exceptions.base import (
     ProviderError,
     ProviderUnavailableError,
     RAGStorageUnavailableError,
+    RAGUnavailableError,
 )
 from app.rag.service import PreparedRAGRequest, RAGReference, RAGService
 from app.schemas.chat import ChatRequest
@@ -118,6 +119,11 @@ async def test_success_returns_reference_metadata_and_never_calls_answer(
             NoRelevantContextError("distance threshold=0.35"),
             "no_relevant_context",
             "No relevant reference material",
+        ),
+        (
+            RAGUnavailableError("RAG disabled or embedding unavailable"),
+            "rag_unavailable",
+            "knowledge search service is temporarily unavailable",
         ),
         (
             RAGStorageUnavailableError("postgres password=internal-secret"),

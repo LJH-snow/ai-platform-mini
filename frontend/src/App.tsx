@@ -9,6 +9,8 @@ import {
   type AgentClient,
 } from './agent/client.ts'
 import type {
+  AgentRag,
+  AgentRagReference,
   AgentRun,
   AgentRunInput,
   AgentRunStatus,
@@ -124,6 +126,125 @@ const fallbackAnswerForRun = (run: AgentRun): string => {
 const formatMetric = (value: number | null): string =>
   value === null ? '后端未提供' : String(value)
 
+const ragStatusTitles: Record<AgentRag['status'], string> = {
+  success_with_sources: '参考来源：暂无可用来源',
+  no_relevant_sources: '参考来源：暂无相关来源',
+  knowledge_base_empty: '参考来源：知识库为空',
+  rag_unavailable: '参考来源：来源暂不可用',
+  embedding_failed: '参考来源：来源暂不可用',
+  output_unavailable: '参考来源：来源暂不可用',
+  failed: '参考来源：来源暂不可用',
+}
+
+const ragStatusDescriptions: Record<AgentRag['status'], string> = {
+  success_with_sources: '后端未提供可展示的来源内容。',
+  no_relevant_sources: '后端未返回与当前查询匹配的来源。',
+  knowledge_base_empty: '当前知识库没有可检索的内容。',
+  rag_unavailable: 'RAG 服务当前不可用，未生成来源。',
+  embedding_failed: '查询向量生成失败，未生成来源。',
+  output_unavailable: 'RAG 工具输出当前不可用，未生成来源。',
+  failed: 'RAG 检索失败，未生成来源。',
+}
+
+const MAX_RAG_CONTENT_LENGTH = 1200
+
+const formatRagValue = (value: string | number | null): string =>
+  value === null ? '后端未提供' : String(value)
+
+const getRagContent = (
+  reference: AgentRagReference,
+): { content: string | null; truncated: boolean } => {
+  if (reference.content === null) {
+    return { content: null, truncated: reference.truncated }
+  }
+  const contentTruncated = reference.content.length > MAX_RAG_CONTENT_LENGTH
+  return {
+    content: contentTruncated
+      ? `${reference.content.slice(0, MAX_RAG_CONTENT_LENGTH - 1)}…`
+      : reference.content,
+    truncated: reference.truncated || contentTruncated,
+  }
+}
+
+function RagReferenceCard({ reference }: { reference: AgentRagReference }): JSX.Element {
+  const { content, truncated } = getRagContent(reference)
+
+  return (
+    <li className="ragReferenceCard">
+      <dl className="ragReferenceFacts">
+        <div>
+          <dt>文档标识</dt>
+          <dd>{formatRagValue(reference.documentId)}</dd>
+        </div>
+        <div>
+          <dt>分块标识</dt>
+          <dd>{formatRagValue(reference.chunkId)}</dd>
+        </div>
+        <div>
+          <dt>分块序号</dt>
+          <dd>{formatRagValue(reference.chunkIndex)}</dd>
+        </div>
+        <div>
+          <dt>距离</dt>
+          <dd>{formatRagValue(reference.distance)}</dd>
+        </div>
+      </dl>
+      <div className="ragReferenceContent">
+        <span className="metricLabel">后端片段摘要</span>
+        <p>{content ?? '后端未提供'}</p>
+      </div>
+      {truncated ? (
+        <p className="ragTruncatedNotice">内容已按安全边界截断，未展示完整片段。</p>
+      ) : null}
+    </li>
+  )
+}
+
+function RagSection({ tool }: { tool: AgentToolCall }): JSX.Element | null {
+  if (tool.name !== 'knowledge_search') return null
+  if (tool.rag === null) {
+    return (
+      <div className="ragUnavailableNotice" role="status">
+        <strong>参考来源：暂无可用来源</strong>
+        <span>当前 Agent Run 响应未提供可展示的来源字段；前端不会生成来源卡片或引用。</span>
+      </div>
+    )
+  }
+
+  const { rag } = tool
+  const hasReferences = rag.references.length > 0
+  return (
+    <section
+      className={hasReferences ? 'ragSources' : 'ragUnavailableNotice'}
+      aria-label="RAG 参考来源"
+    >
+      <div className="ragHeader">
+        <strong>
+          {hasReferences ? `参考来源：${rag.references.length} 条` : ragStatusTitles[rag.status]}
+        </strong>
+        <span>
+          关联工具：knowledge_search · 步骤序号：{tool.stepIndex} · 调用标识：
+          {tool.callId ?? '后端未提供'}
+        </span>
+      </div>
+      {rag.warning ? <p className="ragWarning">不可信参考提示：{rag.warning}</p> : null}
+      {hasReferences ? (
+        <ol className="ragReferenceList">
+          {rag.references.map((reference, index) => (
+            <RagReferenceCard
+              key={`${tool.callId ?? tool.id}-rag-${index}`}
+              reference={reference}
+            />
+          ))}
+        </ol>
+      ) : (
+        <span>{ragStatusDescriptions[rag.status]}</span>
+      )}
+      {rag.errorCode ? <span>RAG 错误码：{rag.errorCode}</span> : null}
+    </section>
+  )
+}
+
 function ToolCallCard({ tool }: { tool: AgentToolCall }): JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const contentId = `${tool.id}-content`
@@ -146,11 +267,13 @@ function ToolCallCard({ tool }: { tool: AgentToolCall }): JSX.Element {
       {expanded ? (
         <div id={contentId} className="traceDetails">
           <p>步骤序号：{tool.stepIndex}</p>
+          <p>调用标识：{tool.callId ?? '后端未提供'}</p>
           <p>耗时：{tool.durationMs === null ? '后端未提供' : `${tool.durationMs} ms`}</p>
           <p>输入摘要：{tool.inputSummary ?? '后端未提供'}</p>
           <p>输出摘要：{tool.outputSummary ?? '后端未提供'}</p>
           {tool.errorCode ? <p>错误码：{tool.errorCode}</p> : null}
           {tool.errorMessage ? <p className="safeError">{tool.errorMessage}</p> : null}
+          <RagSection tool={tool} />
         </div>
       ) : null}
     </div>

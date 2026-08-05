@@ -1,6 +1,6 @@
 # AI Platform Mini Frontend
 
-基于 Vite + React + TypeScript 的 Agent Console。当前完成阶段 3：保留普通 Chat SSE，并接入同步 Agent Run Trace 与工具调用卡片。
+基于 Vite + React + TypeScript 的 Agent Console。当前完成阶段 4：保留普通 Chat SSE，接入同步 Agent Run Trace、Tool 级 RAG 来源卡片与安全降级。
 
 ## 阶段 3 已完成
 
@@ -36,12 +36,19 @@
 - 保留阶段 2 的 Chat SSE 请求、增量合并、断连分类、Request ID 和取消行为测试。
 - 新增测试覆盖空 Trace、calculator 成功/失败/超时/取消、未知工具、重复步骤/事件去重、长摘要截断、异常响应、展开/收起、回答与 Trace 状态一致、本地取消和重新运行。
 
+## 阶段 4 已完成
+
+- **同步 Agent Run RAG 来源**：在对应的 `knowledge_search` Tool Call 卡片内读取公开契约 `steps[].tool_calls[].rag.references`，保持 `stepIndex` 与 `callId` 关联，不展示回答级全局来源。
+- **真实来源字段**：来源卡片只展示后端实际提供的稳定文档/分块标识、分块序号、片段摘要和 distance；字段缺失时显示“后端未提供”，不会生成文档名称、URL、rank、引用编号或其他推断字段。
+- **空与错误状态**：区分来源缺失、无相关来源、知识库为空、RAG 服务不可用、Embedding 失败、输出不可用和其他失败；服务故障不会伪装成无相关来源。
+- **安全展示**：来源片段遵循后端截断边界，过长或 `truncated=true` 时显示安全提示；warning 作为不可信参考提示展示，所有来源内容使用普通文本渲染，不执行 HTML 或来源中的指令。
+- **能力边界**：RAG 来源是不可信参考材料，不等同于回答内精确引用，也不表示模型对某个来源做出了可验证的精确引用。Agent Run 仍是同步请求，不承诺 Agent SSE、实时 Trace 或实时 RAG Trace。
+
 ## 尚未实现
 
 - **Agent SSE / 实时 Trace 推送**：当前 Agent Run 是同步 JSON，只能在请求完成后加载完整 Trace。
 - **事件时间与步骤耗时**：当前公开 API 未提供，前端不推算或伪造。
 - **工具输入、输出和详细错误**：当前公开 API 未提供，前端不读取 Provider 或内部 Runtime 原始对象。
-- **RAG 来源 UI**：阶段 4 尚未开始。
 - 持久化 Trace 查询、实时 Token 更新和其他后续 Agent Console 能力尚未实现。
 
 ## 鉴权与跨源运行时边界
