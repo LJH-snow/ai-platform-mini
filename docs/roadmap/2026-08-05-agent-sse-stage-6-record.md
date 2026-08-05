@@ -41,14 +41,26 @@ JSON 拆成假事件。事件由单调 `sequence` 和真实 `run_id`/`request_id
 `aria-expanded`/`aria-controls`；点击后按钮焦点保持不变，Trace 内容正确展开。普通
 键盘输入与提交路径也已验证。
 
-RAG 失败状态已验证，成功来源/空知识库路径未验证：PostgreSQL/pgvector 已真实启动，
-但 Ollama embedding 服务不可用。真实浏览器中的 Agent SSE 先显示“RAG 来源加载中”，
-随后显示“来源暂不可用”，RAG 错误码为 `embedding_failed`，最终显示“RAG 未找到相关
-来源”；后端日志确认真实调用了 `/api/embed` 并返回 404。这只证明真实 RAG
-loading/unavailable/embedding_failed 路径，不证明有来源或空知识库成功检索。RAG 安全投影
-和状态由后端/组件测试覆盖；测试覆盖不等同于真实浏览器来源，不能据此伪造来源或声称
-回答包含精确引用。Trace 按钮的焦点保持和展开语义已完成浏览器验证，但完整屏幕阅读器
-验证仍未完成，不能把语义化控件测试或静态回归等同于辅助技术验收。
+刚完成的 `npm run a11y:smoke` 使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG
+路径通过。初始空态与真实 Agent/RAG 状态均为 axe `violations=0`；初始空态另有 1 个
+`incomplete` color-contrast（`.emptyIcon` 内容过短，axe 无法判断），不是 violation，
+不能写成 axe 完全没有 incomplete。4 个 disclosure 的
+`aria-expanded`/`aria-controls`/`hidden` 关系、键盘 Space 后焦点保持、live region 非逐字
+播报和 320px 无横向溢出均通过。完整 VoiceOver/NVDA/Orca 仍未验证。
+
+RAG 的真实浏览器路径已补齐。Ollama 已安装 `nomic-embed-text`，真实调用 `/api/embed`
+返回 1 个 768 维向量；PostgreSQL/pgvector 空库的 Agent SSE 路径显示
+`RAG loading` → `knowledge_base_empty` → `run_completed`。随后使用仓库已有
+`docs/superpowers/specs/2026-08-04-agent-runtime-design.md` 真实 ingest 53 个 chunks，
+浏览器真实来源路径显示 `success_with_sources` 和 5 条来源，来源只显示后端安全投影的
+`document_id`、`chunk_id`、`chunk_index`、`distance`、`content`；该次 UI Run 后续因
+`token_budget_exceeded` 停止。另一次直接真实 SSE 请求使用 `token_budget=8192`、
+`max_steps=3`，收到 `rag_started`、`tool_completed`（`success_with_sources`，5 条 refs）、
+多个 `answer_delta` 和唯一 `run_timed_out`（`deadline_exceeded`）；因此该次请求不能写成
+`run_completed`。这些证据证明真实 RAG 成功、空库路径、回答增量和终止语义，但不提供
+回答内精确引用。浏览器 DOM、键盘、ARIA、live region 和五档响应式已验证；完整屏幕阅读器
+验证仍未完成，因为当前环境没有可用的 VoiceOver、NVDA 或 Orca，不能把语义化控件回归
+等同于辅助技术验收。
 
 开发期 proxy 的两个变量都不使用 `VITE_` 前缀，只由 Vite 的 Node 进程读取；普通 Chat
 SSE 和 Agent SSE 都通过标准 Vite proxy 转发，以保留流式响应语义。生产构建不启用该
@@ -59,16 +71,23 @@ proxy，生产入口仍保持原有运行时配置和 Bearer Key 安全边界。
 - 阶段 6 的“已完成”依据：后端/前端门禁通过，真实浏览器通过开发期 proxy 验证真实
   Agent SSE 的增量、Trace、Tool Call、停止等待、断网/恢复、普通键盘输入/提交和
   Trace disclosure 交互路径，包含 `aria-expanded`/`aria-controls`、点击后焦点保持及
-  正确展开；五档视口均无横向溢出。
-- 阶段 6 的 RAG 验证口径：RAG 失败状态已验证，成功来源/空知识库路径未验证。
-  PostgreSQL/pgvector 已真实启动，但 Ollama embedding 服务不可用；真实浏览器显示“RAG
-  来源加载中”后显示“来源暂不可用”，RAG 错误码为 `embedding_failed`，最终显示“RAG 未
-  找到相关来源”，后端日志确认真实调用 `/api/embed` 并返回 404。这只证明真实 RAG
-  loading/unavailable/embedding_failed 路径，不证明有来源或空知识库成功检索。完整屏幕
-  阅读器验证仍未完成。
+  正确展开；`npm run a11y:smoke` 使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG
+  路径通过，4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、Space
+  后焦点保持、live region 非逐字播报和 320px 无横向溢出均通过；初始空态与真实
+  Agent/RAG 状态 axe `violations=0`，但初始空态有 1 个 `incomplete` color-contrast
+  （`.emptyIcon` 内容过短无法判断）。完整 VoiceOver/NVDA/Orca 仍未验证；五档视口均无横向溢出。
+- 阶段 6 的 RAG 验证口径：Ollama `nomic-embed-text` 已真实安装，`/api/embed` 返回 1 个
+  768 维向量；空库浏览器 Agent SSE 已显示 `RAG loading` → `knowledge_base_empty` →
+  `run_completed`。使用 `docs/superpowers/specs/2026-08-04-agent-runtime-design.md` 真实
+  ingest 53 个 chunks 后，浏览器显示 `success_with_sources` 和 5 条安全来源。该次 UI Run
+  因 `token_budget_exceeded` 停止；独立的真实 SSE 请求以 `token_budget=8192`、`max_steps=3`
+  收到 `rag_started`、`tool_completed`（5 条 refs）、多个 `answer_delta`，并以唯一
+  `run_timed_out(deadline_exceeded)` 终止，不能记录为 `run_completed`。完整屏幕阅读器验证
+  仍未完成，浏览器 DOM、键盘、ARIA、live region 和五档响应式已验证。
 - 阶段 6 不宣称回答内精确引用、持久化 Trace 查询、事件回放、精确 usage、MCP UI 或
- 复杂多 Agent 编排仍不在阶段 6 范围内。本轮已完成开发代理、重试修复、浏览器和测试验收，
-  已有 commits `a810254` 和 `73c4d3d` 已提交并推送；本轮验收记录已补录，当前文档变更待提交/推送，等待用户 Code Review，不进入阶段 7。
+复杂多 Agent 编排仍不在阶段 6 范围内。本轮已完成开发代理、重试修复、浏览器和测试验收，
+已有 commits `a810254`、`73c4d3d` 和 `e5f3e00` 已提交并推送；本轮只更新指定文档，
+不提交 Git，保留完整屏幕阅读器环境限制，等待用户 Code Review，不进入阶段 7。
 
 ## 已知限制与 Review 项
 
@@ -88,4 +107,4 @@ Observer 与 Recorder 同时存在时的兼容方式，以及断连后是否需�
 
 ## 学习总结
 
-复用 Runtime Observer 能让实时 Trace 与同步结果共享真实执行顺序，避免前端推断 Agent 状态。`answer_delta` 必须来自真实 provider chunk，不能从模型 JSON 或完整回答拆分。开发期 Vite proxy 说明真实浏览器验证还需要清晰的服务端鉴权边界：key 只在 Node proxy 注入，不能进入浏览器 bundle。事件公开层必须严格投影字段，尤其是 RAG、错误和回答内容；RAG 测试证据不能替代真实来源。Abort、网络断连和后端取消是不同状态，必须由不同证据驱动。精确 usage、事件回放、持久化查询、回答内精确引用、MCP UI、完整辅助技术验收和复杂编排留在后续阶段。
+复用 Runtime Observer 能让实时 Trace 与同步结果共享真实执行顺序，避免前端推断 Agent 状态。`answer_delta` 必须来自真实 provider chunk，不能从模型 JSON 或完整回答拆分。开发期 Vite proxy 说明真实浏览器验证还需要清晰的服务端鉴权边界：key 只在 Node proxy 注入，不能进入浏览器 bundle。事件公开层必须严格投影字段，尤其是 RAG、错误和回答内容；本次真实 embedding、空库查询和 5 条安全来源验证了测试之外的浏览器路径。Abort、网络断连和后端取消是不同状态，必须由不同证据驱动。精确 usage、事件回放、持久化查询、回答内精确引用、MCP UI、完整辅助技术验收和复杂编排留在后续阶段。

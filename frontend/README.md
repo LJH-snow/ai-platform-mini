@@ -79,8 +79,9 @@
 
 - 本轮通过开发期 Vite proxy 完成真实 Agent SSE 浏览器验证；proxy 使用 Node 进程环境变量 `AI_PLATFORM_DEV_API_BASE_URL` 和 `AI_PLATFORM_DEV_API_KEY`，key 只由 Node proxy 注入后端请求，不进入浏览器 bundle 或 `import.meta.env`。
 - 已验证真实增量回答、实时 Trace、两步 calculator Tool Call、停止等待与后端终态未知、网络断开后的 `connection_lost`、恢复网络后的重试，以及键盘多行和运行快捷键。
-- RAG 真实浏览器验证已覆盖来源加载、来源暂不可用、`embedding_failed` 和最终 `no_relevant_sources` 状态；`success_with_sources` 成功来源与 `knowledge_base_empty` 空知识库路径仍未验证。当前默认 `RAG_ENABLED=false`，且 Ollama embedding `/api/embed` 不可用，因此不能声称已验证真实来源。RAG 安全投影和状态由后端/组件测试覆盖；这些测试不能被记录为真实浏览器来源，也不能伪造来源。
-- 320/375/768/1024/1440 五档均无横向溢出。键盘焦点与屏幕阅读器仍未完成完整浏览器级验证，不能把语义化控件测试或静态回归等同于辅助技术验收。
+- `npm run a11y:smoke` 已使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG 路径通过：初始空态与真实 Agent/RAG 状态均为 axe `violations=0`；初始空态另有 1 个 `incomplete` color-contrast（`.emptyIcon` 内容过短无法判断），不是 violation，不能写成 axe 完全无 incomplete。4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、键盘 Space 后焦点保持、live region 非逐字播报和 320px 无横向溢出均通过。完整 VoiceOver/NVDA/Orca 仍未验证。
+- Ollama 已安装 `nomic-embed-text`，真实 `/api/embed` 返回 1 个 768 维向量。真实 PostgreSQL/pgvector 空库的 Agent SSE 浏览器路径为 `RAG loading` → `knowledge_base_empty` → `run_completed`；使用仓库已有 `docs/superpowers/specs/2026-08-04-agent-runtime-design.md` 真实 ingest 53 个 chunks 后，浏览器真实来源路径显示 `success_with_sources` 和 5 条来源，展示的安全投影字段包括 `document_id`、`chunk_id`、`chunk_index`、`distance` 和 `content`。该次 UI Run 后续因 `token_budget_exceeded` 停止。直接真实 SSE 请求使用 `token_budget=8192`、`max_steps=3`，收到 `rag_started`、`tool_completed`（`success_with_sources`，5 条 refs）、多个 `answer_delta`，最后收到唯一 `run_timed_out`（`deadline_exceeded`）；这条请求不能记录为 `run_completed`。当前默认 `RAG_ENABLED=false`，上述验证使用显式启用的真实本地依赖；来源仅来自后端安全事件，前端没有拼接或伪造来源。
+- 320/375/768/1024/1440 五档均无横向溢出。浏览器 DOM 语义、键盘焦点、ARIA 和 live region 已验证；完整屏幕阅读器仍未完成，因为当前环境没有可用的 VoiceOver、NVDA 或 Orca，不能把浏览器语义回归等同于辅助技术验收。阶段 7 未进入，当前等待人工 Code Review。
 
 ## 尚未实现或不在阶段 6 范围
 
