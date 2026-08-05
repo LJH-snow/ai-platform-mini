@@ -112,6 +112,7 @@ class AgentState:
     messages: list[AgentMessage] = field(default_factory=list)
     steps: list[AgentStep] = field(default_factory=list)
     token_usage: int = 0
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)

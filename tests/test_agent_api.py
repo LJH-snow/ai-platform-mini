@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.agents import AgentModel, AgentRuntime, AgentTool
 from app.agents.models import (
     AgentDecision,
     AgentEvent,
@@ -24,6 +26,7 @@ from app.core.context import RequestContext
 from app.exceptions.base import ProviderError, QuotaExceededError
 from app.main import app
 from app.mcp import MCPToolAdapter, MCPToolCallResult, MCPToolDefinition
+from app.runs import InMemoryRunTraceRecorder, RunTraceRecorderFactory
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatResponse
 from app.services.agent_service import (
@@ -31,6 +34,7 @@ from app.services.agent_service import (
     AgentService,
     _ChatServiceAgentModel,
 )
+from app.tools.executor import ToolExecutor
 from app.tools.registry import ToolRegistry
 
 client = TestClient(app)
@@ -540,6 +544,78 @@ class _FakeUsageCollector:
     ) -> None:
         del context, latency_ms
         self.responses.append(response)
+
+
+@pytest.mark.asyncio
+async def test_agent_service_passes_request_and_model_to_runtime_trace_boundary() -> (
+    None
+):
+    captured: dict[str, object] = {}
+    recorder_factory: RunTraceRecorderFactory = InMemoryRunTraceRecorder
+
+    class CapturingRuntime:
+        async def run(
+            self,
+            user_input: str,
+            *,
+            max_steps: int,
+            timeout: float | None,
+            token_budget: int | None,
+            request_id: str | None,
+            model: str | None,
+        ) -> AgentRunResult:
+            captured.update(
+                {
+                    "user_input": user_input,
+                    "max_steps": max_steps,
+                    "timeout": timeout,
+                    "token_budget": token_budget,
+                    "request_id": request_id,
+                    "model": model,
+                }
+            )
+            return _outcome().result
+
+    def runtime_factory(
+        model: AgentModel,
+        tools: Mapping[str, AgentTool] | None,
+        *,
+        tool_executor: ToolExecutor | None = None,
+        recorder_factory: RunTraceRecorderFactory | None = None,
+    ) -> AgentRuntime:
+        del tools, tool_executor
+        captured["factory_model"] = cast(_ChatServiceAgentModel, model).actual_model
+        captured["recorder_factory"] = recorder_factory
+        return cast(AgentRuntime, CapturingRuntime())
+
+    chat_service = _FakeChatService()
+    chat_service.default_model = "actual-model"
+    service = AgentService(
+        chat_service=chat_service,  # type: ignore[arg-type]
+        quota_service=_FakeQuotaService(),  # type: ignore[arg-type]
+        usage_collector=_FakeUsageCollector(),  # type: ignore[arg-type]
+        runtime_factory=runtime_factory,
+        recorder_factory=recorder_factory,
+    )
+
+    await service.run(
+        AgentRunRequest(
+            message="hello",
+            max_steps=3,
+            timeout_seconds=12.0,
+            token_budget=99,
+        ),
+        context=RequestContext(request_id="request-from-api", api_key="hashed"),
+        api_key=APIKey(key="hashed", name="test"),
+    )
+
+    assert captured["request_id"] == "request-from-api"
+    assert captured["model"] == "actual-model"
+    assert captured["factory_model"] == "actual-model"
+    assert captured["recorder_factory"] is recorder_factory
+    assert captured["max_steps"] == 3
+    assert captured["timeout"] == 12.0
+    assert captured["token_budget"] == 99
 
 
 @pytest.mark.asyncio

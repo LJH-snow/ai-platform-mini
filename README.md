@@ -634,3 +634,15 @@ MCP foundation 的关键是把外部协议限制在 Client 和 Adapter 边界内
 RAG Tool 化的关键不是复制一套检索代码，而是把现有 `RAGService.prepare` 作为唯一检索入口，再通过结构化引用把结果交给 Agent。将来源、距离和清洗后的内容一起返回，既便于模型使用，也为后续引用展示和评测保留证据。容器根据 RAG 能力是否可用动态注册工具，使功能开关不会改变默认 Agent 的安全边界。通过区分可预期的知识库、存储和 embedding 错误与未知异常，Tool 层可以给模型稳定反馈，同时避免暴露内部实现细节。
 
 > [Sprint 10 RAG Tool 化设计说明](docs/superpowers/specs/2026-08-04-rag-tool-design.md)
+
+### Run Trace Foundation（当前切片）
+
+本切片新增 `app/runs/`，基于现有 `AgentEvent` 和 `AgentRunResult` 生成安全的 Run Trace，当前仅支持**单 run 的脱敏内存 Recorder**以及 JSONL 导出/读取。Trace 会保留 run_id、可选 request_id/model、状态、停止原因、token usage、步数、工具摘要、耗时和经过截断的错误/消息摘要；默认不保存完整 prompt、API key、原始 tool arguments、完整 tool output、RAG 原文或 MCP 原文。
+
+`AgentService` 的 Recorder 注入边界是可选的 `recorder_factory`：工厂必须为每次 `runtime.run()` 返回新的单 run Recorder；未配置时保持原有 Agent 行为。单个 `InMemoryRunTraceRecorder` 不得跨 run 复用，同一个 `AgentRuntime` 并发执行多个 run 时应使用 `recorder_factory` 隔离各自 trace，避免 request_id、事件和终态互相污染。
+
+当前切片已覆盖直接回答、工具成功/失败、max steps、timeout/cancel、model error、Recorder 异常隔离、脱敏截断、JSONL round-trip 以及并发 request_id 隔离测试。后续 Sprint 13 的 PostgreSQL 持久化、SSE 推送和公开查询 API 均未实现，本切片也不提供这些能力。
+
+#### Run Trace Foundation 学习总结
+
+Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制一套 Agent Loop。单 run Recorder 加上显式 `recorder_factory` 边界，可以在保持简单的同时避免并发状态污染。脱敏和截断必须位于记录边界，默认不保存 prompt、工具参数和外部检索原文。持久化、实时推送和查询接口应作为后续 Sprint 的独立能力演进。

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import TypeVar, cast
 
@@ -21,6 +22,7 @@ from app.agents.models import (
 )
 from app.agents.protocols import AgentModel, AgentTool, ToolContext
 from app.exceptions.base import QuotaExceededError
+from app.runs.protocols import AgentEventObserver, RunTraceRecorderProtocol
 from app.tools.executor import ToolExecutor
 
 _T = TypeVar("_T")
@@ -29,6 +31,8 @@ _TOOL_OUTPUT_TRUNCATION_MARKER = "...[tool output truncated]"
 _TOOL_EXECUTION_ERROR = "tool_execution_failed"
 _TOOL_FAILURE_MESSAGE = "Tool execution failed."
 _TOOL_NOT_FOUND_MESSAGE = "Requested tool is unavailable."
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRuntime:
@@ -41,6 +45,9 @@ class AgentRuntime:
         *,
         tool_executor: ToolExecutor | None = None,
         tool_output_max_chars: int = _DEFAULT_TOOL_OUTPUT_MAX_CHARS,
+        observer: AgentEventObserver | None = None,
+        recorder: RunTraceRecorderProtocol | None = None,
+        recorder_factory: Callable[[], RunTraceRecorderProtocol] | None = None,
     ) -> None:
         if tools is not None and tool_executor is not None:
             raise ValueError("provide tools or tool_executor, not both")
@@ -50,6 +57,15 @@ class AgentRuntime:
         self._tools = dict(tools or {})
         self._tool_executor = tool_executor
         self._tool_output_max_chars = tool_output_max_chars
+        if observer is not None and (
+            recorder is not None or recorder_factory is not None
+        ):
+            raise ValueError("provide observer or recorder, not both")
+        if recorder is not None and recorder_factory is not None:
+            raise ValueError("provide recorder or recorder_factory, not both")
+        self._observer = observer
+        self._recorder = recorder
+        self._recorder_factory = recorder_factory
 
     async def run(
         self,
@@ -61,6 +77,8 @@ class AgentRuntime:
         cancel_event: asyncio.Event | None = None,
         token_budget: int | None = None,
         run_id: str | None = None,
+        request_id: str | None = None,
+        model: str | None = None,
     ) -> AgentRunResult:
         """Execute one bounded run and return all state and observability data."""
         if not user_input.strip():
@@ -76,11 +94,20 @@ class AgentRuntime:
         state = AgentState(
             run_id=resolved_run_id,
             user_input=user_input,
+            request_id=request_id,
             messages=[AgentMessage(role="user", content=user_input)],
         )
         events: list[AgentEvent] = []
+        recorder = self._create_recorder()
+        self._start_recorder(
+            recorder,
+            resolved_run_id,
+            request_id=request_id,
+            model=model or getattr(self._model, "actual_model", None),
+        )
         self._append_event(
             events,
+            recorder=recorder,
             kind=AgentEventKind.RUN_STARTED,
             run_id=resolved_run_id,
             message=user_input,
@@ -93,6 +120,7 @@ class AgentRuntime:
                 stop_reason = self._check_stop(effective_deadline, cancel_event)
                 if stop_reason is not None:
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=self._status_for(stop_reason),
@@ -105,6 +133,7 @@ class AgentRuntime:
                     and state.token_usage >= token_budget
                 ):
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=RunStatus.STOPPED,
@@ -120,6 +149,7 @@ class AgentRuntime:
                     )
                 except _RuntimeStop as stop:
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=self._status_for(stop.reason),
@@ -127,6 +157,7 @@ class AgentRuntime:
                     )
                 except asyncio.CancelledError:
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=RunStatus.CANCELLED,
@@ -136,6 +167,7 @@ class AgentRuntime:
                     raise
                 except Exception as exc:
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=RunStatus.FAILED,
@@ -146,6 +178,7 @@ class AgentRuntime:
                 invalid_reason = self._validate_decision(decision)
                 self._append_event(
                     events,
+                    recorder=recorder,
                     kind=AgentEventKind.MODEL_DECISION,
                     run_id=resolved_run_id,
                     step_index=step_index,
@@ -158,6 +191,7 @@ class AgentRuntime:
                 )
                 if invalid_reason is not None:
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=RunStatus.FAILED,
@@ -170,6 +204,7 @@ class AgentRuntime:
                 if token_budget is not None and state.token_usage > token_budget:
                     state.steps.append(AgentStep(index=step_index, decision=decision))
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=RunStatus.STOPPED,
@@ -182,6 +217,7 @@ class AgentRuntime:
                     )
                     self._append_event(
                         events,
+                        recorder=recorder,
                         kind=AgentEventKind.ANSWER,
                         run_id=resolved_run_id,
                         step_index=step_index,
@@ -189,6 +225,7 @@ class AgentRuntime:
                     )
                     state.steps.append(AgentStep(index=step_index, decision=decision))
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=RunStatus.COMPLETED,
@@ -203,6 +240,7 @@ class AgentRuntime:
                 ):
                     state.steps.append(AgentStep(index=step_index, decision=decision))
                     return self._finish(
+                        recorder=recorder,
                         state=state,
                         events=events,
                         status=RunStatus.STOPPED,
@@ -214,6 +252,7 @@ class AgentRuntime:
                     stop_reason = self._check_stop(effective_deadline, cancel_event)
                     if stop_reason is not None:
                         return self._finish(
+                            recorder=recorder,
                             state=state,
                             events=events,
                             status=self._status_for(stop_reason),
@@ -221,6 +260,7 @@ class AgentRuntime:
                         )
                     self._append_event(
                         events,
+                        recorder=recorder,
                         kind=AgentEventKind.TOOL_STARTED,
                         run_id=resolved_run_id,
                         step_index=step_index,
@@ -233,9 +273,11 @@ class AgentRuntime:
                             step_index,
                             effective_deadline,
                             cancel_event,
+                            request_id=state.request_id,
                         )
                     except _RuntimeStop as stop:
                         return self._finish(
+                            recorder=recorder,
                             state=state,
                             events=events,
                             status=self._status_for(stop.reason),
@@ -243,6 +285,7 @@ class AgentRuntime:
                         )
                     except asyncio.CancelledError:
                         return self._finish(
+                            recorder=recorder,
                             state=state,
                             events=events,
                             status=RunStatus.CANCELLED,
@@ -259,6 +302,7 @@ class AgentRuntime:
                     )
                     self._append_event(
                         events,
+                        recorder=recorder,
                         kind=(
                             AgentEventKind.TOOL_COMPLETED
                             if result.succeeded
@@ -279,6 +323,7 @@ class AgentRuntime:
                     )
                 )
             return self._finish(
+                recorder=recorder,
                 state=state,
                 events=events,
                 status=RunStatus.STOPPED,
@@ -286,6 +331,7 @@ class AgentRuntime:
             )
         except asyncio.CancelledError:
             return self._finish(
+                recorder=recorder,
                 state=state,
                 events=events,
                 status=RunStatus.CANCELLED,
@@ -299,6 +345,7 @@ class AgentRuntime:
         step_index: int,
         effective_deadline: float | None,
         cancel_event: asyncio.Event | None,
+        request_id: str | None,
     ) -> ToolResult:
         if self._tool_executor is not None:
             remaining = self._remaining(effective_deadline)
@@ -306,7 +353,11 @@ class AgentRuntime:
                 self._tool_executor.execute(
                     tool_call.name,
                     tool_call.arguments,
-                    ToolContext(run_id=run_id, step_index=step_index),
+                    ToolContext(
+                        run_id=run_id,
+                        step_index=step_index,
+                        request_id=request_id,
+                    ),
                     timeout_seconds=remaining,
                 ),
                 effective_deadline=effective_deadline,
@@ -334,7 +385,11 @@ class AgentRuntime:
             content = await self._await_controlled(
                 tool.execute(
                     tool_call.arguments,
-                    ToolContext(run_id=run_id, step_index=step_index),
+                    ToolContext(
+                        run_id=run_id,
+                        step_index=step_index,
+                        request_id=request_id,
+                    ),
                 ),
                 effective_deadline=effective_deadline,
                 cancel_event=cancel_event,
@@ -455,9 +510,10 @@ class AgentRuntime:
             return RunStatus.FAILED
         return RunStatus.STOPPED
 
-    @staticmethod
     def _append_event(
+        self,
         events: list[AgentEvent],
+        recorder: RunTraceRecorderProtocol | None,
         *,
         kind: AgentEventKind,
         run_id: str,
@@ -475,27 +531,85 @@ class AgentRuntime:
         if previous is not None and occurred_at < previous.occurred_at:
             occurred_at = previous.occurred_at
         sequence = 1 if previous is None else previous.sequence + 1
-        events.append(
-            AgentEvent(
-                kind=kind,
-                run_id=run_id,
-                sequence=sequence,
-                occurred_at=occurred_at,
-                step_index=step_index,
-                message=message,
-                decision=decision,
-                tool_call=tool_call,
-                tool_result=tool_result,
-                status=status,
-                stop_reason=stop_reason,
-                cumulative_token_usage=cumulative_token_usage,
-            )
+        event = AgentEvent(
+            kind=kind,
+            run_id=run_id,
+            sequence=sequence,
+            occurred_at=occurred_at,
+            step_index=step_index,
+            message=message,
+            decision=decision,
+            tool_call=tool_call,
+            tool_result=tool_result,
+            status=status,
+            stop_reason=stop_reason,
+            cumulative_token_usage=cumulative_token_usage,
         )
+        events.append(event)
+        self._notify_observer(event)
+        self._notify_recorder(recorder, event)
 
-    @classmethod
-    def _finish(
-        cls,
+    def _notify_observer(self, event: AgentEvent) -> None:
+        if self._observer is None or self._observer is self._recorder:
+            return
+        try:
+            self._observer.observe(event)
+        except Exception:
+            logger.exception("Agent event observer failed")
+
+    def _notify_recorder(
+        self, recorder: RunTraceRecorderProtocol | None, event: AgentEvent
+    ) -> None:
+        if recorder is None:
+            return
+        try:
+            recorder.observe(event)
+        except Exception:
+            logger.exception("Agent event recorder failed")
+
+    def _create_recorder(self) -> RunTraceRecorderProtocol | None:
+        if self._recorder_factory is None:
+            return self._recorder
+        try:
+            return self._recorder_factory()
+        except Exception:
+            logger.exception("Agent event recorder factory failed")
+            return None
+
+    def _start_recorder(
+        self,
+        recorder: RunTraceRecorderProtocol | None,
+        run_id: str,
         *,
+        request_id: str | None,
+        model: str | None,
+    ) -> None:
+        if recorder is None:
+            return
+        try:
+            recorder.start(
+                run_id,
+                request_id=request_id,
+                model=model,
+                started_at=datetime.now(UTC),
+            )
+        except Exception:
+            logger.exception("Agent event recorder start failed")
+
+    def _notify_recorder_finish(
+        self, recorder: RunTraceRecorderProtocol | None, result: AgentRunResult
+    ) -> None:
+        if recorder is None:
+            return
+        try:
+            recorder.finish(result)
+        except Exception:
+            logger.exception("Agent event recorder finish failed")
+
+    def _finish(
+        self,
+        *,
+        recorder: RunTraceRecorderProtocol | None,
         state: AgentState,
         events: list[AgentEvent],
         status: RunStatus,
@@ -503,15 +617,17 @@ class AgentRuntime:
         answer: str | None = None,
         error: str | None = None,
     ) -> AgentRunResult:
-        cls._append_event(
+        self._append_event(
             events,
+            recorder=recorder,
             kind=AgentEventKind.RUN_STOPPED,
             run_id=state.run_id,
             status=status,
             stop_reason=stop_reason,
             message=error,
+            cumulative_token_usage=state.token_usage,
         )
-        return AgentRunResult(
+        result = AgentRunResult(
             run_id=state.run_id,
             status=status,
             stop_reason=stop_reason,
@@ -521,6 +637,8 @@ class AgentRuntime:
             token_usage=state.token_usage,
             error=error,
         )
+        self._notify_recorder_finish(recorder, result)
+        return result
 
 
 class _RuntimeStop(Exception):
