@@ -13,7 +13,7 @@
 - Storage: Memory 或 PostgreSQL
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
-- 前端 Agent Console：[规划完成，代码尚未实现](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
+- 前端 Agent Console：[阶段 1 基础骨架已完成，等待用户 Review，尚未接入后端 SSE/Agent API](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -43,6 +43,38 @@
 Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序执行 runner：评测用例通过 JSONL 保存，runner 接受可注入的异步 `run_case`，不会调用真实 LLM 或外网。单用例结果记录状态、成功与否、答案/工具判定、工具序列、步骤、延迟、Token 用量和错误；汇总提供任务成功率、声明工具期望用例的 tool selection accuracy、平均步骤、p95 延迟和 Token 总量/均值。`tests/fixtures/evals/agent_golden.jsonl` 是 30 条本地契约 fixture，覆盖 direct-answer、calculator 和 knowledge_search，它明确不是线上模型结果，也不包含密钥。当前尚未接入真实模型 CI、数据库报表或 RAG Recall@K。
 
 学习总结：本 Sprint 学到应先固定可序列化的评测数据契约，再通过依赖注入让 runner 保持离线和可重复。将答案包含判断与完整有序工具序列判断拆开，使失败原因和聚合指标更清晰。p95 对空集返回 `0.0`，tool accuracy 在没有声明 expected_tools 时返回 `None`，避免制造误导性统计。通过 JSON 标准库解析而不是 `eval`，并用异常隔离保证单个 case 不会阻断整批评测。
+
+## Frontend Agent Console
+
+前端位于 `frontend/`，当前为官方 Vite React + TypeScript 脚手架上的阶段 1 基础骨架。界面只包含本地 Agent Console 空状态、会话计数、清空计数和最近动作展示；“新建会话”和“清空”仅更新本地 React 状态。当前尚未接入后端 SSE、Agent API、真实聊天、Trace 流或真实 Agent 交互。
+
+启动前端开发服务器：
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+前端验证命令：
+
+```bash
+cd frontend
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test
+npm run build
+```
+
+也可以一次性运行完整前端门禁：
+
+```bash
+cd frontend
+npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build
+```
+
+本阶段学习总结：前端骨架应优先由官方脚手架生成，再在其基础上替换业务首屏，避免手写配置偏离生态默认。Vite 8 需要与支持 Vite 8 的 Vitest 版本配套，避免同一工程内出现 Vite 7/8 双版本导致类型不一致。阶段 1 只实现可验证的本地 UI 状态，不伪造 SSE、Trace 或 Agent 输出。测试需要隔离每个用例的渲染结果，避免 DOM 残留造成重复按钮查询失败。
 
 ## Project rules
 
