@@ -150,7 +150,31 @@ Ollama 请求增加可配置的上下文窗口，并确保 Agent/RAG 提示词�
 
 ## Evaluation Foundation
 
-Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序执行 runner：评测用例通过 JSONL 保存，runner 接受可注入的异步 `run_case`，不会调用真实 LLM 或外网。单用例结果记录状态、成功与否、答案/工具判定、工具序列、步骤、延迟、Token 用量和错误；汇总提供任务成功率、声明工具期望用例的 tool selection accuracy、平均步骤、p95 延迟和 Token 总量/均值。`tests/fixtures/evals/agent_golden.jsonl` 是 30 条本地契约 fixture，覆盖 direct-answer、calculator 和 knowledge_search，它明确不是线上模型结果，也不包含密钥。当前尚未接入真实模型 CI、数据库报表或 RAG Recall@K。
+Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序执行 runner：评测用例通过 JSONL 保存，runner 接受可注入的异步 `run_case`，不会调用真实 LLM 或外网。单用例结果记录状态、成功与否、答案/工具判定、工具序列、步骤、延迟、Token 用量和错误；汇总提供任务成功率、声明工具期望用例的 tool selection accuracy、平均步骤、p95 延迟和 Token 总量/均值。`tests/fixtures/evals/agent_golden.jsonl` 是 30 条本地契约 fixture，覆盖 direct-answer、calculator 和 knowledge_search，它明确不是线上模型结果，也不包含密钥。当前尚未接入真实模型 CI 或数据库报表；RAG 离线评测入口与指标已实现，见下方 RAG 评估。
+
+### RAG 评估
+
+在现有 `EvalCase`/`EvalExecution` 契约之外，新增独立的 `RAGEvalCase`、`RAGEvaluationRunner` 和确定性检索指标，不修改既有字段语义：
+
+- `context_recall_at_k`：优先按 golden 声明的期望 chunk id 计算 `|期望 ∩ 检索结果前 k 个| / |期望|`；未声明 chunk 期望时回退到 document id。
+- `document_recall_at_k` / `chunk_recall_at_k`：分别统计文档级和分块级召回，未声明的层级返回 `None`。
+- `answer_correctness`：复用 `answer_matches_expected` 做片段包含判定，只在评测方提供模型回答时计算；真实检索脚本默认不调用 LLM。
+- 报告只输出稳定标识、指标和有限错误类别，不输出密钥、完整文档内容或内部堆栈。
+
+真实检索入口：
+
+```bash
+python scripts/evaluate_rag.py tests/fixtures/evals/rag_golden.jsonl \
+  --owner-key-hash <64位SHA-256十六进制> \
+  --retriever embedding \
+  --output output/rag_eval_report
+```
+
+需要 `RAG_ENABLED=true`、PostgreSQL/pgvector 与 Ollama。`--retriever embedding` 直接注入生产 `Embedder` + `VectorStore`，评估原始检索质量；`--retriever service` 复用 `RAGService.prepare` 路径，保留生产环境的分块/上下文截断语义。脚本输出 `.json` 和 `.md` 报告。离线测试使用 `tests/fixtures/evals/rag_golden.jsonl` 与 fake retriever，不调用真实模型。
+
+当前覆盖指标：`context_recall_at_k`、`document_recall_at_k`、`chunk_recall_at_k`、检索成功率、平均检索分块数、p95 延迟，以及可选 answer fragment 正确率。后续可扩展：`precision@k`/MRR/nDCG、LLM-as-judge 的 faithfulness/answer correctness、CI 报告和数据库报表。
+
+默认不引入 RAGAS：当前指标都是确定性、离线可复现的检索召回指标；RAGAS 的 LLM-as-judge 指标需要真实模型调用、对模型版本敏感且结果不可完全复现，适合后续作为可选扩展而不是基础依赖。
 
 学习总结：本 Sprint 学到应先固定可序列化的评测数据契约，再通过依赖注入让 runner 保持离线和可重复。将答案包含判断与完整有序工具序列判断拆开，使失败原因和聚合指标更清晰。p95 对空集返回 `0.0`，tool accuracy 在没有声明 expected_tools 时返回 `None`，避免制造误导性统计。通过 JSON 标准库解析而不是 `eval`，并用异常隔离保证单个 case 不会阻断整批评测。
 
@@ -386,6 +410,7 @@ app/
 ├── core/           # Infrastructure (settings, logging, exceptions, container, context)
 ├── db/             # Database (models, session, init)
 ├── exceptions/     # Provider-specific + domain exceptions
+├── evals/          # Golden + RAG evaluation models, runner, JSONL, report
 ├── middleware/     # Context middleware (request_id)
 ├── providers/      # LLM Provider layer (Protocol + implementations)
 ├── quota/          # Token quota (reserve/settle, repository, service)
@@ -488,6 +513,7 @@ MCP_SERVERS_JSON=
 - `RAG_TOP_K` controls how many candidate chunks are retrieved before distance filtering (max 50)
 - `RAG_MAX_CONTEXT_CHARS` limits the total character length of injected context (max 100,000)
 - To ingest documents, run: `python scripts/ingest.py <path-to-txt-file>` (requires `RAG_ENABLED=true` and running Ollama)
+- To evaluate retrieval quality against golden JSONL, run `python scripts/evaluate_rag.py` (see the RAG 评估 section)
 - Empty knowledge base → `KnowledgeBaseEmptyError` (404); all retrieved results exceeding `RAG_MAX_DISTANCE` → `NoRelevantContextError` (404)
 
 ### MCP configuration notes
