@@ -130,3 +130,25 @@ npm run dev
 - `npm run typecheck`：运行 TypeScript project references 检查。
 - `npm run test`：运行 Vitest。
 - `npm run preview`：预览生产构建。
+
+## 产品化平台页面
+
+当前前端默认进入 AI Platform Mini 平台概览，页面通过左侧导航连接以下真实或明确标注边界的能力：
+
+- **平台概览**：展示 API Gateway、模型 Provider、Agent Runtime、RAG 状态和四条快速演示路径。
+- **对话工作台**：继续使用真实 Chat SSE / Agent SSE，展示 Agent Trace、Tool Call、RAG 来源、Request ID 和错误恢复。
+- **Prompt Studio**：编辑四个内置模板，保存到浏览器 `localStorage`，并将演示问题带入对话工作台。
+- **模型目录**：调用 `/api/v1/models` 读取真实模型，不展示后端尚未实现的启动、停止、删除按钮。
+- **管理员后台**：复用现有管理员 Key、Token 用量和 Agent Run 审计流程。
+
+如果没有 API Key，平台会显示需要配置的状态，不会把未验证的模型、请求次数或延迟写成真实指标。生产环境仍建议通过同源 BFF 或服务端代理持有高权限密钥。
+
+#### 本轮学习总结
+
+这次改版的关键不是堆叠虚假功能，而是把已有真实的 SSE、Agent Trace、RAG 和模型接口组织成清晰的产品演示路径。平台壳层与 Console 解耦后，页面导航不会干扰请求生命周期，Prompt Studio 也可以在不扩展后端的前提下体现提示词工程能力。模型目录只展示 `/api/v1/models` 的真实结果，避免演示时把不存在的模型启停能力说成已完成。
+
+### 知识库页面
+
+平台导航中的“知识库”页面现在支持真实 PDF 入库：用户可以选择或拖拽 PDF，前端调用 `POST /api/v1/rag/documents`，展示提取文本、生成 Embedding、写入 pgvector 的明确流程状态，并通过 `GET /api/v1/rag/documents` 列出已索引文档。页面只展示安全元数据，不展示文档原文、向量或未经处理的后端异常；入库完成后可以一键带入知识库问答场景。
+
+知识库页面会在 API Key 缺失或 `RAG_ENABLED=false` 时禁用上传；上传后轮询真实 queued/processing/completed/failed 任务状态，完成后刷新列表，并支持所属 Key 的文本预览和删除。页面不保存原始 PDF，只展示有界提取文本和安全元数据；“去知识库问答”会强制进入 Chat 模式，避免沿用上一轮 Agent 演示状态。

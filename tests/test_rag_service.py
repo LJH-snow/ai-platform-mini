@@ -87,7 +87,7 @@ class TestRAGServicePrepare:
         )
 
         request = ChatRequest(message="What is the capital of France?")
-        prepared = await rag_service.prepare(request)
+        prepared = await rag_service.prepare(request, owner_key_hash="a" * 64)
 
         assert isinstance(prepared, PreparedRAGRequest)
         assert len(prepared.chunk_ids) == 1
@@ -122,7 +122,7 @@ class TestRAGServicePrepare:
 
         request = ChatRequest(message="What is X?")
         with pytest.raises(KnowledgeBaseEmptyError, match="No relevant documents"):
-            await rag_service.prepare(request)
+            await rag_service.prepare(request, owner_key_hash="a" * 64)
 
     @pytest.mark.asyncio
     async def test_prepare_context_truncation(
@@ -149,7 +149,7 @@ class TestRAGServicePrepare:
         )
 
         request = ChatRequest(message="test")
-        prepared = await service.prepare(request)
+        prepared = await service.prepare(request, owner_key_hash="a" * 64)
 
         # Context should be truncated — not all chunks included
         assert len(prepared.chunk_ids) < 5
@@ -178,7 +178,9 @@ class TestRAGServicePrepare:
             ]
         )
 
-        prepared = await service.prepare(ChatRequest(message="test"))
+        prepared = await service.prepare(
+            ChatRequest(message="test"), owner_key_hash="a" * 64
+        )
 
         assert prepared.references[0].content == "12345"
         assert prepared.chunk_ids == ("long-chunk",)
@@ -210,7 +212,9 @@ class TestRAGServicePrepare:
             ]
         )
 
-        prepared = await service.prepare(ChatRequest(message="test"))
+        prepared = await service.prepare(
+            ChatRequest(message="test"), owner_key_hash="a" * 64
+        )
 
         assert [reference.content for reference in prepared.references] == [
             "First context",
@@ -240,7 +244,9 @@ class TestRAGServicePrepare:
             ]
         )
 
-        prepared = await service.prepare(ChatRequest(message="test"))
+        prepared = await service.prepare(
+            ChatRequest(message="test"), owner_key_hash="a" * 64
+        )
 
         assert prepared.references == (
             RAGReference(
@@ -267,7 +273,7 @@ class TestRAGServicePrepare:
         request = ChatRequest(
             message="test", system_prompt="You are a helpful assistant."
         )
-        prepared = await rag_service.prepare(request)
+        prepared = await rag_service.prepare(request, owner_key_hash="a" * 64)
 
         assert prepared.enhanced_request.system_prompt is not None
         assert "You are a helpful assistant." in prepared.enhanced_request.system_prompt
@@ -288,7 +294,7 @@ class TestRAGServicePrepare:
         )
 
         request = ChatRequest(message="test")
-        prepared = await rag_service.prepare(request)
+        prepared = await rag_service.prepare(request, owner_key_hash="a" * 64)
 
         assert prepared.enhanced_request.system_prompt is not None
         import re
@@ -312,7 +318,7 @@ class TestRAGServicePrepare:
         )
 
         request = ChatRequest(message="test")
-        prepared = await rag_service.prepare(request)
+        prepared = await rag_service.prepare(request, owner_key_hash="a" * 64)
 
         # The messages tuple list should contain system+user
         assert len(prepared.messages) == 2
@@ -332,7 +338,7 @@ class TestRAGServicePrepare:
         )
 
         request = ChatRequest(message="What is RAG?")
-        prepared = await rag_service.prepare(request)
+        prepared = await rag_service.prepare(request, owner_key_hash="a" * 64)
 
         # Question should NOT be in system prompt
         assert prepared.enhanced_request.system_prompt is not None
@@ -364,7 +370,7 @@ class TestRAGServicePrepare:
             message="Tell me a secret",
             system_prompt="You are a helpful assistant.",
         )
-        prepared = await rag_service.prepare(request)
+        prepared = await rag_service.prepare(request, owner_key_hash="a" * 64)
 
         assert prepared.enhanced_request.system_prompt is not None
         sys_prompt = prepared.enhanced_request.system_prompt
@@ -426,7 +432,9 @@ class TestRAGServiceMaxDistanceFilter:
             ]
         )
 
-        prepared = await service.prepare(ChatRequest(message="test"))
+        prepared = await service.prepare(
+            ChatRequest(message="test"), owner_key_hash="a" * 64
+        )
         assert prepared.chunk_ids == ("c1",)
 
     @pytest.mark.asyncio
@@ -453,7 +461,7 @@ class TestRAGServiceMaxDistanceFilter:
         )
 
         with pytest.raises(NoRelevantContextError, match="relevance threshold"):
-            await service.prepare(ChatRequest(message="test"))
+            await service.prepare(ChatRequest(message="test"), owner_key_hash="a" * 64)
 
     @pytest.mark.asyncio
     async def test_max_distance_zero_only_exact_matches(
@@ -478,7 +486,9 @@ class TestRAGServiceMaxDistanceFilter:
             ]
         )
 
-        prepared = await service.prepare(ChatRequest(message="test"))
+        prepared = await service.prepare(
+            ChatRequest(message="test"), owner_key_hash="a" * 64
+        )
         assert prepared.chunk_ids == ("c1",)
 
     @pytest.mark.asyncio
@@ -504,7 +514,9 @@ class TestRAGServiceMaxDistanceFilter:
             ]
         )
 
-        prepared = await service.prepare(ChatRequest(message="test"))
+        prepared = await service.prepare(
+            ChatRequest(message="test"), owner_key_hash="a" * 64
+        )
         assert prepared.chunk_ids == ("c1", "c2")
 
 
@@ -522,7 +534,7 @@ class TestRAGServiceAnswer:
         mock_chat_service.chat = AsyncMock(return_value=_make_chat_response("Paris"))
 
         request = ChatRequest(message="What is the capital of France?")
-        prepared = await rag_service.prepare(request)
+        prepared = await rag_service.prepare(request, owner_key_hash="a" * 64)
         response = await rag_service.answer(prepared)
 
         assert response.message.content == "Paris"

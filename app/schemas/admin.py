@@ -18,6 +18,7 @@ class APIKeyMetadataResponse(BaseModel):
     key_hash_prefix: str
     name: str
     status: str
+    is_admin: bool = False
     created_at: datetime | None = None
     last_used_at: datetime | None = None
 
@@ -33,3 +34,23 @@ class UsageAggregationResponse(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+
+
+class AgentRunRecordSummary(BaseModel):
+    run_id: str
+    request_id: str
+    api_key_prefix: str
+    api_key_name: str
+    model: str
+    status: str
+    stop_reason: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = None
+    total_tokens: int | None = None
+    tool_count: int = 0
+    rag_reference_count: int = 0
+
+
+class AgentRunRecordResponse(AgentRunRecordSummary):
+    response: dict[str, object]

@@ -15,6 +15,8 @@ from app.exceptions.base import (
     ProviderUnavailableError,
     QuotaExceededError,
     QuotaReservationError,
+    RAGDocumentTooLargeError,
+    RAGDocumentValidationError,
     RAGStorageUnavailableError,
     RAGUnavailableError,
     RateLimitError,
@@ -240,6 +242,36 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=404,
             content=ErrorResponse(
                 code=ErrorCode.NO_RELEVANT_CONTEXT,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(RAGDocumentValidationError)
+    async def handle_rag_document_validation_error(
+        request: Request, exc: RAGDocumentValidationError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s rag_document_invalid %s", request_id, exc)
+        return JSONResponse(
+            status_code=400,
+            content=ErrorResponse(
+                code=ErrorCode.RAG_DOCUMENT_INVALID,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(RAGDocumentTooLargeError)
+    async def handle_rag_document_too_large_error(
+        request: Request, exc: RAGDocumentTooLargeError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s rag_document_too_large %s", request_id, exc)
+        return JSONResponse(
+            status_code=413,
+            content=ErrorResponse(
+                code=ErrorCode.RAG_DOCUMENT_TOO_LARGE,
                 message=str(exc),
                 request_id=request_id,
             ).model_dump(),

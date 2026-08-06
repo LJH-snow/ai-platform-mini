@@ -1,5 +1,5 @@
 import type { FormEvent, JSX } from 'react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   AgentBackendError,
@@ -23,11 +23,22 @@ import {
   type AgentStreamState,
 } from './agent/reducer.ts'
 import { AgentStreamFormatError } from './agent/stream.ts'
+import { compactAgentTraceEvents } from './agent/trace.ts'
+import { AdminDashboard, USER_KEY_STORAGE } from './admin/AdminDashboard.tsx'
+import { formatAgentTimestamp } from './agent/time.ts'
+import { Dashboard } from './platform/Dashboard.tsx'
+import { createKnowledgeClient } from './platform/knowledge.ts'
+import { createPlatformClient } from './platform/client.ts'
+import { KnowledgeBase } from './platform/KnowledgeBase.tsx'
+import { ModelCatalog } from './platform/ModelCatalog.tsx'
+import { PromptStudio } from './platform/PromptStudio.tsx'
+import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
 import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
+type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'admin'
 type RequestStatus =
   | 'idle'
   | 'sending'
@@ -119,12 +130,13 @@ const decisionLabels: Record<AgentTraceStep['decisionKind'], string> = {
   final_answer: '最终回答',
   tool_call: '工具调用',
   invalid: '无效决策',
-  unknown: '未知步骤',
+  unknown: '步骤信息待确认',
 }
 
 const eventLabels: Record<string, string> = {
   run_started: '运行开始',
   model_decision: '模型决策',
+  step_planned: '步骤计划',
   tool_started: '工具开始',
   tool_completed: '工具完成',
   tool_failed: '工具失败',
@@ -146,12 +158,23 @@ const fallbackAnswerForRun = (run: AgentRun): string => {
   if (run.status === 'completed') return 'Agent 已完成，但后端未返回文本回答。'
   if (run.status === 'cancelled') return 'Agent 运行已取消，未返回最终回答。'
   if (run.status === 'timed_out') return 'Agent 运行超时，未返回最终回答。'
-  if (run.status === 'stopped') return 'Agent 运行已停止，未返回最终回答。'
+  if (run.status === 'stopped') {
+    const reason = run.stopReason ? `停止原因：${run.stopReason}。` : ''
+    return `Agent 运行已停止。${reason}已完成 ${run.steps.length} 个步骤，但未返回最终回答。`
+  }
   return 'Agent 运行失败。'
 }
 
 const formatMetric = (value: number | null): string =>
   value === null ? '后端未提供' : String(value)
+
+const getToolCallMetrics = (run: AgentRun): { actual: number; cached: number } => {
+  const calls = run.steps.flatMap((step) => step.toolCalls)
+  return {
+    actual: calls.filter((tool) => !tool.cached).length,
+    cached: calls.filter((tool) => tool.cached).length,
+  }
+}
 
 const ragStatusTitles: Record<AgentRag['status'], string> = {
   loading: '参考来源：加载中',
@@ -274,6 +297,7 @@ function RagSection({ tool }: { tool: AgentToolCall }): JSX.Element | null {
     return (
       <div className="ragUnavailableNotice" role="status">
         <strong>参考来源：暂无可用来源</strong>
+        <span>状态：后端未提供 · 来源数量：后端未提供</span>
         <span>当前 Agent Run 响应未提供可展示的来源字段；前端不会生成来源卡片或引用。</span>
       </div>
     )
@@ -305,6 +329,9 @@ function RagSection({ tool }: { tool: AgentToolCall }): JSX.Element | null {
           <span>
             关联工具：knowledge_search · 步骤序号：{tool.stepIndex} · 调用标识：
             {tool.callId ?? '后端未提供'}
+          </span>
+          <span>
+            状态：{rag.status} · 来源数量：{rag.references.length}
           </span>
         </div>
         {rag.warning ? <p className="ragWarning">不可信参考提示：{rag.warning}</p> : null}
@@ -349,9 +376,12 @@ function ToolCallCard({ tool }: { tool: AgentToolCall }): JSX.Element {
       <div id={contentId} className="traceDetails" hidden={!expanded}>
         <p>步骤序号：{tool.stepIndex}</p>
         <p>调用标识：{tool.callId ?? '后端未提供'}</p>
+        <p>执行方式：{tool.cached ? '复用已有结果，未重复执行' : '实际执行'}</p>
         <p>耗时：{tool.durationMs === null ? '后端未提供' : `${tool.durationMs} ms`}</p>
+        <p>参数数量：{formatMetric(tool.argumentCount)}</p>
         <p>输入摘要：{tool.inputSummary ?? '后端未提供'}</p>
         <p>输出摘要：{tool.outputSummary ?? '后端未提供'}</p>
+        <p>结果字符数：{formatMetric(tool.resultChars)}</p>
         {tool.errorCode ? <p>错误码：{tool.errorCode}</p> : null}
         {tool.errorMessage ? <p className="safeError">{tool.errorMessage}</p> : null}
         <RagSection tool={tool} />
@@ -386,6 +416,7 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
             <li key={tool.id}>
               <strong>{tool.name}</strong>
               {!tool.known ? <em>未知工具</em> : null}
+              {tool.cached ? <em>复用结果</em> : null}
               <span>{toolStatusLabels[tool.status]}</span>
             </li>
           ))}
@@ -393,14 +424,15 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
       ) : null}
       <div id={contentId} className="traceDetails stepDetails" hidden={!expanded}>
         <p>{step.summary}</p>
+        <p>工具数量：{formatMetric(step.toolCount)}</p>
         <dl className="traceFacts">
           <div>
             <dt>开始时间</dt>
-            <dd>{step.startedAt ?? '后端未提供'}</dd>
+            <dd>{formatAgentTimestamp(step.startedAt)}</dd>
           </div>
           <div>
             <dt>完成时间</dt>
-            <dd>{step.completedAt ?? '后端未提供'}</dd>
+            <dd>{formatAgentTimestamp(step.completedAt)}</dd>
           </div>
           <div>
             <dt>耗时</dt>
@@ -410,11 +442,11 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
         <dl className="srFacts" aria-label="步骤时间信息">
           <div>
             <dt>开始时间</dt>
-            <dd>{step.startedAt ?? '后端未提供'}</dd>
+            <dd>{formatAgentTimestamp(step.startedAt)}</dd>
           </div>
           <div>
             <dt>完成时间</dt>
-            <dd>{step.completedAt ?? '后端未提供'}</dd>
+            <dd>{formatAgentTimestamp(step.completedAt)}</dd>
           </div>
           <div>
             <dt>耗时</dt>
@@ -425,8 +457,11 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
           <div className="eventSummary">
             <span className="metricLabel">可审计事件</span>
             <ol>
-              {step.events.map((event) => (
-                <li key={event.id}>{eventLabels[event.kind] ?? event.kind}</li>
+              {compactAgentTraceEvents(step.events).map(({ event, count }) => (
+                <li key={event.id}>
+                  {eventLabels[event.kind] ?? event.kind}
+                  {count > 1 ? `（${count} 次）` : null}
+                </li>
               ))}
             </ol>
           </div>
@@ -443,21 +478,72 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
 
 function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const runtimeConfig = useMemo(() => getRuntimeConfig(), [])
+  const ragStatus = useRagRuntimeStatus(runtimeConfig.apiBaseUrl, runtimeConfig.ragEnabled)
+  const [page, setPage] = useState<AppPage>('dashboard')
+  const [userApiKey, setUserApiKey] = useState(
+    () => sessionStorage.getItem(USER_KEY_STORAGE) ?? runtimeConfig.apiKey ?? '',
+  )
+  const [userApiKeyInput, setUserApiKeyInput] = useState(
+    () => sessionStorage.getItem(USER_KEY_STORAGE) ?? '',
+  )
+  const effectiveApiKey = userApiKey.trim() || runtimeConfig.apiKey
+  const platformClient = useMemo(
+    () =>
+      createPlatformClient({
+        apiBaseUrl: runtimeConfig.apiBaseUrl,
+        apiKey: effectiveApiKey,
+      }),
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
+  )
+  const knowledgeClient = useMemo(
+    () =>
+      createKnowledgeClient({
+        apiBaseUrl: runtimeConfig.apiBaseUrl,
+        apiKey: effectiveApiKey,
+      }),
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
+  )
+  const [modelCount, setModelCount] = useState<number | null>(null)
+  const [modelName, setModelName] = useState<string | null>(null)
+  useEffect(() => {
+    if (!effectiveApiKey) {
+      setModelCount(null)
+      setModelName(null)
+      return
+    }
+
+    let cancelled = false
+    void platformClient
+      .listModels()
+      .then((models) => {
+        if (cancelled) return
+        setModelCount(models.length)
+        setModelName(models[0]?.id ?? null)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setModelCount(null)
+        setModelName(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [effectiveApiKey, platformClient])
   const defaultChatClient = useMemo(
     () =>
       createChatClient({
         apiBaseUrl: runtimeConfig.apiBaseUrl,
-        apiKey: runtimeConfig.apiKey,
+        apiKey: effectiveApiKey,
       }),
-    [runtimeConfig],
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
   )
   const defaultAgentClient = useMemo(
     () =>
       createAgentClient({
         apiBaseUrl: runtimeConfig.apiBaseUrl,
-        apiKey: runtimeConfig.apiKey,
+        apiKey: effectiveApiKey,
       }),
-    [runtimeConfig],
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
   )
   const resolvedChatClient = chatClient ?? defaultChatClient
   const resolvedAgentClient = agentClient ?? defaultAgentClient
@@ -848,275 +934,461 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       'response_format_error',
     ].includes(requestStatus)
 
-  return (
-    <main className="shell">
-      <section className="hero">
-        <div>
-          <p className="eyebrow">Agent Console · Phase 6</p>
-          <h1>对话与 Agent Trace</h1>
-          <p className="heroCopy">
-            {
-              '普通模式继续使用真实 Chat SSE；Agent 模式使用真实 Agent SSE，Trace 实时更新；回答支持后端真实 answer_delta 增量。'
-            }
-          </p>
-        </div>
-        <div className="statusPill">{sessionLabel}</div>
-      </section>
+  if (page === 'admin') {
+    return (
+      <AdminDashboard apiBaseUrl={runtimeConfig.apiBaseUrl} onBack={() => setPage('dashboard')} />
+    )
+  }
 
-      <section className="consoleGrid" aria-label="Agent Console">
-        <article className="panel conversationPanel" aria-label="会话">
-          <div className="panelHeader">
-            <div>
-              <h2>会话</h2>
-              <span className={`requestStatus status-${requestStatus}`} aria-hidden="true">
-                {statusLabels[requestStatus]}
-              </span>
-            </div>
-            {requestId ? (
-              <div className="requestIdGroup">
-                <span className="metricLabel">Request ID</span>
-                <button
-                  type="button"
-                  className="copyButton"
-                  aria-label={`复制 Request ID ${requestId}`}
-                  onClick={() => void handleCopy('Request ID', requestId)}
-                >
-                  {requestId}
-                </button>
-                {copyFeedback ? (
-                  <span className="copyFeedback" aria-live="polite">
-                    {copyFeedback}
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
+  const applyUserApiKey = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault()
+    const normalized = userApiKeyInput.trim()
+    setUserApiKey(normalized)
+    if (normalized) {
+      sessionStorage.setItem(USER_KEY_STORAGE, normalized)
+      setAnnouncement('用户 Key 已保存，本次请求将使用该 Key。')
+    } else {
+      sessionStorage.removeItem(USER_KEY_STORAGE)
+      setAnnouncement('已清除用户 Key，将使用开发环境默认凭据（如有）。')
+    }
+  }
 
-          <div className="modeSwitch" role="group" aria-label="请求模式">
-            <button
-              type="button"
-              className={mode === 'chat' ? 'modeActive' : 'secondaryButton'}
-              aria-pressed={mode === 'chat'}
-              disabled={isActive}
-              onClick={() => setMode('chat')}
-            >
-              普通 Chat SSE 模式
-            </button>
-            <button
-              type="button"
-              className={mode === 'agent' ? 'modeActive' : 'secondaryButton'}
-              aria-pressed={mode === 'agent'}
-              disabled={isActive}
-              onClick={() => setMode('agent')}
-            >
-              Agent Run 模式
-            </button>
-          </div>
+  const navigateToConsole = (nextDraft?: string): void => {
+    if (nextDraft) setDraft(nextDraft)
+    setPage('console')
+    setAnnouncement(nextDraft ? '演示问题已带入对话工作台。' : '已打开对话工作台。')
+  }
 
-          <div className="srOnlyStatus" role="status" aria-live="polite" aria-atomic="true">
-            {statusLabels[requestStatus]}。{announcement}
-          </div>
+  const openRagChat = (): void => {
+    setMode('chat')
+    setDraft('请基于知识库内容回答，并展示检索到的来源。')
+    setPage('console')
+    setAnnouncement('知识库问答问题已准备好。')
+  }
 
-          {messages.length === 0 ? (
-            <div className="emptyState">
-              <div className="emptyIcon">A</div>
-              <h3>{mode === 'chat' ? '开始一段普通对话' : '运行一次真实 Agent'}</h3>
-              <p>
-                {mode === 'chat'
-                  ? '输入问题后，前端会真实调用 Chat SSE，并将回答增量显示在这里。'
-                  : agentSseAvailable
-                    ? 'Agent 模式通过真实 Agent SSE 实时更新回答与 Trace；后端 answer_delta 会按增量显示。'
-                    : 'Agent Run 将在返回结果后显示回答与 Trace；当前客户端未提供实时 Agent SSE。'}
-              </p>
-            </div>
-          ) : (
-            <ol className="messageList" aria-label="消息列表">
-              {messages.map((message) => (
-                <li key={message.id} className={`message message-${message.role}`}>
-                  <span className="messageRole">{message.role === 'user' ? '你' : '助手'}</span>
-                  <p>{message.content || (isActive ? '…' : '（无文本内容）')}</p>
-                </li>
-              ))}
-            </ol>
-          )}
+  const renderPlatformShell = (content: JSX.Element): JSX.Element => {
+    const navigation: Array<{ id: AppPage; label: string; shortLabel: string }> = [
+      { id: 'dashboard', label: '平台概览', shortLabel: '概览' },
+      { id: 'console', label: '对话工作台', shortLabel: '对话' },
+      { id: 'knowledge', label: '知识库', shortLabel: 'RAG' },
+      { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
+      { id: 'models', label: '模型目录', shortLabel: '模型' },
+    ]
 
-          {errorMessage ? (
-            <div className="errorNotice" role="alert">
-              <span>{errorMessage}</span>
-              {canRetry ? (
-                <button type="button" className="inlineRetryButton" onClick={handleRetry}>
-                  {mode === 'chat' ? '重试 Chat' : '重新运行 Agent'}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-
-          <form className="composer" onSubmit={handleSubmit}>
-            <label htmlFor="message-input">输入消息</label>
-            <textarea
-              id="message-input"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder={
-                mode === 'chat'
-                  ? '例如：解释一下当前项目的 Chat SSE 契约'
-                  : '例如：请使用 calculator 计算 (12 + 8) × 3'
-              }
-              rows={3}
-              disabled={isActive}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                  event.preventDefault()
-                  event.currentTarget.form?.requestSubmit()
-                }
-              }}
-            />
-            <div className="composerActions">
-              <span className="composerHint">
-                {mode === 'chat'
-                  ? '普通回答为实时 Chat SSE；Enter 换行，Ctrl/⌘ + Enter 发送。'
-                  : agentSseAvailable
-                    ? 'Agent 使用真实 Agent SSE 实时更新回答与 Trace，后端 answer_delta 会增量显示；Enter 换行，Ctrl/⌘ + Enter 运行。'
-                    : 'Agent Run 等待后端结果；当前客户端未提供实时 Agent SSE。Enter 换行，Ctrl/⌘ + Enter 运行。'}
-              </span>
-              {isActive ? (
-                <button type="button" className="stopButton" onClick={handleStop}>
-                  停止请求
-                </button>
-              ) : (
-                <button type="submit" disabled={!draft.trim()}>
-                  {mode === 'chat' ? '发送消息' : '运行 Agent'}
-                </button>
-              )}
-            </div>
-          </form>
-        </article>
-
-        <aside className="panel tracePanel" aria-label="Agent Trace">
-          <div className="panelHeader">
-            <div>
-              <h2>Agent Trace</h2>
-              <span>{requestStatus === 'agent_running' ? '运行中' : traceStatus}</span>
-            </div>
-            <span className="traceDelivery">
-              {agentSseAvailable ? '实时 Agent SSE' : 'Agent Run 兼容路径'}
+    return (
+      <main className="platformShell">
+        <aside className="platformSidebar" aria-label="平台导航">
+          <div className="brandLockup">
+            <span className="brandMark" aria-hidden="true">
+              A
             </span>
+            <div>
+              <strong>AI Platform</strong>
+              <span>MINI / LOCAL LAB</span>
+            </div>
           </div>
+          <nav className="platformNav" aria-label="主导航">
+            <span className="navSectionLabel">WORKSPACE</span>
+            {navigation.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                className={
+                  page === item.id ? 'platformNavItem platformNavItemActive' : 'platformNavItem'
+                }
+                onClick={() => setPage(item.id)}
+                aria-current={page === item.id ? 'page' : undefined}
+              >
+                <span className="navItemGlyph" aria-hidden="true">
+                  {item.shortLabel.slice(0, 1)}
+                </span>
+                <span>{item.label}</span>
+              </button>
+            ))}
+            <span className="navSectionLabel navSectionLabelSpaced">CONTROL</span>
+            <button type="button" className="platformNavItem" onClick={() => setPage('admin')}>
+              <span className="navItemGlyph" aria-hidden="true">
+                S
+              </span>
+              <span>管理员后台</span>
+            </button>
+          </nav>
+          <div className="sidebarFooter">
+            <span
+              className={effectiveApiKey ? 'sidebarStatus sidebarStatusOnline' : 'sidebarStatus'}
+            >
+              <span aria-hidden="true" />
+              {effectiveApiKey ? 'API Key ready' : '需要 API Key'}
+            </span>
+            <span className="sidebarVersion">FastAPI · Ollama · React</span>
+          </div>
+        </aside>
+        <div className="platformContent">{content}</div>
+      </main>
+    )
+  }
 
-          {isActive && mode === 'agent' && !agentRun && resolvedAgentClient.streamAgent ? (
-            <div className="traceNotice">
-              <h3>{statusLabels[requestStatus]}</h3>
-              <p>正在接收后端真实 Agent SSE，Trace 将随事件实时更新。</p>
+  if (page === 'dashboard') {
+    return renderPlatformShell(
+      <Dashboard
+        apiKeyConfigured={Boolean(effectiveApiKey)}
+        modelCount={modelCount}
+        modelName={modelName}
+        ragStatus={ragStatus}
+        onNavigate={(nextPage, preset) => {
+          if (preset === 'agent') {
+            setMode('agent')
+            setDraft('请分析这段代码，并说明 Agent 如何选择工具。')
+            setAnnouncement('Agent 演示问题已准备好。')
+          }
+          setPage(nextPage)
+        }}
+      />,
+    )
+  }
+  if (page === 'knowledge') {
+    return renderPlatformShell(
+      <KnowledgeBase
+        apiKeyConfigured={Boolean(effectiveApiKey)}
+        ragStatus={ragStatus}
+        client={knowledgeClient}
+        maxUploadBytes={runtimeConfig.ragMaxUploadBytes ?? 10_000_000}
+        onOpenRagChat={openRagChat}
+      />,
+    )
+  }
+  if (page === 'prompts') {
+    return renderPlatformShell(<PromptStudio onUsePrompt={navigateToConsole} />)
+  }
+  if (page === 'models') {
+    return renderPlatformShell(
+      <ModelCatalog apiKeyConfigured={Boolean(effectiveApiKey)} client={platformClient} />,
+    )
+  }
+
+  return renderPlatformShell(
+    <div className="consolePage">
+      <div className="shell">
+        <section className="hero">
+          <div>
+            <p className="eyebrow">WORKSPACE · REAL-TIME AI</p>
+            <h1>对话与 Agent Trace</h1>
+            <p className="heroCopy">
+              {
+                '普通模式继续使用真实 Chat SSE；Agent 模式使用真实 Agent SSE，Trace 实时更新；回答支持后端真实 answer_delta 增量。'
+              }
+            </p>
+          </div>
+          <div className="heroActions">
+            <div className="statusPill">{sessionLabel}</div>
+            <button type="button" className="secondaryButton" onClick={() => setPage('dashboard')}>
+              返回平台概览
+            </button>
+            <button type="button" className="secondaryButton" onClick={() => setPage('admin')}>
+              管理员后台
+            </button>
+          </div>
+        </section>
+
+        <section className="keyEntryPanel panel" aria-label="用户 API Key">
+          <form className="keyEntryForm" onSubmit={applyUserApiKey}>
+            <div>
+              <label htmlFor="user-api-key">用户 API Key</label>
+              <p className="formHint">管理员创建普通 Key 后粘贴到这里；管理员 Key 不要填入。</p>
             </div>
-          ) : requestStatus === 'agent_running' && !agentRun ? (
-            <div className="traceNotice">
-              <h3>等待 Agent Run</h3>
-              <p>正在等待 Agent Run 结果；当前客户端未提供实时 Agent SSE。</p>
-            </div>
-          ) : requestStatus === 'client_cancelled' ? (
-            <div className="traceNotice traceCancelled">
-              <h3>前端已停止等待，后端终态未知</h3>
-              <p>浏览器已中止等待响应；这不代表后端 Agent Runtime 已被取消。</p>
-            </div>
-          ) : traceUnavailableMessage ? (
-            <div className="traceNotice traceUnavailable">
-              <h3>未收到 Trace</h3>
-              <p>{traceUnavailableMessage}</p>
-              <p>没有可安全展示的运行或步骤数据；页面不会补造 Run、事件或工具结果。</p>
-              {canRetry ? (
-                <button type="button" className="retryButton" onClick={handleRetry}>
-                  重新运行
-                </button>
-              ) : null}
-            </div>
-          ) : agentRun ? (
-            <div className="traceContent">
-              <div className="traceMeta">
-                <span className="runIdLine">
-                  <span>Run ID：{agentRun.runId ?? '后端未提供'}</span>
-                  {agentRun.runId ? (
-                    <button
-                      type="button"
-                      className="copyButton"
-                      aria-label={`复制 Run ID ${agentRun.runId}`}
-                      onClick={() => void handleCopy('Run ID', agentRun.runId)}
-                    >
-                      复制 Run ID
-                    </button>
-                  ) : null}
+            <input
+              id="user-api-key"
+              type="password"
+              value={userApiKeyInput}
+              onChange={(event) => setUserApiKeyInput(event.target.value)}
+              placeholder="sk-…"
+              autoComplete="off"
+            />
+            <button type="submit">保存并使用</button>
+            <button
+              type="button"
+              className="secondaryButton"
+              onClick={() => {
+                setUserApiKeyInput('')
+                setUserApiKey('')
+                sessionStorage.removeItem(USER_KEY_STORAGE)
+                setAnnouncement('已清除用户 Key。')
+              }}
+            >
+              清除
+            </button>
+            <span className="keyEntryStatus">
+              {userApiKey ? '已配置用户 Key' : '未配置用户 Key'}
+            </span>
+          </form>
+        </section>
+
+        <section className="consoleGrid" aria-label="Agent Console">
+          <article className="panel conversationPanel" aria-label="会话">
+            <div className="panelHeader">
+              <div>
+                <h2>会话</h2>
+                <span className={`requestStatus status-${requestStatus}`} aria-hidden="true">
+                  {statusLabels[requestStatus]}
+                </span>
+              </div>
+              {requestId ? (
+                <div className="requestIdGroup">
+                  <span className="metricLabel">Request ID</span>
+                  <button
+                    type="button"
+                    className="copyButton"
+                    aria-label={`复制 Request ID ${requestId}`}
+                    onClick={() => void handleCopy('Request ID', requestId)}
+                  >
+                    {requestId}
+                  </button>
                   {copyFeedback ? (
                     <span className="copyFeedback" aria-live="polite">
                       {copyFeedback}
                     </span>
                   ) : null}
-                </span>
-                <span>停止原因：{agentRun.stopReason ?? '后端未提供'}</span>
-                <span>总 Token：{formatMetric(agentRun.usage.totalTokens)}</span>
-                <span>时间与耗时：后端未提供</span>
-              </div>
-              {agentRun.steps.length === 0 ? (
-                <div className="traceNotice compactNotice">
-                  <h3>后端返回空 Trace</h3>
-                  <p>本次 Agent Run 没有步骤事件；前端不会补造模型决策或工具调用。</p>
                 </div>
-              ) : (
-                <ol className="stepTimeline" aria-label="Agent 步骤时间线">
-                  {agentRun.steps.map((step) => (
-                    <TraceStepCard key={step.id} step={step} />
-                  ))}
-                </ol>
-              )}
-              {canRetry ? (
-                <button type="button" className="retryButton" onClick={handleRetry}>
-                  重新运行
-                </button>
               ) : null}
             </div>
-          ) : (
-            <div className="traceNotice">
-              <h3>{agentSseAvailable ? '等待 Agent SSE' : '等待 Agent Run'}</h3>
-              <p>
-                {agentSseAvailable
-                  ? '切换到 Agent Run 模式后发起真实 Agent SSE，Trace 将随事件实时更新。'
-                  : '切换到 Agent Run 模式后等待 Agent Run 结果；当前客户端未提供实时 Agent SSE。'}
-              </p>
-              {canRetry ? (
-                <button type="button" className="retryButton" onClick={handleRetry}>
-                  重新运行
-                </button>
-              ) : null}
-            </div>
-          )}
-        </aside>
-      </section>
 
-      <footer className="metricsBar">
-        <div>
-          <span className="metricLabel">会话数</span>
-          <strong>{sessionCount}</strong>
-        </div>
-        <div>
-          <span className="metricLabel">清空次数</span>
-          <strong>{clearedCount}</strong>
-        </div>
-        <div className="metricWide">
-          <span className="metricLabel">请求状态</span>
-          <strong>{statusLabels[requestStatus]}</strong>
-        </div>
-        <div className="actions">
-          <button type="button" onClick={() => resetConversation('new')}>
-            新建会话
-          </button>
-          <button
-            type="button"
-            className="secondaryButton"
-            onClick={() => resetConversation('clear')}
-          >
-            清空当前会话
-          </button>
-        </div>
-      </footer>
-    </main>
+            <div className="modeSwitch" role="group" aria-label="请求模式">
+              <button
+                type="button"
+                className={mode === 'chat' ? 'modeActive' : 'secondaryButton'}
+                aria-pressed={mode === 'chat'}
+                disabled={isActive}
+                onClick={() => setMode('chat')}
+              >
+                普通 Chat SSE 模式
+              </button>
+              <button
+                type="button"
+                className={mode === 'agent' ? 'modeActive' : 'secondaryButton'}
+                aria-pressed={mode === 'agent'}
+                disabled={isActive}
+                onClick={() => setMode('agent')}
+              >
+                Agent Run 模式
+              </button>
+            </div>
+
+            <div className="srOnlyStatus" role="status" aria-live="polite" aria-atomic="true">
+              {statusLabels[requestStatus]}。{announcement}
+            </div>
+
+            {messages.length === 0 ? (
+              <div className="emptyState">
+                <div className="emptyIcon">A</div>
+                <h3>{mode === 'chat' ? '开始一段普通对话' : '运行一次真实 Agent'}</h3>
+                <p>
+                  {mode === 'chat'
+                    ? '输入问题后，前端会真实调用 Chat SSE，并将回答增量显示在这里。'
+                    : agentSseAvailable
+                      ? 'Agent 模式通过真实 Agent SSE 实时更新回答与 Trace；后端 answer_delta 会按增量显示。'
+                      : 'Agent Run 将在返回结果后显示回答与 Trace；当前客户端未提供实时 Agent SSE。'}
+                </p>
+              </div>
+            ) : (
+              <ol className="messageList" aria-label="消息列表">
+                {messages.map((message) => (
+                  <li key={message.id} className={`message message-${message.role}`}>
+                    <span className="messageRole">{message.role === 'user' ? '你' : '助手'}</span>
+                    <p>{message.content || (isActive ? '…' : '（无文本内容）')}</p>
+                  </li>
+                ))}
+              </ol>
+            )}
+
+            {errorMessage ? (
+              <div className="errorNotice" role="alert">
+                <span>{errorMessage}</span>
+                {canRetry ? (
+                  <button type="button" className="inlineRetryButton" onClick={handleRetry}>
+                    {mode === 'chat' ? '重试 Chat' : '重新运行 Agent'}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            <form className="composer" onSubmit={handleSubmit}>
+              <label htmlFor="message-input">输入消息</label>
+              <textarea
+                id="message-input"
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder={
+                  mode === 'chat'
+                    ? '例如：解释一下当前项目的 Chat SSE 契约'
+                    : '例如：请使用 calculator 计算 (12 + 8) × 3'
+                }
+                rows={3}
+                disabled={isActive}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault()
+                    event.currentTarget.form?.requestSubmit()
+                  }
+                }}
+              />
+              <div className="composerActions">
+                <span className="composerHint">
+                  {mode === 'chat'
+                    ? '普通回答为实时 Chat SSE；Enter 换行，Ctrl/⌘ + Enter 发送。'
+                    : agentSseAvailable
+                      ? 'Agent 使用真实 Agent SSE 实时更新回答与 Trace，后端 answer_delta 会增量显示；Enter 换行，Ctrl/⌘ + Enter 运行。'
+                      : 'Agent Run 等待后端结果；当前客户端未提供实时 Agent SSE。Enter 换行，Ctrl/⌘ + Enter 运行。'}
+                </span>
+                {isActive ? (
+                  <button type="button" className="stopButton" onClick={handleStop}>
+                    停止请求
+                  </button>
+                ) : (
+                  <button type="submit" disabled={!draft.trim()}>
+                    {mode === 'chat' ? '发送消息' : '运行 Agent'}
+                  </button>
+                )}
+              </div>
+            </form>
+          </article>
+
+          <aside className="panel tracePanel" aria-label="Agent Trace">
+            <div className="panelHeader">
+              <div>
+                <h2>Agent Trace</h2>
+                <span>{requestStatus === 'agent_running' ? '运行中' : traceStatus}</span>
+              </div>
+              <span className="traceDelivery">
+                {agentSseAvailable ? '实时 Agent SSE' : 'Agent Run 兼容路径'}
+              </span>
+            </div>
+
+            {isActive && mode === 'agent' && !agentRun && resolvedAgentClient.streamAgent ? (
+              <div className="traceNotice">
+                <h3>{statusLabels[requestStatus]}</h3>
+                <p>正在接收后端真实 Agent SSE，Trace 将随事件实时更新。</p>
+              </div>
+            ) : requestStatus === 'agent_running' && !agentRun ? (
+              <div className="traceNotice">
+                <h3>等待 Agent Run</h3>
+                <p>正在等待 Agent Run 结果；当前客户端未提供实时 Agent SSE。</p>
+              </div>
+            ) : requestStatus === 'client_cancelled' ? (
+              <div className="traceNotice traceCancelled">
+                <h3>前端已停止等待，后端终态未知</h3>
+                <p>浏览器已中止等待响应；这不代表后端 Agent Runtime 已被取消。</p>
+              </div>
+            ) : traceUnavailableMessage ? (
+              <div className="traceNotice traceUnavailable">
+                <h3>未收到 Trace</h3>
+                <p>{traceUnavailableMessage}</p>
+                <p>没有可安全展示的运行或步骤数据；页面不会补造 Run、事件或工具结果。</p>
+                {canRetry ? (
+                  <button type="button" className="retryButton" onClick={handleRetry}>
+                    重新运行
+                  </button>
+                ) : null}
+              </div>
+            ) : agentRun ? (
+              <div className="traceContent">
+                <div className="traceMeta">
+                  <span className="runIdLine">
+                    <span>Run ID：{agentRun.runId ?? '后端未提供'}</span>
+                    {agentRun.runId ? (
+                      <button
+                        type="button"
+                        className="copyButton"
+                        aria-label={`复制 Run ID ${agentRun.runId}`}
+                        onClick={() => void handleCopy('Run ID', agentRun.runId)}
+                      >
+                        复制 Run ID
+                      </button>
+                    ) : null}
+                    {copyFeedback ? (
+                      <span className="copyFeedback" aria-live="polite">
+                        {copyFeedback}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span>停止原因：{agentRun.stopReason ?? '后端未提供'}</span>
+                  <span>
+                    工具调用：实际 {getToolCallMetrics(agentRun).actual} 次，复用{' '}
+                    {getToolCallMetrics(agentRun).cached} 次
+                  </span>
+                  <span>总 Token：{formatMetric(agentRun.usage.totalTokens)}</span>
+                  <span>开始：{formatAgentTimestamp(agentRun.startedAt)}</span>
+                  <span>完成：{formatAgentTimestamp(agentRun.completedAt)}</span>
+                  <span>
+                    耗时：
+                    {agentRun.durationMs === null || agentRun.durationMs === undefined
+                      ? '后端未提供'
+                      : `${agentRun.durationMs} ms`}
+                  </span>
+                </div>
+                {agentRun.steps.length === 0 ? (
+                  <div className="traceNotice compactNotice">
+                    <h3>后端返回空 Trace</h3>
+                    <p>本次 Agent Run 没有步骤事件；前端不会补造模型决策或工具调用。</p>
+                  </div>
+                ) : (
+                  <ol className="stepTimeline" aria-label="Agent 步骤时间线">
+                    {agentRun.steps.map((step) => (
+                      <TraceStepCard key={step.id} step={step} />
+                    ))}
+                  </ol>
+                )}
+                {canRetry ? (
+                  <button type="button" className="retryButton" onClick={handleRetry}>
+                    重新运行
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <div className="traceNotice">
+                <h3>{agentSseAvailable ? '等待 Agent SSE' : '等待 Agent Run'}</h3>
+                <p>
+                  {agentSseAvailable
+                    ? '切换到 Agent Run 模式后发起真实 Agent SSE，Trace 将随事件实时更新。'
+                    : '切换到 Agent Run 模式后等待 Agent Run 结果；当前客户端未提供实时 Agent SSE。'}
+                </p>
+                {canRetry ? (
+                  <button type="button" className="retryButton" onClick={handleRetry}>
+                    重新运行
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </aside>
+        </section>
+
+        <footer className="metricsBar">
+          <div>
+            <span className="metricLabel">会话数</span>
+            <strong>{sessionCount}</strong>
+          </div>
+          <div>
+            <span className="metricLabel">清空次数</span>
+            <strong>{clearedCount}</strong>
+          </div>
+          <div className="metricWide">
+            <span className="metricLabel">请求状态</span>
+            <strong>{statusLabels[requestStatus]}</strong>
+          </div>
+          <div className="actions">
+            <button type="button" onClick={() => resetConversation('new')}>
+              新建会话
+            </button>
+            <button
+              type="button"
+              className="secondaryButton"
+              onClick={() => resetConversation('clear')}
+            >
+              清空当前会话
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>,
   )
 }
 

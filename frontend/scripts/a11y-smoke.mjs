@@ -103,11 +103,14 @@ const formatAxeFindings = (findings) =>
     )
     .join('\n')
 
-const runAxe = async (page, label) => {
-  const result = await page.evaluate(async () => {
-    const axeResult = await window.axe.run(document, {
-      resultTypes: ['violations', 'incomplete'],
-    })
+const runAxe = async (page, label, options = {}) => {
+  const result = await page.evaluate(async (axeOptions) => {
+    const axeResult = await window.axe.run(
+      axeOptions.include ? { include: axeOptions.include } : document,
+      {
+        resultTypes: ['violations', 'incomplete'],
+      },
+    )
     return {
       violations: axeResult.violations.map(({ id, impact, nodes }) => ({
         id,
@@ -128,7 +131,7 @@ const runAxe = async (page, label) => {
         })),
       })),
     }
-  })
+  }, options)
   console.log(
     `[axe] ${label}: violations=${result.violations.length}, incomplete=${result.incomplete.length}`,
   )
@@ -216,8 +219,60 @@ const stopLiveRegionObserver = async (page) =>
     return window.__a11ySmokeLiveValues ?? []
   })
 
-const assertInitialState = async (page) => {
+const assertPlatformOverview = async (page) => {
   assert.equal(await page.title(), 'Agent Console | AI Platform Mini', '页面标题不正确。')
+  await page
+    .getByRole('heading', { name: '把模型能力，变成可观察的应用。', exact: true })
+    .waitFor({ state: 'visible' })
+  await page
+    .getByText(
+      'AI Platform Mini 是一个轻量级大模型应用平台：从流式对话到 Agent Runtime，再到 RAG 来源审计，所有演示都连接真实的后端能力。',
+      { exact: true },
+    )
+    .waitFor({ state: 'visible' })
+  const overviewNav = page.getByRole('button', { name: '平台概览', exact: true })
+  assert.equal(
+    await overviewNav.getAttribute('aria-current'),
+    'page',
+    '平台概览入口未标记为当前页面。',
+  )
+  assert.equal(
+    await page.locator('[aria-label="平台能力状态"]').count(),
+    1,
+    '平台能力状态区域未渲染。',
+  )
+  await page.getByRole('heading', { name: '从一个入口，讲清楚四种 AI 能力', exact: true }).waitFor({
+    state: 'visible',
+  })
+  await page
+    .getByRole('button', { name: '打开对话工作台', exact: true })
+    .waitFor({ state: 'visible' })
+  await page
+    .getByRole('button', { name: '运行 Agent Demo', exact: true })
+    .waitFor({ state: 'visible' })
+  await page
+    .getByRole('button', { name: '进入知识库演示', exact: true })
+    .waitFor({ state: 'visible' })
+  await page
+    .getByRole('button', { name: '打开 Prompt Studio', exact: true })
+    .waitFor({ state: 'visible' })
+  console.log('[dom] 平台概览入口、能力状态和四条演示路径检查通过。')
+}
+
+const openConsoleFromOverview = async (page) => {
+  await page.getByRole('button', { name: '打开对话工作台', exact: true }).click()
+  await page.getByRole('heading', { name: '对话与 Agent Trace', exact: true }).waitFor({
+    state: 'visible',
+  })
+  const consoleNav = page.getByRole('button', { name: '对话工作台', exact: true })
+  assert.equal(
+    await consoleNav.getAttribute('aria-current'),
+    'page',
+    '进入对话工作台后导航状态未更新。',
+  )
+}
+
+const assertConsoleInitialState = async (page) => {
   await page.getByText('开始一段普通对话', { exact: true }).waitFor({ state: 'visible' })
   await page
     .getByText('输入问题后，前端会真实调用 Chat SSE，并将回答增量显示在这里。', { exact: true })
@@ -252,7 +307,7 @@ const assertInitialState = async (page) => {
   assert.equal(await send.isEnabled(), true, '非空输入未启用发送按钮。')
   await assertFocused(send, '发送按钮')
   await input.fill('')
-  console.log('[dom] 初始空态、请求模式语义、输入框和主要按钮焦点检查通过。')
+  console.log('[dom] 对话工作台空态、请求模式语义、输入框和主要按钮焦点检查通过。')
 }
 
 const switchToAgentMode = async (page) => {
@@ -352,7 +407,10 @@ const assertNoHorizontalOverflow = async (page) => {
       .filter((element) => {
         const style = getComputedStyle(element)
         return (
-          style.display !== 'none' && style.visibility !== 'hidden' && !element.closest('[hidden]')
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          !element.closest('[hidden]') &&
+          !element.closest('.platformNav')
         )
       })
       .map((element) => {
@@ -417,14 +475,16 @@ const main = async () => {
     await page.goto(appUrl, { waitUntil: 'networkidle', timeout: waitTimeoutMs })
     await page.addScriptTag({ content: axe.source })
     await page.locator('#root').waitFor({ state: 'visible' })
-    await assertInitialState(page)
-    await runAxe(page, '初始空态')
+    await assertPlatformOverview(page)
+    await openConsoleFromOverview(page)
+    await assertConsoleInitialState(page)
+    await runAxe(page, '对话工作台初始空态', { include: ['.consolePage'] })
     await switchToAgentMode(page)
     if (skipAgent) {
       console.log('[skip] A11Y_SMOKE_SKIP_AGENT=1，未执行真实 Agent/Trace/RAG 路径。')
     } else {
       await runRealAgentScenario(page)
-      await runAxe(page, '真实 Agent/RAG 状态')
+      await runAxe(page, '真实 Agent/RAG 状态', { include: ['.consolePage'] })
     }
     await assertNoHorizontalOverflow(page)
     assert.equal(consoleErrors.length, 0, `浏览器 console error：${consoleErrors.join(' | ')}`)

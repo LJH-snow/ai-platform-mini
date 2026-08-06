@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -137,12 +137,23 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+const renderConsole = (ui: Parameters<typeof render>[0]) => {
+  const result = render(ui)
+  fireEvent.click(screen.getByRole('button', { name: '对话工作台' }))
+  return result
+}
+
 describe('App', () => {
   it('renders the Phase 6 realtime Agent surface and preserves the Chat SSE copy', async () => {
     const user = userEvent.setup()
     render(<App />)
 
-    expect(screen.getByText('Agent Console · Phase 6')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: '把模型能力，变成可观察的应用。' }),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '对话工作台' }))
+    expect(screen.getByText('WORKSPACE · REAL-TIME AI')).toBeInTheDocument()
+
     expect(
       screen.getByText(
         '普通模式继续使用真实 Chat SSE；Agent 模式使用真实 Agent SSE，Trace 实时更新；回答支持后端真实 answer_delta 增量。',
@@ -195,7 +206,7 @@ describe('App', () => {
     async (toolEvent) => {
       const user = userEvent.setup()
       const controlled = createControlledAgentClient()
-      render(<App agentClient={controlled.client} />)
+      renderConsole(<App agentClient={controlled.client} />)
 
       await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
       const input = screen.getByLabelText('输入消息')
@@ -238,7 +249,7 @@ describe('App', () => {
   it('isolates the stream reducer when starting a second Agent Run in the same session', async () => {
     const user = userEvent.setup()
     const controlled = createControlledAgentClient()
-    render(<App agentClient={controlled.client} />)
+    renderConsole(<App agentClient={controlled.client} />)
 
     await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
     await user.type(screen.getByLabelText('输入消息'), '第一次运行')
@@ -276,7 +287,7 @@ describe('App', () => {
 
   it('shows the Agent retry action when an Agent network request fails', async () => {
     const user = userEvent.setup()
-    render(<App agentClient={createNetworkFailingAgentClient()} />)
+    renderConsole(<App agentClient={createNetworkFailingAgentClient()} />)
 
     await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
     await user.type(screen.getByLabelText('输入消息'), '网络失败')
@@ -306,6 +317,7 @@ describe('App', () => {
             completedAt: '2026-08-05T00:00:01Z',
             durationMs: 1000,
             toolNames: ['knowledge_search'],
+            toolCount: 1,
             summary: '查询知识库',
             events: [],
             toolCalls: [
@@ -318,8 +330,10 @@ describe('App', () => {
                 startedAt: '2026-08-05T00:00:00Z',
                 completedAt: '2026-08-05T00:00:01Z',
                 durationMs: 1000,
+                argumentCount: 1,
                 inputSummary: '阶段六前端可访问性',
                 outputSummary: '找到 1 条来源',
+                resultChars: 8,
                 errorCode: null,
                 errorMessage: null,
                 truncated: false,
@@ -351,13 +365,24 @@ describe('App', () => {
         },
       }),
     }
-    const { container } = render(<App agentClient={agentClient} />)
+    const { container } = renderConsole(<App agentClient={agentClient} />)
 
     await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
     await user.type(screen.getByLabelText('输入消息'), '检查可访问性')
     await user.click(screen.getByRole('button', { name: '运行 Agent' }))
 
     await waitFor(() => expect(screen.getByText('基于来源的回答')).toBeInTheDocument())
+
+    const stepButton = screen.getByRole('button', { name: /步骤 1.*工具调用/ })
+    await user.click(stepButton)
+    expect(screen.getByText('工具数量：1')).toBeVisible()
+    const toolButton = screen.getByRole('button', { name: /工具调用 knowledge_search.*成功/ })
+    await user.click(toolButton)
+    expect(screen.getByText('参数数量：1')).toBeVisible()
+    expect(screen.getByText('输入摘要：阶段六前端可访问性')).toBeVisible()
+    expect(screen.getByText('输出摘要：找到 1 条来源')).toBeVisible()
+    expect(screen.getByText('结果字符数：8')).toBeVisible()
+    expect(screen.getByText('状态：success_with_sources · 来源数量：1')).toBeVisible()
 
     expect(screen.getByRole('list', { name: '消息列表' })).toBeInTheDocument()
     expect(screen.getByRole('list', { name: 'Agent 步骤时间线' })).toBeInTheDocument()
@@ -379,7 +404,7 @@ describe('App', () => {
   it('sends messages, merges deltas, and exposes the completed request id', async () => {
     const user = userEvent.setup()
     const controlled = createControlledClient()
-    render(<App chatClient={controlled.client} />)
+    renderConsole(<App chatClient={controlled.client} />)
 
     await user.type(screen.getByLabelText('输入消息'), '你好')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -402,7 +427,7 @@ describe('App', () => {
   it('prevents duplicate submission while a request is active', async () => {
     const user = userEvent.setup()
     const controlled = createControlledClient()
-    render(<App chatClient={controlled.client} />)
+    renderConsole(<App chatClient={controlled.client} />)
 
     await user.type(screen.getByLabelText('输入消息'), '重复测试')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -415,7 +440,7 @@ describe('App', () => {
   it('stops the active request and ignores late delta and request id callbacks', async () => {
     const user = userEvent.setup()
     const controlled = createControlledClient()
-    render(<App chatClient={controlled.client} />)
+    renderConsole(<App chatClient={controlled.client} />)
 
     await user.type(screen.getByLabelText('输入消息'), '停止测试')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -436,7 +461,7 @@ describe('App', () => {
   it('distinguishes backend errors, network failures, and interrupted SSE streams', async () => {
     const user = userEvent.setup()
     const backendFailure = createControlledClient()
-    const { rerender } = render(<App chatClient={backendFailure.client} />)
+    const { rerender } = renderConsole(<App chatClient={backendFailure.client} />)
 
     await user.type(screen.getByLabelText('输入消息'), '后端错误')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -447,6 +472,7 @@ describe('App', () => {
 
     const networkFailure = createControlledClient()
     rerender(<App chatClient={networkFailure.client} />)
+    fireEvent.click(screen.getByRole('button', { name: '对话工作台' }))
     await user.click(screen.getByRole('button', { name: '清空当前会话' }))
     await user.type(screen.getByLabelText('输入消息'), '网络失败')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -457,6 +483,7 @@ describe('App', () => {
 
     const interrupted = createControlledClient()
     rerender(<App chatClient={interrupted.client} />)
+    fireEvent.click(screen.getByRole('button', { name: '对话工作台' }))
     await user.click(screen.getByRole('button', { name: '清空当前会话' }))
     await user.type(screen.getByLabelText('输入消息'), 'SSE 断连')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -469,7 +496,7 @@ describe('App', () => {
   it('creates a new session and ignores callbacks from the previous session', async () => {
     const user = userEvent.setup()
     const controlled = createControlledClient()
-    render(<App chatClient={controlled.client} />)
+    renderConsole(<App chatClient={controlled.client} />)
 
     await user.type(screen.getByLabelText('输入消息'), '旧会话')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -488,7 +515,7 @@ describe('App', () => {
   it('clears the current session and increments the clear count', async () => {
     const user = userEvent.setup()
     const controlled = createControlledClient()
-    render(<App chatClient={controlled.client} />)
+    renderConsole(<App chatClient={controlled.client} />)
 
     await user.type(screen.getByLabelText('输入消息'), '清空我')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -507,7 +534,7 @@ describe('App', () => {
   it('supports keyboard send, preserves Enter for multiline input, and lets the keyboard stop Chat', async () => {
     const user = userEvent.setup()
     const controlled = createControlledClient()
-    render(<App chatClient={controlled.client} />)
+    renderConsole(<App chatClient={controlled.client} />)
 
     const input = screen.getByLabelText('输入消息')
     await user.type(input, '第一行')
@@ -532,7 +559,7 @@ describe('App', () => {
       configurable: true,
       value: { writeText },
     })
-    render(<App chatClient={controlled.client} />)
+    renderConsole(<App chatClient={controlled.client} />)
 
     await user.type(screen.getByLabelText('输入消息'), '复制测试')
     await user.click(screen.getByRole('button', { name: '发送消息' }))
@@ -556,7 +583,7 @@ describe('App', () => {
   it('offers Chat retry and removes the previous failed assistant state', async () => {
     const user = userEvent.setup()
     const controlled = createControlledClient()
-    render(<App chatClient={controlled.client} />)
+    renderConsole(<App chatClient={controlled.client} />)
 
     await user.type(screen.getByLabelText('输入消息'), '请重试')
     await user.click(screen.getByRole('button', { name: '发送消息' }))

@@ -177,6 +177,10 @@ class TestLifespanRAG:
             patch("app.db.init.init_db", new_callable=AsyncMock) as mock_init_db,
             patch("app.db.init.dispose_db", new_callable=AsyncMock),
             patch("app.auth.dependencies.provide_api_key_service"),
+            patch(
+                "app.main.provide_rag_ingestion_queue",
+                return_value=AsyncMock(),
+            ),
         ):
             from app.main import app
 
@@ -228,6 +232,10 @@ class TestLifespanRAG:
             patch("app.db.init.init_db", new_callable=AsyncMock),
             patch("app.db.init.dispose_db", new_callable=AsyncMock),
             patch("app.auth.dependencies.provide_api_key_service"),
+            patch(
+                "app.main.provide_rag_ingestion_queue",
+                return_value=AsyncMock(),
+            ),
         ):
             from app.main import app
 

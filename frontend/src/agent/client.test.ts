@@ -45,6 +45,7 @@ describe('createAgentClient', () => {
         body: JSON.stringify({
           message: '2+2',
           history: [{ role: 'user', content: '之前的问题' }],
+          timeout_seconds: 120,
         }),
       }),
     )

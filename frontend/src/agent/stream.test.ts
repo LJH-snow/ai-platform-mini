@@ -66,6 +66,50 @@ describe('Agent SSE parser', () => {
     ).toThrow(AgentStreamFormatError)
   })
 
+  it('parses step_planned metadata and accepts legacy events without it', () => {
+    expect(
+      parseAgentStreamEvent(
+        'step_planned',
+        event(1, {
+          step_index: 1,
+          decision_kind: 'tool_call',
+          tool_names: ['calculator'],
+          tool_count: 1,
+          summary: '计算表达式。',
+          argument_count: 1,
+          input_summary: '12 + 8',
+          output_summary: '20',
+          result_chars: 2,
+        }),
+      ),
+    ).toMatchObject({
+      event: 'step_planned',
+      decision_kind: 'tool_call',
+      tool_names: ['calculator'],
+      tool_count: 1,
+      summary: '计算表达式。',
+      argument_count: 1,
+      input_summary: '12 + 8',
+      output_summary: '20',
+      result_chars: 2,
+    })
+    expect(parseAgentStreamEvent('step_started', event(2))).toMatchObject({
+      event: 'step_started',
+    })
+  })
+
+  it('rejects tool_names beyond the service payload limits', () => {
+    expect(() =>
+      parseAgentStreamEvent(
+        'step_planned',
+        event(1, { tool_names: Array.from({ length: 33 }, (_, index) => `tool-${index}`) }),
+      ),
+    ).toThrow(AgentStreamFormatError)
+    expect(() =>
+      parseAgentStreamEvent('step_planned', event(2, { tool_names: ['x'.repeat(129)] })),
+    ).toThrow(AgentStreamFormatError)
+  })
+
   it('parses answer deltas and rejects invalid delta values', () => {
     expect(parseAgentStreamEvent('answer_delta', event(1, { delta: '真实' }))).toMatchObject({
       event: 'answer_delta',

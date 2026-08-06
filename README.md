@@ -15,6 +15,7 @@
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
 - 前端 Agent Console：[阶段 6 已接入 Agent SSE、实时 Trace、Tool/RAG 状态和错误边界；开发期 Vite proxy 已用于真实浏览器流式验证](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md)
+- 前端平台壳层：默认 Dashboard、对话工作台、Prompt Studio、模型目录和管理员后台导航已接入。
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -43,6 +44,8 @@
 ## Agent Run RAG public contract
 
 `POST /api/v1/agent/runs` 保持同步 JSON 语义。对于实际执行的 `knowledge_search` Tool Call，响应可以在对应的 `steps[].tool_calls[]` 中增加可选 `rag` 字段；旧客户端可以忽略该字段。Agent SSE 另由 `POST /api/v1/agent/runs/stream` 提供，RAG 事件仍只使用同一安全投影，不提供回答内精确引用。
+
+Agent SSE 还会把内部 `MODEL_DECISION` 投影为可选的 `step_planned` 事件，公开 `decision_kind`、`tool_names`、`tool_count` 和安全 `summary`。Tool 事件可以公开有限的 `argument_count`、`input_summary`、`output_summary` 和 `result_chars`：calculator 的 expression/result 会经过长度限制和敏感信息清洗，knowledge_search 不公开原始 query，只提供检索状态和 RAG 安全来源，未知工具只提供参数数量和结果字符数。原始 Tool payload、Prompt、Provider 响应和模型内部推理仍不会公开。
 
 公开的 `rag` 结构为：
 
@@ -86,8 +89,8 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - Agent 模式现在使用 Agent SSE 实时更新；同步 JSON 客户端仍保留用于兼容和回归；
 - 左侧最终回答与右侧 Run 状态联动，支持 `completed`、`stopped`、`failed`、`cancelled`、`timed_out`，并区分浏览器中止等待与后端取消终态；
 - 领域适配层稳定排序并去重步骤/事件，组件不直接依赖后端原始 JSON；
-- 步骤卡片展示序号、决策类型、状态、工具名称和安全摘要；后端公开契约没有时间戳与耗时，因此显示“后端未提供”，不会补零或伪造；
-- Tool Call 卡片支持 `calculator` 与未知工具的成功、失败、超时、取消和未知状态；当前公开契约不包含工具输入/输出及错误详情，因此对应摘要明确显示“后端未提供”；
+- 步骤卡片展示序号、决策类型、状态、工具名称和后端提供的安全摘要；后端公开契约没有时间戳与耗时，因此显示“后端未提供”，不会补零或伪造；
+- Tool Call 卡片支持 `calculator` 与未知工具的成功、失败、超时、取消和未知状态；后端现在提供有界安全摘要：calculator 展示脱敏后的 expression/result，knowledge_search 隐藏原始 query 并展示 RAG 状态，未知工具只展示参数数量和结果字符数；原始 payload 仍显示为“后端未提供”；
 - 仅在后端响应包含 `run_id` 时展示 Run ID；Token 仅在公开 `usage` 字段非空时展示实际值；
 - 支持步骤与工具摘要展开/收起、停止本地请求、失败后重新运行、新建会话和清空会话；窄屏布局避免 Trace 横向溢出；
 - 前端对 HTTP、网络、Abort 和异常响应进行安全归一化，不渲染堆栈、内部路径、API Key、Provider 原始响应或模型思维链。
@@ -98,7 +101,6 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - 读取公开契约 `steps[].tool_calls[].rag.references`，展示真实的稳定来源标识、分块索引、片段摘要和 distance；缺失字段显示“后端未提供”，不生成文档名、URL、rank、引用编号或回答内精确引用；
 - 支持有来源、来源缺失、空来源、无相关来源、知识库为空、RAG 服务不可用、Embedding 失败、输出不可用和其他失败状态；服务故障不会伪装成无相关来源；
 - 来源片段遵循后端公开边界，并在前端显示截断/安全提示；RAG 内容始终作为不可信参考材料以普通文本渲染，不执行其中的指令或 HTML。
-
 
 阶段 5 当前能力：
 
@@ -139,9 +141,9 @@ npm run dev
 ```html
 <script>
   window.__AI_PLATFORM_RUNTIME_CONFIG__ = {
-    apiBaseUrl: 'http://localhost:8000',
-    apiKey: '<runtime-injected-key>',
-  }
+    apiBaseUrl: "http://localhost:8000",
+    apiKey: "<runtime-injected-key>",
+  };
 </script>
 ```
 
@@ -218,22 +220,22 @@ INTEGRATION_TEST=1 pytest
 
 ## API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/health` | Liveness probe |
-| GET | `/api/v1/ready` | Readiness probe (checks downstream) |
-| GET | `/api/v1/health/mcp` | MCP lifecycle/readiness status (when enabled) |
-| GET | `/api/v1/usage` | Token usage statistics |
-| POST | `/v1/chat/completions` | OpenAI-compatible chat completions (supports SSE streaming) |
-| GET | `/api/v1/models` | List available LLM models |
-| POST | `/api/v1/chat` | Generate a chat completion with model-based provider routing |
-| POST | `/api/v1/chat/rag` | RAG-enhanced chat completion (requires `RAG_ENABLED=true`) |
-| POST | `/api/v1/agent/runs` | Bounded Agent Runtime run (model decision and controlled tool loop) |
-| POST | `/admin/api-keys` | Create a new API key (admin only) |
-| GET | `/admin/api-keys` | List all API keys (admin only) |
-| DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only) |
-| GET | `/admin/usage/daily` | Get daily token usage for an API key (admin only) |
-| GET | `/admin/usage/monthly` | Get monthly token usage for an API key (admin only) |
+| Method | Path                       | Description                                                         |
+| ------ | -------------------------- | ------------------------------------------------------------------- |
+| GET    | `/api/v1/health`           | Liveness probe                                                      |
+| GET    | `/api/v1/ready`            | Readiness probe (checks downstream)                                 |
+| GET    | `/api/v1/health/mcp`       | MCP lifecycle/readiness status (when enabled)                       |
+| GET    | `/api/v1/usage`            | Token usage statistics                                              |
+| POST   | `/v1/chat/completions`     | OpenAI-compatible chat completions (supports SSE streaming)         |
+| GET    | `/api/v1/models`           | List available LLM models                                           |
+| POST   | `/api/v1/chat`             | Generate a chat completion with model-based provider routing        |
+| POST   | `/api/v1/chat/rag`         | RAG-enhanced chat completion (requires `RAG_ENABLED=true`)          |
+| POST   | `/api/v1/agent/runs`       | Bounded Agent Runtime run (model decision and controlled tool loop) |
+| POST   | `/admin/api-keys`          | Create a new API key (admin only)                                   |
+| GET    | `/admin/api-keys`          | List all API keys (admin only)                                      |
+| DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only)                       |
+| GET    | `/admin/usage/daily`       | Get daily token usage for an API key (admin only)                   |
+| GET    | `/admin/usage/monthly`     | Get monthly token usage for an API key (admin only)                 |
 
 ### Chat request example
 
@@ -252,7 +254,7 @@ INTEGRATION_TEST=1 pytest
 {
   "model": "qwen3:4b",
   "created_at": "2026-08-02T00:00:00Z",
-  "message": {"role": "assistant", "content": "Hi there!"},
+  "message": { "role": "assistant", "content": "Hi there!" },
   "done": true,
   "done_reason": "stop"
 }
@@ -343,8 +345,8 @@ DEBUG=false
 LOG_LEVEL=INFO
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_DEFAULT_MODEL=qwen3:4b
-OLLAMA_TIMEOUT_SECONDS=60
+OLLAMA_DEFAULT_MODEL=qwen3:4b-instruct
+OLLAMA_TIMEOUT_SECONDS=120
 
 # OpenAI Provider (non-default `gpt-*` models route here)
 OPENAI_API_KEY=
@@ -374,6 +376,9 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 
 # RAG (Retrieval-Augmented Generation)
 RAG_ENABLED=false
+
+# Agent Runtime
+# Agent requests default to a 120-second global deadline; the frontend sends this explicitly.
 RAG_EMBEDDING_MODEL=nomic-embed-text
 RAG_EMBEDDING_DIMENSIONS=768
 RAG_CHUNK_SIZE=500
@@ -706,7 +711,7 @@ RAG 两阶段设计（prepare/answer）将检索与生成解耦，允许在配�
 - 实现独立于 FastAPI 的有界 Agent Runtime：模型决策、Tool 调用、结果回填和多步循环
 - 支持 `max_steps`、deadline/timeout、外部取消和 provider-reported Token budget；未知 Token 用量不会被伪装成 0
 - 新增 `POST /api/v1/agent/runs`，通过 `AgentService` 复用现有 ChatService、鉴权、限流、Quota、Usage 和统一异常边界
-- API 只返回步骤和事件摘要，不暴露工具参数、工具输出或 Provider 原始响应
+- API 只返回步骤和事件安全摘要，不暴露原始工具参数、原始工具输出或 Provider 原始响应
 - 本 Sprint 不声称已经完成通用 Tool Registry、RAG Tool、MCP、Memory、Multi-Agent、Agent SSE 或前端 Agent UI
 
 ### Sprint 8 学习总结
@@ -735,7 +740,6 @@ Tool Registry 解决“有哪些工具”，Tool Executor 解决“能否安全�
 - 空知识库、无相关上下文、RAG 存储不可用和 embedding 失败映射为稳定错误码，未知异常仍由 ToolExecutor 安全归一化。
 - 容器仅在 RAG 服务可用时注册 `knowledge_search`；RAG 关闭时 Agent 继续保持 `calculator` 默认能力。
 - 新增普通 Agent + Knowledge Search 集成测试，并保留 `/api/v1/chat/rag` 兼容链路。
-
 
 ### Sprint 11（MCP foundation 已完成，生产化切片待后续）
 
@@ -795,3 +799,37 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 #### 阶段 6 Review 修复学习总结
 
 这轮修复确认了 SSE 的生命周期真相不能由最后一个展示事件推导，必须单独维护流是否仍在执行。流式 reducer 的 terminal 状态属于单个 Run，下一次执行前必须显式初始化，而不能依赖上次终态自然覆盖。配额续期失败通过带有领域异常标记的任务取消传递给 Runtime，并由 Service 统一记录用量、释放 reservation 和输出唯一失败终态，同时保留普通 Chat SSE 的既有异常语义。实际响应 Header 必须写入最终返回的 `StreamingResponse`，不能只修改 FastAPI 注入的临时 `Response`。此外，SSE producer 的异常分类必须依赖已观察到的生命周期事件，而不能仅依赖是否已经观察到终止事件。
+
+### 管理员后台与 HR RAG 演示
+
+当前前后端已支持管理员控制台：管理员登录后可以创建普通用户 API Key（原始 Key 只在创建成功时显示）、查看普通 Key 状态、撤销普通 Key、按北京时间查看 Token 用量，以及查询 Agent Run、工具调用和 RAG 来源的安全摘要。普通用户可在前端“用户 API Key”区域粘贴普通 Key，不需要在前端启动时注入用户 Key；开发环境代理仍可通过 `AI_PLATFORM_DEV_API_KEY` 提供可选的本地 fallback。
+
+认证 Key 使用 PostgreSQL 持久化时请设置 `AUTH_STORAGE=postgres`，RAG 演示请设置 `RAG_ENABLED=true` 并确保 PostgreSQL/pgvector 与 Ollama 可用。完整 HR 演示流程、提示词和常见问题见 [管理员、API Key 与 HR RAG 演示说明](docs/admin-rag-demo.md)。
+
+### 产品化前端平台壳层（2026-08-06）
+
+前端默认进入 **AI Platform Mini · 平台概览**，不再直接把工程控制台作为首页。平台导航现在包含：
+
+- 平台概览：展示 API Gateway、Model Provider、Agent Runtime 和 RAG 的真实配置状态，以及四条 HR 演示路径。
+- 对话工作台：保留真实 Chat SSE、Agent SSE、Agent Trace、Tool Call、RAG 来源、Request ID 和重试/停止行为。
+- Prompt Studio：提供代码审查、技术总结、面试模拟和知识库问答模板；模板编辑和保存使用浏览器 `localStorage`，可一键带入真实对话。
+- 模型目录：通过现有 `/api/v1/models` 读取真实模型列表，不伪造模型启停或删除能力。
+- 管理员后台：继续复用 API Key、Token 用量和 Agent Run 审计页面。
+
+本轮只扩展展示层，没有新增虚假统计和不存在的后端接口。默认首页不配置普通用户 Key 时会明确显示 `Key required`，模型目录也会提示先配置普通用户 Key。HR 演示建议按“平台概览 → Agent 工作流 → Trace/RAG 来源 → Prompt Studio → 管理员审计”的顺序进行。
+
+### Sprint 12（PDF 文档入库已完成）
+
+- 新增 `POST /api/v1/rag/documents`：接收 multipart PDF，执行签名校验、大小/页数/文本长度限制、`pypdf` 文本提取、分块、Ollama Embedding 和 pgvector 入库。
+- 新增 `GET /api/v1/rag/documents`：只返回文档元数据、分块数、文本字符数、Embedding 模型和创建时间，不返回原文或向量。
+- 上传接口返回 `202` 和任务状态；通过 `GET /api/v1/rag/tasks/{task_id}` 查询 queued/processing/completed/failed 状态。worker 仅在进程内暂存 PDF bytes，不保存原始 PDF 文件。
+- 文档和 chunks 使用 UUID；文档按 API Key 的 SHA-256 hash 隔离。新增 `DELETE /api/v1/rag/documents/{document_id}` 和 `GET /api/v1/rag/documents/{document_id}/preview`，仅允许所属 Key 访问。
+- 新增知识库页面：支持选择/拖拽 PDF、显示真实入库状态、列出已索引文档，并能跳转到 RAG 问答工作台。
+- 新增稳定错误边界：无效 PDF 返回 `RAG_DOCUMENT_INVALID`，超出上传限制返回 `RAG_DOCUMENT_TOO_LARGE`，存储和 Embedding 故障继续返回 503 类错误。
+- 新增 `pypdf` 和 `python-multipart` 依赖，以及上传大小、页数和文本字符数配置项。
+
+### Sprint 12 学习总结
+
+这次把 RAG 从“已有检索能力”延伸到“可演示的文档入库闭环”，前端展示的每个状态都对应真实后端阶段，没有伪造上传进度。PDF 解析只把受限的纯文本交给分块和 Embedding，API 返回安全元数据和有界文本预览，避免把向量或原始文件暴露给浏览器。文档列表复用 pgvector 元数据和分块聚合结果，并通过 API Key hash 实现租户隔离。
+
+> 当前队列是单进程内存实现，重启后未完成任务不会恢复；文档数据本身按 API Key hash 隔离。同名 PDF 上传会返回冲突，不会静默覆盖已有文档。

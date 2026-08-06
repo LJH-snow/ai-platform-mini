@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     rag_max_context_chars: int = Field(default=10000, gt=0, le=100000)
     rag_max_distance: float = Field(default=0.35, ge=0, le=2)
     rag_embedding_timeout_seconds: float = Field(default=60.0, gt=0)
+    rag_max_upload_bytes: int = Field(default=10_000_000, gt=0, le=50_000_000)
+    rag_max_pdf_pages: int = Field(default=100, gt=0, le=1_000)
+    rag_max_document_characters: int = Field(default=1_000_000, gt=0, le=10_000_000)
 
     mcp_enabled: bool = False
     mcp_servers_json: str = ""

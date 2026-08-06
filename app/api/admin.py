@@ -3,21 +3,38 @@ import re
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.auth.dependencies import provide_api_key_service
+from app.auth.dependencies import (
+    is_configured_admin_key_hash,
+    is_configured_admin_key_prefix,
+    provide_api_key_service,
+)
 from app.auth.models import APIKey, APIKeyMetadata
 from app.auth.service import APIKeyService
-from app.core.container import provide_usage_service
+from app.core.container import (
+    provide_agent_run_record_service,
+    provide_usage_service,
+)
 from app.core.context import RequestContext
-from app.exceptions.base import APIKeyNotFoundError, ValidationError
+from app.exceptions.base import (
+    APIKeyNotFoundError,
+    AuthorizationError,
+    ValidationError,
+)
 from app.ratelimit.dependencies import require_admin_rate_limit
 from app.schemas.admin import (
+    AgentRunRecordResponse,
+    AgentRunRecordSummary,
     APIKeyMetadataResponse,
     CreateAPIKeyRequest,
     CreateAPIKeyResponse,
     RevokeAPIKeyResponse,
     UsageAggregationResponse,
+)
+from app.services.agent_run_record_service import (
+    AgentRunRecordService,
+    public_run_payload,
 )
 from app.usage.service import UsageService
 
@@ -90,6 +107,7 @@ async def list_api_keys(
             key_hash_prefix=k.key_hash_prefix,
             name=k.name,
             status=k.status,
+            is_admin=is_configured_admin_key_prefix(k.key_hash_prefix),
             created_at=k.created_at,
             last_used_at=k.last_used_at,
         )
@@ -113,6 +131,10 @@ async def revoke_api_key(
 
     if target_hash is None:
         raise APIKeyNotFoundError(f"API key with prefix '{key_hash_prefix}' not found.")
+    if is_configured_admin_key_hash(target_hash):
+        raise AuthorizationError(
+            "Configured administrator API keys cannot be revoked from this endpoint."
+        )
 
     revoked = await service.revoke_key(target_hash)
     logger.info(
@@ -183,3 +205,85 @@ async def get_monthly_usage(
         )
         for a in aggs
     ]
+
+
+@router.get(
+    "/agent-runs",
+    response_model=list[AgentRunRecordSummary],
+    summary="List persisted Agent Run and RAG records",
+)
+async def list_agent_runs(
+    _admin: Annotated[APIKey, Depends(require_admin_rate_limit)],
+    record_service: Annotated[
+        AgentRunRecordService | None, Depends(provide_agent_run_record_service)
+    ],
+    limit: int = Query(50, ge=1, le=200),
+    status: str | None = Query(None, max_length=32),
+) -> list[AgentRunRecordSummary]:
+    if record_service is None:
+        return []
+    rows = await record_service.list_runs(limit=limit, status=status)
+    return [_run_summary(public_run_payload(row)) for row in rows]
+
+
+@router.get(
+    "/agent-runs/{run_id}",
+    response_model=AgentRunRecordResponse,
+    summary="Get one persisted Agent Run and RAG record",
+)
+async def get_agent_run(
+    run_id: str,
+    _admin: Annotated[APIKey, Depends(require_admin_rate_limit)],
+    record_service: Annotated[
+        AgentRunRecordService | None, Depends(provide_agent_run_record_service)
+    ],
+) -> AgentRunRecordResponse:
+    if record_service is None:
+        raise HTTPException(
+            status_code=503, detail="Agent Run records are unavailable."
+        )
+    row = await record_service.get_run(run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Agent Run record not found.")
+    payload = public_run_payload(row)
+    return AgentRunRecordResponse(**payload)
+
+
+def _run_summary(payload: object) -> AgentRunRecordSummary:
+    if not isinstance(payload, dict):
+        raise TypeError("Agent Run payload must be a mapping.")
+    response = payload.get("response")
+    if not isinstance(response, dict):
+        response = {}
+    tool_count = sum(
+        len(step.get("tool_calls", []) or [])
+        for step in response.get("steps", [])
+        if isinstance(step, dict)
+    )
+    rag_reference_count = 0
+    for step in response.get("steps", []):
+        if not isinstance(step, dict):
+            continue
+        for tool in step.get("tool_calls", []) or []:
+            if not isinstance(tool, dict):
+                continue
+            rag = tool.get("rag")
+            if isinstance(rag, dict):
+                references = rag.get("references", [])
+                if isinstance(references, list):
+                    rag_reference_count += len(references)
+    return AgentRunRecordSummary(
+        run_id=str(payload["run_id"]),
+        request_id=str(payload["request_id"]),
+        api_key_prefix=str(payload["api_key_prefix"]),
+        api_key_name=str(payload["api_key_name"]),
+        model=str(payload["model"]),
+        status=str(payload["status"]),
+        stop_reason=str(payload["stop_reason"]),
+        started_at=payload.get("started_at"),
+        completed_at=payload.get("completed_at"),
+        duration_ms=payload.get("duration_ms"),
+        total_tokens=payload.get("total_tokens"),
+        tool_count=tool_count,
+        rag_reference_count=rag_reference_count,
+    )

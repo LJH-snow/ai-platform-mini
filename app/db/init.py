@@ -2,11 +2,22 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app.db.models import APIKeyTable, Base, DailyUsageTable, QuotaReservationTable
+from app.db.models import (
+    AgentRunRecordTable,
+    APIKeyTable,
+    Base,
+    DailyUsageTable,
+    QuotaReservationTable,
+)
 
 logger = logging.getLogger(__name__)
 
-_CORE_TABLES = [APIKeyTable, DailyUsageTable, QuotaReservationTable]
+_CORE_TABLES = [
+    APIKeyTable,
+    DailyUsageTable,
+    QuotaReservationTable,
+    AgentRunRecordTable,
+]
 
 _engine: AsyncEngine | None = None
 
@@ -41,11 +52,16 @@ async def init_db(
             import sqlalchemy
 
             import app.db.rag_models  # noqa: F401 — register RAG tables
+            from app.db.rag_models import migrate_rag_schema
 
             async with _engine.begin() as conn:
                 await conn.execute(
                     sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector")
                 )
+                # Upgrade an already existing legacy RAG schema before
+                # create_all.  create_all only creates missing objects and
+                # cannot add tenant columns or change legacy UUID columns.
+                await conn.run_sync(migrate_rag_schema)
                 await conn.run_sync(Base.metadata.create_all)
         else:
             # Explicitly create only core tables to avoid creating

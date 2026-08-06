@@ -548,3 +548,247 @@ async def test_agent_sse_response_includes_rate_limit_headers() -> None:
 
     async for _ in response.body_iterator:
         pass
+
+
+def test_step_planned_projection_exposes_safe_decision_metadata() -> None:
+    projected = _to_stream_event(
+        _event(
+            AgentEventKind.MODEL_DECISION,
+            2,
+            step_index=1,
+            decision=AgentDecision(
+                tool_calls=(
+                    ToolCall(
+                        call_id="calc-1",
+                        name="calculator",
+                        arguments={
+                            "expression": "2 + 2",
+                            "api_key": "sk-never-public-12345",
+                        },
+                    ),
+                )
+            ),
+        ),
+        "request-1",
+    )
+
+    serialized = _serialize_sse(projected)
+    assert projected.event == "step_planned"
+    assert projected.decision_kind == "tool_call"
+    assert projected.tool_names == ["calculator"]
+    assert projected.tool_count == 1
+    assert projected.summary == "Planned 1 tool call(s): calculator."
+    assert "api_key" not in serialized
+    assert "sk-never-public" not in serialized
+    assert "arguments" not in serialized
+
+
+def test_calculator_tool_summaries_are_bounded_and_redacted() -> None:
+    call = ToolCall(
+        call_id="calc-1",
+        name="calculator",
+        arguments={
+            "expression": "api_key=sk-never-public-12345 " + ("1 + " * 120),
+        },
+    )
+    started = _to_stream_event(
+        _event(
+            AgentEventKind.TOOL_STARTED,
+            3,
+            step_index=1,
+            tool_call=call,
+        ),
+        "request-1",
+    )
+    completed = _to_stream_event(
+        _event(
+            AgentEventKind.TOOL_COMPLETED,
+            4,
+            step_index=1,
+            tool_call=call,
+            tool_result=ToolResult(
+                call_id="calc-1",
+                name="calculator",
+                content="42",
+                succeeded=True,
+            ),
+        ),
+        "request-1",
+    )
+
+    assert started.input_summary is not None
+    assert len(started.input_summary) <= 256
+    assert "sk-never-public" not in _serialize_sse(started)
+    assert completed.output_summary == "result: 42"
+    assert completed.result_chars == 2
+
+
+def test_knowledge_search_hides_query_and_exposes_safe_rag_summary() -> None:
+    call = ToolCall(
+        call_id="rag-1",
+        name="knowledge_search",
+        arguments={"query": "private api_key=sk-never-public-12345 question"},
+    )
+    content = (
+        '{"ok":true,"results":[{"document_id":"doc-1",'
+        '"chunk_id":"chunk-1","chunk_index":0,"content":"reference",'
+        '"distance":0.2}]}'
+    )
+    projected = _to_stream_event(
+        _event(
+            AgentEventKind.TOOL_COMPLETED,
+            4,
+            step_index=1,
+            tool_call=call,
+            tool_result=ToolResult(
+                call_id="rag-1",
+                name="knowledge_search",
+                content=content,
+                succeeded=True,
+            ),
+        ),
+        "request-1",
+    )
+
+    serialized = _serialize_sse(projected)
+    assert projected.input_summary == "knowledge search requested; query redacted"
+    assert projected.output_summary == "retrieved 1 safe reference(s)"
+    assert projected.rag is not None
+    assert projected.rag.status == "success_with_sources"
+    assert projected.rag.references[0].document_id == "doc-1"
+    assert "private api_key" not in serialized
+    assert "sk-never-public" not in serialized
+    assert "question" not in serialized
+
+
+def test_tool_name_is_sanitized_in_public_sse_projection() -> None:
+    projected = _to_stream_event(
+        _event(
+            AgentEventKind.TOOL_STARTED,
+            3,
+            step_index=1,
+            tool_call=ToolCall(
+                call_id="unknown-1",
+                name="/Users/private/tool name<script>",
+                arguments={"secret": "value"},
+            ),
+        ),
+        "request-1",
+    )
+
+    serialized = _serialize_sse(projected)
+    assert projected.tool_name == "_Users_private_tool_name_script_"
+    assert "/Users/private" not in serialized
+    assert "<script>" not in serialized
+
+
+def test_unknown_tool_only_exposes_counts_not_payloads() -> None:
+    call = ToolCall(
+        call_id="unknown-1",
+        name="filesystem",
+        arguments={"path": "/Users/private/secret.txt", "token": "secret-value"},
+    )
+    result = ToolResult(
+        call_id="unknown-1",
+        name="filesystem",
+        content="secret output api_key=sk-never-public-12345",
+        succeeded=True,
+    )
+    projected = _to_stream_event(
+        _event(
+            AgentEventKind.TOOL_COMPLETED,
+            4,
+            step_index=1,
+            tool_call=call,
+            tool_result=result,
+        ),
+        "request-1",
+    )
+
+    serialized = _serialize_sse(projected)
+    assert projected.input_summary == "parameters: 2"
+    assert projected.output_summary is None
+    assert projected.result_chars == len(result.content)
+    assert "/Users/private" not in serialized
+    assert "secret-value" not in serialized
+    assert "sk-never-public" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_sse_emits_step_planned_between_step_and_tool_events() -> None:
+    stream = AgentEventStream()
+    cancel_event = asyncio.Event()
+    call = ToolCall(
+        call_id="calc-1",
+        name="calculator",
+        arguments={"expression": "2 + 2"},
+    )
+
+    async def produce() -> None:
+        stream.observe(_event(AgentEventKind.RUN_STARTED, 1))
+        stream.observe(_event(AgentEventKind.STEP_STARTED, 2, step_index=1))
+        stream.observe(
+            _event(
+                AgentEventKind.MODEL_DECISION,
+                3,
+                step_index=1,
+                decision=AgentDecision(tool_calls=(call,)),
+            )
+        )
+        stream.observe(
+            _event(
+                AgentEventKind.TOOL_STARTED,
+                4,
+                step_index=1,
+                tool_call=call,
+            )
+        )
+        stream.observe(
+            _event(
+                AgentEventKind.TOOL_COMPLETED,
+                5,
+                step_index=1,
+                tool_call=call,
+                tool_result=ToolResult(
+                    call_id="calc-1",
+                    name="calculator",
+                    content="4",
+                    succeeded=True,
+                ),
+            )
+        )
+        stream.observe(_event(AgentEventKind.STEP_COMPLETED, 6, step_index=1))
+        stream.observe(
+            _event(
+                AgentEventKind.RUN_STOPPED,
+                7,
+                status=RunStatus.COMPLETED,
+                stop_reason=StopReason.DIRECT_ANSWER,
+            )
+        )
+        stream.close()
+
+    producer = asyncio.create_task(produce())
+    frames = [
+        frame
+        async for frame in _stream_events(
+            cast(Request, _ConnectedRequest()),
+            stream,
+            "request-1",
+            producer,
+            cancel_event,
+        )
+    ]
+
+    assert [frame.splitlines()[0] for frame in frames] == [
+        "event: run_started",
+        "event: step_started",
+        "event: step_planned",
+        "event: tool_started",
+        "event: tool_completed",
+        "event: step_completed",
+        "event: run_completed",
+    ]
+    assert '"decision_kind":"tool_call"' in frames[2]
+    assert '"input_summary":"expression: 2 + 2"' in frames[3]
+    assert '"output_summary":"result: 4"' in frames[4]

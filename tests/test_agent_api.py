@@ -19,9 +19,12 @@ from app.agents.models import (
     AgentStep,
     RunStatus,
     StopReason,
+    ToolCall,
+    ToolResult,
 )
-from app.api.agent import get_agent_service
+from app.api.agent import _to_response, get_agent_service
 from app.auth.models import APIKey
+from app.core.container import provide_agent_run_record_service
 from app.core.context import RequestContext
 from app.exceptions.base import ProviderError, QuotaExceededError
 from app.main import app
@@ -62,6 +65,22 @@ class FakeAgentService:
             raise self.error
         assert self.outcome is not None
         return self.outcome
+
+
+@dataclass
+class FakeAgentRunRecordService:
+    saved_models: list[str | None]
+
+    async def save(
+        self,
+        response: object,
+        request: AgentRunRequest,
+        context: RequestContext,
+        api_key: APIKey,
+        model: str | None = None,
+    ) -> None:
+        del response, request, context, api_key
+        self.saved_models.append(model)
 
 
 def _outcome(
@@ -111,12 +130,115 @@ def _outcome(
     )
 
 
+def test_agent_response_exposes_step_and_tool_lifecycle_timing() -> None:
+    run_id = "run-timing-1"
+    start = datetime(2026, 8, 6, 12, 0, 0, tzinfo=UTC)
+    call = ToolCall(
+        call_id="calc-1", name="calculator", arguments={"expression": "12 + 3"}
+    )
+    result = ToolResult(
+        call_id="calc-1", name="calculator", content="15", succeeded=True
+    )
+    step = AgentStep(
+        index=1, decision=AgentDecision(tool_calls=(call,)), tool_results=(result,)
+    )
+    events = (
+        AgentEvent(AgentEventKind.RUN_STARTED, run_id, 1, start),
+        AgentEvent(AgentEventKind.STEP_STARTED, run_id, 2, start, step_index=1),
+        AgentEvent(
+            AgentEventKind.TOOL_STARTED, run_id, 3, start, step_index=1, tool_call=call
+        ),
+        AgentEvent(
+            AgentEventKind.TOOL_COMPLETED,
+            run_id,
+            4,
+            start.replace(microsecond=250000),
+            step_index=1,
+            tool_call=call,
+            tool_result=result,
+        ),
+        AgentEvent(
+            AgentEventKind.STEP_COMPLETED,
+            run_id,
+            5,
+            start.replace(microsecond=500000),
+            step_index=1,
+            status=RunStatus.COMPLETED,
+        ),
+        AgentEvent(
+            AgentEventKind.RUN_STOPPED,
+            run_id,
+            6,
+            start.replace(microsecond=750000),
+            status=RunStatus.COMPLETED,
+            stop_reason=StopReason.DIRECT_ANSWER,
+        ),
+    )
+    state = AgentState(run_id=run_id, user_input="calculate")
+    state.steps.append(step)
+    outcome = AgentRunOutcome(
+        result=AgentRunResult(
+            run_id=run_id,
+            status=RunStatus.COMPLETED,
+            stop_reason=StopReason.DIRECT_ANSWER,
+            answer="15",
+            state=state,
+            events=events,
+            token_usage=0,
+        ),
+        model="test-model",
+        prompt_tokens=None,
+        completion_tokens=None,
+        estimated_usage=True,
+    )
+
+    body = _to_response(outcome).model_dump(mode="json")
+
+    assert body["events"][1]["occurred_at"] == start.isoformat().replace("+00:00", "Z")
+    assert body["started_at"] == start.isoformat().replace("+00:00", "Z")
+    assert body["completed_at"] == start.replace(
+        microsecond=750000
+    ).isoformat().replace("+00:00", "Z")
+    assert body["duration_ms"] == 750.0
+    assert body["steps"][0]["started_at"] == start.isoformat().replace("+00:00", "Z")
+    assert body["steps"][0]["completed_at"] == start.replace(
+        microsecond=500000
+    ).isoformat().replace("+00:00", "Z")
+    assert body["steps"][0]["duration_ms"] == 500.0
+    assert body["steps"][0]["tool_calls"][0]["started_at"] == start.isoformat().replace(
+        "+00:00", "Z"
+    )
+    assert body["steps"][0]["tool_calls"][0]["completed_at"] == start.replace(
+        microsecond=250000
+    ).isoformat().replace("+00:00", "Z")
+    assert body["steps"][0]["tool_calls"][0]["duration_ms"] == 250.0
+
+
 def _override(service: FakeAgentService) -> None:
     app.dependency_overrides[get_agent_service] = lambda: service
 
 
 def _clear_overrides() -> None:
     app.dependency_overrides.pop(get_agent_service, None)
+
+
+def test_agent_endpoint_persists_effective_model_name() -> None:
+    service = FakeAgentService(outcome=_outcome())
+    record_service = FakeAgentRunRecordService(saved_models=[])
+    _override(service)
+    app.dependency_overrides[provide_agent_run_record_service] = lambda: record_service
+    try:
+        response = client.post(
+            "/api/v1/agent/runs",
+            json={"message": "hello"},
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        _clear_overrides()
+        app.dependency_overrides.pop(provide_agent_run_record_service, None)
+
+    assert response.status_code == 200
+    assert record_service.saved_models == ["test-model"]
 
 
 def test_agent_endpoint_returns_direct_answer_and_usage() -> None:
@@ -218,6 +340,11 @@ def test_agent_endpoint_returns_step_summary_without_tool_payloads() -> None:
             "index": 1,
             "decision_kind": "final_answer",
             "tool_names": [],
+            "tool_count": 0,
+            "summary": "Final answer planned.",
+            "started_at": None,
+            "completed_at": None,
+            "duration_ms": None,
             "tool_succeeded": None,
         }
     ]
@@ -261,6 +388,12 @@ def test_agent_endpoint_preserves_quota_error_mapping() -> None:
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "9"
     assert response.json()["code"] == "QUOTA_EXCEEDED"
+
+
+def test_agent_request_defaults_to_two_minute_timeout() -> None:
+    request = AgentRunRequest(message="hello")
+
+    assert request.timeout_seconds == 120.0
 
 
 def test_agent_request_validation_rejects_runtime_limits() -> None:
@@ -716,7 +849,9 @@ async def test_agent_service_passes_request_and_model_to_runtime_trace_boundary(
             token_budget: int | None,
             request_id: str | None,
             model: str | None,
+            **kwargs: object,
         ) -> AgentRunResult:
+            del kwargs
             captured.update(
                 {
                     "user_input": user_input,

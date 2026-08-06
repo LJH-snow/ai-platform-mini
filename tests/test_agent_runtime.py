@@ -487,6 +487,35 @@ async def test_unknown_token_usage_does_not_trigger_budget_stop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_repeated_calculator_calls_are_cached_and_finalized() -> None:
+    calculator = CalculatorTool()
+    model = ScriptedModel(
+        [
+            AgentDecision(
+                tool_calls=(ToolCall("call-1", "calculator", {"expression": "3*2"}),)
+            ),
+            AgentDecision(
+                tool_calls=(ToolCall("call-2", "calculator", {"expression": "3*2"}),)
+            ),
+            AgentDecision(
+                tool_calls=(ToolCall("call-3", "calculator", {"expression": "3*2"}),)
+            ),
+        ]
+    )
+
+    result = await AgentRuntime(model, tools={"calculator": calculator}).run(
+        "计算 3*2", max_steps=3
+    )
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.stop_reason is StopReason.DIRECT_ANSWER
+    assert result.answer == "6"
+    assert len(result.state.steps) == 2
+    assert result.state.steps[1].tool_results[0].cached is True
+    assert len(model.responses) == 1
+
+
+@pytest.mark.asyncio
 async def test_timeout_stops_a_slow_model() -> None:
     model = ScriptedModel([AgentDecision(answer="late")], delay=0.05)
     runtime = AgentRuntime(model)

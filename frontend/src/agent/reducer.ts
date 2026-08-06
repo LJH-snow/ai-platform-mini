@@ -1,4 +1,5 @@
 import type { AgentRag, AgentRun, AgentRunStatus, AgentToolCall, AgentTraceStep } from './types.ts'
+import { localizeStepSummary } from './adapter.ts'
 import type { AgentStreamEvent } from './stream.ts'
 import type { AgentRagApiSummary, AgentRagReferenceApiSummary } from './api-types.ts'
 
@@ -8,6 +9,14 @@ export type AgentStreamState = {
   lastSequence: number
   requestId: string | null
   answerDeltaSeen: boolean
+}
+
+const safeTimestamp = (value: string | null | undefined): string | null =>
+  typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : null
+
+const durationMs = (startedAt: string | null, completedAt: string | null): number | null => {
+  if (startedAt === null || completedAt === null) return null
+  return Math.max(0, Date.parse(completedAt) - Date.parse(startedAt))
 }
 
 const emptyUsage = {
@@ -89,7 +98,8 @@ const makeStep = (index: number): AgentTraceStep => ({
   completedAt: null,
   durationMs: null,
   toolNames: [],
-  summary: '后端正在提供步骤信息。',
+  toolCount: null,
+  summary: '模型正在分析任务，判断是否需要调用工具。',
   toolCalls: [],
   events: [],
 })
@@ -99,6 +109,9 @@ const makeRun = (event: AgentStreamEvent, requestId: string | null): AgentRun =>
   status: 'running',
   answer: null,
   stopReason: null,
+  startedAt: safeTimestamp(event.occurred_at),
+  completedAt: null,
+  durationMs: null,
   steps: [],
   events: [],
   usage: emptyUsage,
@@ -110,6 +123,9 @@ const findStep = (run: AgentRun, index: number): AgentTraceStep => {
   const existing = run.steps.find((step) => step.index === index)
   return existing ?? makeStep(index)
 }
+
+const decisionKind = (value: AgentStreamEvent['decision_kind']): AgentTraceStep['decisionKind'] =>
+  value === 'final_answer' || value === 'tool_call' || value === 'invalid' ? value : 'unknown'
 
 const upsertStep = (run: AgentRun, step: AgentTraceStep): AgentRun => ({
   ...run,
@@ -138,21 +154,36 @@ const updateTool = (step: AgentTraceStep, event: AgentStreamEvent): AgentTraceSt
       (event.tool_name ?? current?.name) === 'knowledge_search',
     status: toolStatus(event),
     stepIndex: step.index,
-    startedAt: null,
-    completedAt: null,
-    durationMs: null,
-    inputSummary: null,
-    outputSummary: null,
-    errorCode: event.error_code ?? null,
+    startedAt:
+      event.event === 'tool_started' || event.event === 'rag_started'
+        ? (safeTimestamp(event.occurred_at) ?? current?.startedAt ?? null)
+        : (current?.startedAt ?? null),
+    completedAt:
+      event.event === 'tool_completed' || event.event === 'tool_failed'
+        ? safeTimestamp(event.occurred_at)
+        : (current?.completedAt ?? null),
+    durationMs:
+      event.event === 'tool_completed' || event.event === 'tool_failed'
+        ? durationMs(current?.startedAt ?? null, safeTimestamp(event.occurred_at))
+        : (current?.durationMs ?? null),
+    argumentCount: event.argument_count ?? current?.argumentCount ?? null,
+    inputSummary: event.input_summary ?? current?.inputSummary ?? null,
+    outputSummary: event.output_summary ?? current?.outputSummary ?? null,
+    resultChars: event.result_chars ?? current?.resultChars ?? null,
+    errorCode: event.error_code ?? current?.errorCode ?? null,
     errorMessage:
-      event.event === 'tool_failed' ? '工具调用未成功。后端未提供可安全展示的错误详情。' : null,
-    truncated: null,
+      event.event === 'tool_failed'
+        ? '工具调用未成功。后端未提供可安全展示的错误详情。'
+        : (current?.errorMessage ?? null),
+    truncated: current?.truncated ?? null,
+    cached: event.cached === true || current?.cached === true,
     rag: current?.rag ?? null,
   }
   if (event.rag) tool.rag = normalizeRag(event.rag)
   return {
     ...step,
     toolNames: [...new Set([...step.toolNames, tool.name])],
+    toolCount: event.tool_count ?? step.toolCount,
     decisionKind: 'tool_call',
     toolCalls: [...step.toolCalls.filter((item) => item.callId !== callId), tool],
   }
@@ -176,13 +207,43 @@ export function reduceAgentStream(
   let run = state.run ?? makeRun(event, requestId)
   let terminal = false
   let answerDeltaSeen = state.answerDeltaSeen
-  if (event.event === 'run_started') run = { ...run, requestId }
+  if (event.event === 'run_started')
+    run = { ...run, requestId, startedAt: safeTimestamp(event.occurred_at) ?? run.startedAt }
+
   const stepIndex = event.step_index
   if (stepIndex !== null && stepIndex !== undefined) {
     let step = findStep(run, stepIndex)
-    if (event.event === 'step_started') step = { ...step, status: 'running' }
-    if (event.event === 'step_completed')
-      step = { ...step, status: event.status ? status(event.status) : 'completed' }
+    if (event.event === 'step_started')
+      step = {
+        ...step,
+        status: 'running',
+        startedAt: safeTimestamp(event.occurred_at) ?? step.startedAt,
+      }
+    if (event.event === 'step_planned')
+      step = {
+        ...step,
+        status: 'running',
+        decisionKind: decisionKind(event.decision_kind),
+        toolNames: event.tool_names ?? step.toolNames,
+        toolCount: event.tool_count ?? step.toolCount,
+        summary:
+          localizeStepSummary(
+            event.decision_kind,
+            event.tool_names ?? step.toolNames,
+            event.tool_count ?? step.toolCount,
+          ) ??
+          event.summary ??
+          step.summary,
+      }
+    if (event.event === 'step_completed') {
+      const completedAt = safeTimestamp(event.occurred_at)
+      step = {
+        ...step,
+        status: event.status ? status(event.status) : 'completed',
+        completedAt,
+        durationMs: durationMs(step.startedAt, completedAt),
+      }
+    }
     if (
       event.event === 'tool_started' ||
       event.event === 'rag_started' ||
@@ -211,8 +272,11 @@ export function reduceAgentStream(
     event.event === 'run_stopped'
   ) {
     terminal = true
+    const completedAt = safeTimestamp(event.occurred_at)
     run = {
       ...run,
+      completedAt,
+      durationMs: durationMs(run.startedAt ?? null, completedAt),
       status: status(
         event.status ??
           (event.event === 'run_timed_out'
@@ -235,8 +299,21 @@ export function reduceAgentStream(
     status: event.status ? status(event.status) : null,
     stopReason: event.stop_reason ?? null,
     sequence: event.sequence,
+    occurredAt: safeTimestamp(event.occurred_at),
+    decisionKind: event.decision_kind ? decisionKind(event.decision_kind) : null,
+    toolNames: event.tool_names ?? [],
+    toolCount: event.tool_count ?? null,
+    summary: event.summary ?? null,
+    argumentCount: event.argument_count ?? null,
+    inputSummary: event.input_summary ?? null,
+    outputSummary: event.output_summary ?? null,
+    resultChars: event.result_chars ?? null,
   }
   run = { ...run, events: [...run.events, traceEvent], requestId, lastSequence: event.sequence }
+  if (stepIndex !== null && stepIndex !== undefined) {
+    const currentStep = findStep(run, stepIndex)
+    run = upsertStep(run, { ...currentStep, events: [...currentStep.events, traceEvent] })
+  }
   return { run, terminal, lastSequence: event.sequence, requestId, answerDeltaSeen }
 }
 

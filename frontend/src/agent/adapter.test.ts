@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { adaptAgentRunResponse, normalizeStopReason, sanitizeSummary } from './adapter.ts'
+import {
+  adaptAgentRunResponse,
+  localizeStepSummary,
+  normalizeStopReason,
+  sanitizeSummary,
+} from './adapter.ts'
 import type { AgentRunApiResponse } from './api-types.ts'
 
 const baseResponse = (): AgentRunApiResponse => ({
   run_id: 'run-real-123',
   status: 'completed',
   answer: '结果是 4。',
+  started_at: '2026-08-06T12:00:00.000Z',
+  completed_at: '2026-08-06T12:00:00.750Z',
+  duration_ms: 750,
   stop_reason: 'direct_answer',
   steps: [],
   events: [],
@@ -17,11 +25,31 @@ const baseResponse = (): AgentRunApiResponse => ({
   },
 })
 
+describe('step summary localization', () => {
+  it('localizes known decisions without inventing missing backend fields', () => {
+    expect(localizeStepSummary('tool_call', ['calculator'], 1)).toBe(
+      '模型计划调用 1 个工具：计算器。',
+    )
+    expect(localizeStepSummary('tool_call', ['knowledge_search'], null)).toBe(
+      '模型计划调用工具：知识搜索。',
+    )
+    expect(localizeStepSummary('tool_call', [], null)).toBe(
+      '模型计划调用工具，但后端未提供工具名称。',
+    )
+    expect(localizeStepSummary('final_answer', [], null)).toBe('模型准备生成最终回答。')
+    expect(localizeStepSummary('invalid', [], null)).toBe('模型决策格式无效。')
+    expect(localizeStepSummary('unknown', ['calculator'], 1)).toBeNull()
+  })
+})
+
 describe('adaptAgentRunResponse', () => {
   it('keeps an empty trace empty and leaves unavailable metrics unknown', () => {
     const run = adaptAgentRunResponse(baseResponse())
 
     expect(run.steps).toEqual([])
+    expect(run.startedAt).toBe('2026-08-06T12:00:00.000Z')
+    expect(run.completedAt).toBe('2026-08-06T12:00:00.750Z')
+    expect(run.durationMs).toBe(750)
     expect(run.usage.promptTokens).toBeNull()
     expect(run.usage.totalTokens).toBeNull()
     expect(run.runId).toBe('run-real-123')
@@ -46,12 +74,128 @@ describe('adaptAgentRunResponse', () => {
     expect(run.steps[0]?.toolCalls[0]).toMatchObject({
       name: 'calculator',
       status: 'succeeded',
+      argumentCount: null,
       inputSummary: null,
       outputSummary: null,
+      resultChars: null,
       durationMs: null,
     })
     expect(run.steps[0]?.startedAt).toBeNull()
     expect(run.steps[0]?.completedAt).toBeNull()
+  })
+
+  it('maps backend lifecycle timing and event timestamps', () => {
+    const run = adaptAgentRunResponse({
+      ...baseResponse(),
+      steps: [
+        {
+          index: 1,
+          decision_kind: 'tool_call',
+          tool_names: ['calculator'],
+          tool_count: 1,
+          summary: '计算。',
+          started_at: '2026-08-06T12:00:00.000Z',
+          completed_at: '2026-08-06T12:00:00.500Z',
+          duration_ms: 500,
+          tool_succeeded: true,
+          tool_calls: [
+            {
+              call_id: 'calc-1',
+              name: 'calculator',
+              succeeded: true,
+              truncated: false,
+              started_at: '2026-08-06T12:00:00.100Z',
+              completed_at: '2026-08-06T12:00:00.350Z',
+              duration_ms: 250,
+              error_code: null,
+              error_message: null,
+            },
+          ],
+        },
+      ],
+      events: [
+        {
+          kind: 'step_started',
+          occurred_at: '2026-08-06T12:00:00.000Z',
+          step_index: 1,
+          status: null,
+          stop_reason: null,
+        },
+      ],
+    })
+
+    expect(run.steps[0]).toMatchObject({
+      startedAt: '2026-08-06T12:00:00.000Z',
+      completedAt: '2026-08-06T12:00:00.500Z',
+      durationMs: 500,
+    })
+    expect(run.steps[0]?.toolCalls[0]).toMatchObject({
+      startedAt: '2026-08-06T12:00:00.100Z',
+      completedAt: '2026-08-06T12:00:00.350Z',
+      durationMs: 250,
+    })
+    expect(run.steps[0]?.events[0]).toMatchObject({
+      kind: 'step_started',
+      occurredAt: '2026-08-06T12:00:00.000Z',
+    })
+  })
+
+  it('maps backend summaries for calculator and unknown tool calls safely', () => {
+    const run = adaptAgentRunResponse({
+      ...baseResponse(),
+      steps: [
+        {
+          index: 1,
+          decision_kind: 'tool_call',
+          tool_names: ['calculator', 'mystery_tool'],
+          tool_count: 2,
+          summary: 'Planned 2 tool call(s): calculator, mystery_tool.',
+          tool_succeeded: true,
+          tool_calls: [
+            {
+              call_id: 'calc-1',
+              name: 'calculator',
+              succeeded: true,
+              truncated: false,
+              argument_count: 1,
+              input_summary: '12 + 8',
+              output_summary: '20',
+              result_chars: 2,
+              error_code: null,
+              error_message: null,
+            },
+            {
+              call_id: 'mystery-1',
+              name: 'mystery_tool',
+              succeeded: true,
+              truncated: false,
+              argument_count: 3,
+              input_summary: '<not raw html>',
+              output_summary: 'ok',
+              result_chars: 2,
+              error_code: null,
+              error_message: null,
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(run.steps[0]).toMatchObject({
+      toolCount: 2,
+      summary: '模型计划调用 2 个工具：计算器、mystery_tool。',
+    })
+    expect(run.steps[0]?.toolCalls).toMatchObject([
+      { argumentCount: 1, inputSummary: '12 + 8', outputSummary: '20', resultChars: 2 },
+      {
+        name: 'mystery_tool',
+        known: false,
+        argumentCount: 3,
+        inputSummary: '<not raw html>',
+        outputSummary: 'ok',
+        resultChars: 2,
+      },
+    ])
   })
 
   it('uses legacy step tool outcome and keeps the safe fallback error summary', () => {
@@ -77,16 +221,20 @@ describe('adaptAgentRunResponse', () => {
       status: 'succeeded',
       errorCode: null,
       errorMessage: null,
+      argumentCount: null,
       inputSummary: null,
       outputSummary: null,
+      resultChars: null,
       durationMs: null,
     })
     expect(run.steps[1]?.toolCalls[0]).toMatchObject({
       status: 'failed',
       errorCode: null,
       errorMessage: '工具调用未成功。后端未提供可安全展示的错误详情。',
+      argumentCount: null,
       inputSummary: null,
       outputSummary: null,
+      resultChars: null,
       durationMs: null,
     })
   })
@@ -107,8 +255,10 @@ describe('adaptAgentRunResponse', () => {
     expect(run.steps[0]?.toolCalls[0]).toMatchObject({
       name: 'knowledge_search',
       known: true,
+      argumentCount: null,
       inputSummary: null,
       outputSummary: null,
+      resultChars: null,
       durationMs: null,
     })
     expect(run.steps[0]?.toolCalls[0]).not.toHaveProperty('references')

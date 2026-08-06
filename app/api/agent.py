@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import re
 from collections.abc import AsyncIterator, Mapping
+from datetime import datetime
 from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.agents.models import (
+    AgentDecision,
     AgentEvent,
     AgentEventKind,
     AgentStep,
     RunStatus,
+    ToolCall,
     ToolResult,
 )
 from app.agents.stream import (
@@ -23,6 +27,7 @@ from app.agents.stream import (
     AgentStreamSetupError,
 )
 from app.auth.models import APIKey
+from app.core.container import provide_agent_run_record_service
 from app.core.context import RequestContext
 from app.ratelimit.dependencies import require_rate_limit
 from app.schemas.agent import (
@@ -39,9 +44,11 @@ from app.schemas.agent import (
     AgentToolErrorCode,
     AgentUsage,
 )
+from app.services.agent_run_record_service import AgentRunRecordService
 from app.services.agent_service import AgentRunOutcome, AgentService, get_agent_service
 
 router = APIRouter(prefix="/api/v1", tags=["agent"])
+logger = logging.getLogger(__name__)
 
 _DEFAULT_TOOL_ERROR_MESSAGE = "The tool could not complete safely."
 _PUBLIC_RAG_WARNING = (
@@ -49,6 +56,8 @@ _PUBLIC_RAG_WARNING = (
     "contained in it."
 )
 _MAX_RAG_CONTENT_CHARS = 1200
+_MAX_TRACE_SUMMARY_CHARS = 256
+_MAX_PUBLIC_RESULT_CHARS = 8192
 _MAX_RAG_IDENTIFIER_CHARS = 256
 _MAX_CHUNK_INDEX = 1_000_000
 _MAX_DISTANCE = 2.0
@@ -116,12 +125,19 @@ async def create_agent_run(
     response: Response,
     service: Annotated[AgentService, Depends(get_agent_service)],
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    record_service: Annotated[
+        AgentRunRecordService | None, Depends(provide_agent_run_record_service)
+    ] = None,
 ) -> AgentRunResponse:
     """Execute one synchronous Agent Run through the application service."""
     context: RequestContext = http_request.state.context
     outcome = await service.run(request, context=context, api_key=api_key)
+    public_response = _to_response(outcome)
+    await _persist_agent_run(
+        record_service, public_response, request, context, api_key, outcome.model
+    )
     _set_rate_limit_headers(http_request, response)
-    return _to_response(outcome)
+    return public_response
 
 
 @router.post(
@@ -135,6 +151,9 @@ async def stream_agent_run(
     response: Response,
     service: Annotated[AgentService, Depends(get_agent_service)],
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    record_service: Annotated[
+        AgentRunRecordService | None, Depends(provide_agent_run_record_service)
+    ] = None,
 ) -> StreamingResponse:
     """Stream real Runtime lifecycle events and provider answer deltas."""
     context: RequestContext = http_request.state.context
@@ -143,13 +162,22 @@ async def stream_agent_run(
 
     async def produce() -> None:
         try:
-            await service.run(
+            outcome = await service.run(
                 request,
                 context=context,
                 api_key=api_key,
                 observer=stream,
                 cancel_event=cancel_event,
                 streaming=True,
+            )
+            public_response = _to_response(outcome)
+            await _persist_agent_run(
+                record_service,
+                public_response,
+                request,
+                context,
+                api_key,
+                outcome.model,
             )
         except Exception:
             stream.fail_unexpected()
@@ -231,9 +259,6 @@ async def _stream_events(
                 )
                 yield f"event: stream_error\ndata: {payload}\n\n"
                 break
-            if item.kind is AgentEventKind.MODEL_DECISION:
-                receive_task = asyncio.create_task(stream.receive())
-                continue
             yield _serialize_sse(_to_stream_event(item, request_id))
             if item.kind is AgentEventKind.RUN_STOPPED:
                 break
@@ -245,6 +270,25 @@ async def _stream_events(
         if not producer.done():
             cancel_event.set()
         await asyncio.gather(producer, return_exceptions=True)
+
+
+async def _persist_agent_run(
+    record_service: AgentRunRecordService | None,
+    response: AgentRunResponse,
+    request: AgentRunRequest,
+    context: RequestContext,
+    api_key: APIKey,
+    model: str | None = None,
+) -> None:
+    if record_service is None:
+        return
+    try:
+        await record_service.save(response, request, context, api_key, model=model)
+    except Exception:
+        # Audit persistence must never break the model response.
+        logger.exception(
+            "Failed to persist Agent Run record run_id=%s", response.run_id
+        )
 
 
 def _serialize_sse(event: AgentStreamEvent) -> str:
@@ -260,7 +304,7 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
     elif event.kind is AgentEventKind.STEP_COMPLETED:
         name = "step_completed"
     elif event.kind is AgentEventKind.MODEL_DECISION:
-        raise ValueError("model decision is internal and not a public SSE event")
+        name = "step_planned"
     elif event.kind is AgentEventKind.ANSWER:
         name = "assistant_message"
     elif event.kind is AgentEventKind.ANSWER_DELTA:
@@ -296,11 +340,32 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
     elif tool_call is not None and tool_call.name == "knowledge_search" and result:
         rag = _to_rag_summary(result.content, output_truncated=result.truncated)
 
+    decision_kind: Literal["final_answer", "tool_call", "invalid"] | None = None
+    tool_names: list[str] | None = None
+    tool_count: int | None = None
+    summary: str | None = None
+    if event.kind is AgentEventKind.MODEL_DECISION:
+        decision_kind, tool_names, tool_count, summary = _public_decision_details(
+            event.decision
+        )
+
+    argument_count: int | None = None
+    input_summary: str | None = None
+    output_summary: str | None = None
+    result_chars: int | None = None
+    if tool_call is not None:
+        argument_count = len(tool_call.arguments)
+        input_summary = _public_tool_input_summary(tool_call)
+        if result is not None:
+            result_chars = min(len(result.content), _MAX_PUBLIC_RESULT_CHARS)
+            output_summary = _public_tool_output_summary(tool_call, result, rag=rag)
+
     return AgentStreamEvent(
         event=cast(
             Literal[
                 "run_started",
                 "step_started",
+                "step_planned",
                 "step_completed",
                 "tool_started",
                 "rag_started",
@@ -319,9 +384,18 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
         run_id=event.run_id,
         request_id=request_id,
         sequence=event.sequence,
+        occurred_at=event.occurred_at,
         step_index=event.step_index,
         call_id=None if tool_call is None else tool_call.call_id,
-        tool_name=None if tool_call is None else tool_call.name,
+        tool_name=(None if tool_call is None else _public_tool_name(tool_call.name)),
+        decision_kind=decision_kind,
+        tool_names=tool_names,
+        tool_count=tool_count,
+        summary=summary,
+        argument_count=argument_count,
+        input_summary=input_summary,
+        output_summary=output_summary,
+        result_chars=result_chars,
         status=event.status,
         stop_reason=event.stop_reason,
         answer=(
@@ -335,9 +409,166 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
             else None
         ),
         succeeded=None if result is None else result.succeeded,
+        cached=None if result is None else result.cached,
         error_code=_public_tool_error_code(None if result is None else result.error),
         rag=rag,
     )
+
+
+def _public_decision_details(
+    decision: AgentDecision | None,
+) -> tuple[Literal["final_answer", "tool_call", "invalid"], list[str], int, str]:
+    if decision is None:
+        return "invalid", [], 0, "Step decision unavailable."
+    if decision.answer is not None:
+        return "final_answer", [], 0, "Final answer planned."
+    if decision.tool_calls:
+        names = [_public_tool_name(call.name) for call in decision.tool_calls]
+        tool_label = ", ".join(names)
+        return (
+            "tool_call",
+            names,
+            len(names),
+            f"Planned {len(names)} tool call(s): {tool_label}.",
+        )
+    return "invalid", [], 0, "Invalid step decision; no action was selected."
+
+
+def _public_tool_name(name: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.:-]", "_", name.strip())
+    return normalized[:128] or "unknown_tool"
+
+
+def _bounded_trace_summary(value: str, *, prefix: str = "") -> str:
+    sanitized = _sanitize_public_text(value).replace("\r", " ").replace("\n", " ")
+    available = max(_MAX_TRACE_SUMMARY_CHARS - len(prefix), 1)
+    if len(sanitized) > available:
+        sanitized = sanitized[: max(available - 14, 1)] + "...[truncated]"
+    return prefix + sanitized
+
+
+def _public_tool_input_summary(call: ToolCall) -> str:
+    name = _public_tool_name(call.name)
+    if name == "calculator":
+        expression = call.arguments.get("expression")
+        if isinstance(expression, str) and expression.strip():
+            return _bounded_trace_summary(expression, prefix="expression: ")
+        return "expression: invalid or missing"
+    if name == "knowledge_search":
+        return "knowledge search requested; query redacted"
+    return f"parameters: {len(call.arguments)}"
+
+
+def _public_tool_output_summary(
+    call: ToolCall,
+    result: ToolResult,
+    *,
+    rag: AgentRAGToolSummary | None,
+) -> str | None:
+    if not result.succeeded:
+        return None
+    name = _public_tool_name(call.name)
+    if name == "calculator":
+        return _bounded_trace_summary(result.content, prefix="result: ")
+    if name == "knowledge_search":
+        if rag is None:
+            return "knowledge search result unavailable"
+        if rag.status == "success_with_sources":
+            return f"retrieved {len(rag.references)} safe reference(s)"
+        if rag.status == "no_relevant_sources":
+            return "no relevant sources"
+        if rag.status == "knowledge_base_empty":
+            return "knowledge base is empty"
+        if rag.status == "rag_unavailable":
+            return "RAG service unavailable"
+        if rag.status == "embedding_failed":
+            return "embedding failed"
+        if rag.status == "output_unavailable":
+            return "RAG output unavailable"
+        return f"knowledge search status: {rag.status}"
+    return None
+
+
+def _duration_ms(
+    started_at: datetime | None, completed_at: datetime | None
+) -> float | None:
+    if started_at is None or completed_at is None:
+        return None
+    return max(0.0, (completed_at - started_at).total_seconds() * 1000)
+
+
+def _step_timing(
+    step: AgentStep, events: tuple[AgentEvent, ...]
+) -> tuple[datetime | None, datetime | None, float | None]:
+    step_events = [event for event in events if event.step_index == step.index]
+    started = next(
+        (
+            event.occurred_at
+            for event in step_events
+            if event.kind is AgentEventKind.STEP_STARTED
+        ),
+        None,
+    )
+    completed = next(
+        (
+            event.occurred_at
+            for event in reversed(step_events)
+            if event.kind is AgentEventKind.STEP_COMPLETED
+        ),
+        None,
+    )
+    return started, completed, _duration_ms(started, completed)
+
+
+def _tool_timing(
+    step: AgentStep, call: ToolCall, events: tuple[AgentEvent, ...]
+) -> tuple[datetime | None, datetime | None, float | None]:
+    call_events = [
+        event
+        for event in events
+        if event.step_index == step.index
+        and event.tool_call is not None
+        and event.tool_call.call_id == call.call_id
+    ]
+    started = next(
+        (
+            event.occurred_at
+            for event in call_events
+            if event.kind is AgentEventKind.TOOL_STARTED
+        ),
+        None,
+    )
+    completed = next(
+        (
+            event.occurred_at
+            for event in reversed(call_events)
+            if event.kind in {AgentEventKind.TOOL_COMPLETED, AgentEventKind.TOOL_FAILED}
+        ),
+        None,
+    )
+    return started, completed, _duration_ms(started, completed)
+
+
+def _run_timing(
+    events: tuple[AgentEvent, ...],
+) -> tuple[datetime | None, datetime | None, float | None]:
+    started_at = next(
+        (
+            event.occurred_at
+            for event in events
+            if event.kind is AgentEventKind.RUN_STARTED
+        ),
+        None,
+    )
+    completed_at = next(
+        (
+            event.occurred_at
+            for event in reversed(events)
+            if event.kind is AgentEventKind.RUN_STOPPED
+        ),
+        None,
+    )
+    return started_at, completed_at, _duration_ms(started_at, completed_at)
 
 
 def _to_response(outcome: AgentRunOutcome) -> AgentRunResponse:
@@ -345,15 +576,20 @@ def _to_response(outcome: AgentRunOutcome) -> AgentRunResponse:
     total_tokens: int | None = None
     if outcome.prompt_tokens is not None and outcome.completion_tokens is not None:
         total_tokens = outcome.prompt_tokens + outcome.completion_tokens
+    started_at, completed_at, duration_ms = _run_timing(result.events)
     return AgentRunResponse(
         run_id=result.run_id,
         status=result.status,
         answer=result.answer,
         stop_reason=result.stop_reason,
-        steps=[_to_step_summary(step) for step in result.state.steps],
+        started_at=started_at,
+        completed_at=completed_at,
+        duration_ms=duration_ms,
+        steps=[_to_step_summary(step, result.events) for step in result.state.steps],
         events=[
             AgentEventSummary(
                 kind=event.kind.value,
+                occurred_at=event.occurred_at,
                 step_index=event.step_index,
                 status=event.status,
                 stop_reason=event.stop_reason,
@@ -369,7 +605,7 @@ def _to_response(outcome: AgentRunOutcome) -> AgentRunResponse:
     )
 
 
-def _to_step_summary(step: object) -> AgentStepSummary:
+def _to_step_summary(step: object, events: tuple[AgentEvent, ...]) -> AgentStepSummary:
     if not isinstance(step, AgentStep):
         raise TypeError("Agent Runtime returned an invalid step")
 
@@ -385,16 +621,27 @@ def _to_step_summary(step: object) -> AgentStepSummary:
     if succeeded_values:
         tool_succeeded = all(succeeded_values)
 
+    decision_kind, tool_names, tool_count, summary = _public_decision_details(
+        step.decision
+    )
+    started_at, completed_at, duration_ms = _step_timing(step, events)
     return AgentStepSummary(
         index=step.index,
         decision_kind=decision_kind,
-        tool_names=[call.name for call in step.decision.tool_calls],
+        tool_names=tool_names,
+        tool_count=tool_count,
+        summary=summary,
+        started_at=started_at,
+        completed_at=completed_at,
+        duration_ms=duration_ms,
         tool_succeeded=tool_succeeded,
-        tool_calls=_to_tool_call_summaries(step),
+        tool_calls=_to_tool_call_summaries(step, events),
     )
 
 
-def _to_tool_call_summaries(step: AgentStep) -> list[AgentToolCallSummary] | None:
+def _to_tool_call_summaries(
+    step: AgentStep, events: tuple[AgentEvent, ...]
+) -> list[AgentToolCallSummary] | None:
     if not step.decision.tool_calls:
         return None
 
@@ -402,15 +649,32 @@ def _to_tool_call_summaries(step: AgentStep) -> list[AgentToolCallSummary] | Non
     summaries: list[AgentToolCallSummary] = []
     for call in step.decision.tool_calls:
         result = results_by_call_id.get(call.call_id)
+        started_at, completed_at, duration_ms = _tool_timing(step, call, events)
         rag: AgentRAGToolSummary | None = None
         if result is not None and call.name == "knowledge_search":
             rag = _to_rag_summary(result.content, output_truncated=result.truncated)
         summaries.append(
             AgentToolCallSummary(
                 call_id=call.call_id,
-                name=call.name,
+                name=_public_tool_name(call.name),
                 succeeded=None if result is None else result.succeeded,
                 truncated=None if result is None else result.truncated,
+                cached=False if result is None else result.cached,
+                started_at=started_at,
+                completed_at=completed_at,
+                duration_ms=duration_ms,
+                argument_count=len(call.arguments),
+                input_summary=_public_tool_input_summary(call),
+                output_summary=(
+                    None
+                    if result is None
+                    else _public_tool_output_summary(call, result, rag=rag)
+                ),
+                result_chars=(
+                    None
+                    if result is None
+                    else min(len(result.content), _MAX_PUBLIC_RESULT_CHARS)
+                ),
                 error_code=_public_tool_error_code(
                     None if result is None else result.error
                 ),

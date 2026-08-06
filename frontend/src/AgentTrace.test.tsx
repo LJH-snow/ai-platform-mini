@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.tsx'
@@ -104,6 +104,10 @@ const createRun = ({
   toolStatus = 'succeeded',
   empty = false,
   rag = null,
+  argumentCount = null,
+  inputSummary = null,
+  outputSummary = null,
+  resultChars = null,
 }: {
   status?: AgentRunStatus
   answer?: string | null
@@ -111,6 +115,10 @@ const createRun = ({
   toolStatus?: AgentToolStatus
   empty?: boolean
   rag?: AgentRag | null
+  argumentCount?: number | null
+  inputSummary?: string | null
+  outputSummary?: string | null
+  resultChars?: number | null
 } = {}): AgentRun => ({
   runId: 'run-real-123',
   status,
@@ -135,6 +143,7 @@ const createRun = ({
           completedAt: null,
           durationMs: null,
           toolNames: [toolName],
+          toolCount: 1,
           summary: `模型决定调用：${toolName}。`,
           toolCalls: [
             {
@@ -146,8 +155,10 @@ const createRun = ({
               startedAt: null,
               completedAt: null,
               durationMs: null,
-              inputSummary: null,
-              outputSummary: null,
+              argumentCount,
+              inputSummary,
+              outputSummary,
+              resultChars,
               errorCode: null,
               errorMessage:
                 toolStatus === 'succeeded' ? null : '工具调用未成功。后端未提供错误详情。',
@@ -174,6 +185,7 @@ const createRun = ({
           completedAt: null,
           durationMs: null,
           toolNames: [],
+          toolCount: 0,
           summary: '模型生成最终回答。',
           toolCalls: [],
           events: [],
@@ -190,7 +202,7 @@ const createRun = ({
 
 const startAgentRun = async (controlled: ReturnType<typeof createControlledAgentClient>) => {
   const user = userEvent.setup()
-  render(<App chatClient={idleChatClient} agentClient={controlled.client} />)
+  renderConsole(<App chatClient={idleChatClient} agentClient={controlled.client} />)
   await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
   await user.type(screen.getByLabelText('输入消息'), '请计算 2+2')
   await user.click(screen.getByRole('button', { name: '运行 Agent' }))
@@ -203,11 +215,17 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+const renderConsole = (ui: Parameters<typeof render>[0]) => {
+  const result = render(ui)
+  fireEvent.click(screen.getByRole('button', { name: '对话工作台' }))
+  return result
+}
+
 describe('Agent Trace integration', () => {
   it('renders cumulative answer_delta output without announcing each delta', async () => {
     const controlled = createControlledAgentStreamClient()
     const user = userEvent.setup()
-    render(<App chatClient={idleChatClient} agentClient={controlled.client} />)
+    renderConsole(<App chatClient={idleChatClient} agentClient={controlled.client} />)
     await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
     await user.type(screen.getByLabelText('输入消息'), '请回答')
     await user.click(screen.getByRole('button', { name: '运行 Agent' }))
@@ -259,7 +277,7 @@ describe('Agent Trace integration', () => {
   it('shows realtime Agent SSE waiting state, then updates Trace as events arrive', async () => {
     const controlled = createControlledAgentStreamClient()
     const user = userEvent.setup()
-    render(<App chatClient={idleChatClient} agentClient={controlled.client} />)
+    renderConsole(<App chatClient={idleChatClient} agentClient={controlled.client} />)
     await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
     await user.type(screen.getByLabelText('输入消息'), '请计算 2+2')
     await user.click(screen.getByRole('button', { name: '运行 Agent' }))
@@ -287,8 +305,15 @@ describe('Agent Trace integration', () => {
       step_index: 1,
     })
     await waitFor(() =>
-      expect(within(trace).getByRole('button', { name: /步骤 1/ })).toBeInTheDocument(),
+      expect(
+        within(trace).getByRole('button', { name: /步骤 1，步骤信息待确认/ }),
+      ).toBeInTheDocument(),
     )
+    const pendingStepButton = within(trace).getByRole('button', {
+      name: /步骤 1，步骤信息待确认/,
+    })
+    await user.click(pendingStepButton)
+    expect(within(trace).getByText('模型正在分析任务，判断是否需要调用工具。')).toBeVisible()
 
     request.emit({
       event: 'run_completed',
@@ -344,6 +369,31 @@ describe('Agent Trace integration', () => {
     toolButton.focus()
     await user.keyboard(' ')
     expect(toolContent).not.toBeVisible()
+  })
+
+  it('renders real tool metadata as text for unknown tools without creating HTML', async () => {
+    const controlled = createControlledAgentClient()
+    const user = await startAgentRun(controlled)
+    controlled.getRequest().resolve(
+      createRun({
+        toolName: 'mystery_tool',
+        argumentCount: 3,
+        inputSummary: '<literal>',
+        outputSummary: 'ok',
+        resultChars: 2,
+      }),
+    )
+
+    const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
+    await user.click(stepButton)
+    const toolButton = screen.getByRole('button', { name: /mystery_tool.*成功/ })
+    await user.click(toolButton)
+
+    expect(screen.getByText('参数数量：3')).toBeVisible()
+    expect(screen.getByText('输入摘要：<literal>')).toBeVisible()
+    expect(screen.getByText('输出摘要：ok')).toBeVisible()
+    expect(screen.getByText('结果字符数：2')).toBeVisible()
+    expect(screen.queryByRole('strong', { name: 'literal' })).not.toBeInTheDocument()
   })
 
   it.each([
@@ -607,7 +657,7 @@ describe('Agent Trace integration', () => {
   it('allows retrying an Agent request after an SSE response format error', async () => {
     const controlled = createControlledAgentStreamClient()
     const user = userEvent.setup()
-    render(<App chatClient={idleChatClient} agentClient={controlled.client} />)
+    renderConsole(<App chatClient={idleChatClient} agentClient={controlled.client} />)
     await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
     await user.type(screen.getByLabelText('输入消息'), '触发格式错误')
     await user.click(screen.getByRole('button', { name: '运行 Agent' }))

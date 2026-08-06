@@ -22,9 +22,12 @@ from app.usage.service import UsageService
 
 if TYPE_CHECKING:
     from app.mcp.manager import MCPToolManager
+    from app.rag.ingestion import RAGIngestionService
     from app.rag.ollama_embedder import OllamaEmbedder
     from app.rag.pg_vector_store import PgVectorStore
+    from app.rag.queue import RAGIngestionQueue
     from app.rag.service import RAGService
+    from app.services.agent_run_record_service import AgentRunRecordService
     from app.services.agent_service import AgentService
     from app.services.chat_service import ChatService
 
@@ -39,6 +42,16 @@ def provide_session_factory() -> async_sessionmaker[AsyncSession]:
     from app.db.session import create_async_session_factory
 
     return create_async_session_factory()
+
+
+@lru_cache
+def provide_agent_run_record_service() -> AgentRunRecordService | None:
+    from app.db.init import get_engine
+    from app.services.agent_run_record_service import AgentRunRecordService
+
+    if get_engine() is None:
+        return None
+    return AgentRunRecordService(provide_session_factory())
 
 
 @lru_cache
@@ -154,6 +167,37 @@ def provide_rag_service() -> RAGService | None:
 
 
 @lru_cache
+def provide_rag_ingestion_service() -> RAGIngestionService | None:
+    from app.rag.ingestion import RAGIngestionService
+
+    embedder = provide_embedder()
+    vector_store = provide_vector_store()
+    if embedder is None or vector_store is None:
+        return None
+    settings = get_settings()
+    return RAGIngestionService(
+        embedder=embedder,
+        vector_store=vector_store,
+        embedding_model=settings.rag_embedding_model,
+        embedding_dimensions=settings.rag_embedding_dimensions,
+        chunk_size=settings.rag_chunk_size,
+        chunk_overlap=settings.rag_chunk_overlap,
+        max_pages=settings.rag_max_pdf_pages,
+        max_text_characters=settings.rag_max_document_characters,
+    )
+
+
+@lru_cache
+def provide_rag_ingestion_queue() -> RAGIngestionQueue | None:
+    from app.rag.queue import RAGIngestionQueue
+
+    ingestion_service = provide_rag_ingestion_service()
+    if ingestion_service is None:
+        return None
+    return RAGIngestionQueue(ingestion_service)
+
+
+@lru_cache
 def provide_mcp_manager() -> MCPToolManager:
     """Build the MCP manager from the explicit application allowlist."""
 
@@ -215,8 +259,11 @@ def clear_container_cache() -> None:
 
     # Clear in reverse dependency order: dependents before their deps.
     provide_agent_service.cache_clear()
+    provide_agent_run_record_service.cache_clear()
     provide_mcp_manager.cache_clear()
     provide_rag_service.cache_clear()
+    provide_rag_ingestion_queue.cache_clear()
+    provide_rag_ingestion_service.cache_clear()
     provide_vector_store.cache_clear()
     provide_embedder.cache_clear()
     provide_chat_service.cache_clear()

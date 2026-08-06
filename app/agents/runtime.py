@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
@@ -85,6 +86,7 @@ class AgentRuntime:
         request_id: str | None = None,
         model: str | None = None,
         stream_answer: bool = False,
+        tool_context_metadata: Mapping[str, object] | None = None,
     ) -> AgentRunResult:
         """Execute one bounded run and return all state and observability data."""
         if not user_input.strip():
@@ -351,6 +353,7 @@ class AgentRuntime:
                     )
 
                 tool_results: list[ToolResult] = []
+                reused_calculator_result: ToolResult | None = None
                 for tool_call in decision.tool_calls:
                     stop_reason = self._check_stop(effective_deadline, cancel_event)
                     if stop_reason is not None:
@@ -369,40 +372,51 @@ class AgentRuntime:
                         step_index=step_index,
                         tool_call=tool_call,
                     )
-                    try:
-                        result = await self._execute_tool(
-                            tool_call,
-                            resolved_run_id,
-                            step_index,
-                            effective_deadline,
-                            cancel_event,
-                            request_id=state.request_id,
+                    cached_result = self._find_cached_tool_result(state, tool_call)
+                    if cached_result is not None:
+                        result = replace(
+                            cached_result,
+                            call_id=tool_call.call_id,
+                            cached=True,
                         )
-                    except _RuntimeStop as stop:
-                        return self._finish(
-                            recorder=recorder,
-                            state=state,
-                            events=events,
-                            status=self._status_for(stop.reason),
-                            stop_reason=stop.reason,
-                        )
-                    except asyncio.CancelledError as cancellation:
-                        if _is_quota_renewal_cancellation(cancellation):
+                        if tool_call.name == "calculator":
+                            reused_calculator_result = result
+                    else:
+                        try:
+                            result = await self._execute_tool(
+                                tool_call,
+                                resolved_run_id,
+                                step_index,
+                                effective_deadline,
+                                cancel_event,
+                                request_id=state.request_id,
+                                metadata=tool_context_metadata,
+                            )
+                        except _RuntimeStop as stop:
                             return self._finish(
                                 recorder=recorder,
                                 state=state,
                                 events=events,
-                                status=RunStatus.FAILED,
-                                stop_reason=StopReason.MODEL_ERROR,
-                                error=AGENT_QUOTA_FAILURE,
+                                status=self._status_for(stop.reason),
+                                stop_reason=stop.reason,
                             )
-                        return self._finish(
-                            recorder=recorder,
-                            state=state,
-                            events=events,
-                            status=RunStatus.CANCELLED,
-                            stop_reason=StopReason.EXTERNAL_CANCELLED,
-                        )
+                        except asyncio.CancelledError as cancellation:
+                            if _is_quota_renewal_cancellation(cancellation):
+                                return self._finish(
+                                    recorder=recorder,
+                                    state=state,
+                                    events=events,
+                                    status=RunStatus.FAILED,
+                                    stop_reason=StopReason.MODEL_ERROR,
+                                    error=AGENT_QUOTA_FAILURE,
+                                )
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.CANCELLED,
+                                stop_reason=StopReason.EXTERNAL_CANCELLED,
+                            )
                     tool_results.append(result)
                     state.messages.append(
                         AgentMessage(
@@ -442,6 +456,29 @@ class AgentRuntime:
                     step_index=step_index,
                     include_result=False,
                     include_recorder=False,
+                )
+                if (
+                    reused_calculator_result is not None
+                    and all(call.name == "calculator" for call in decision.tool_calls)
+                    and reused_calculator_result.succeeded
+                ):
+                    return self._finish(
+                        recorder=recorder,
+                        state=state,
+                        events=events,
+                        status=RunStatus.COMPLETED,
+                        stop_reason=StopReason.DIRECT_ANSWER,
+                        answer=reused_calculator_result.content,
+                    )
+            calculator_answer = self._last_calculator_result(state)
+            if calculator_answer is not None:
+                return self._finish(
+                    recorder=recorder,
+                    state=state,
+                    events=events,
+                    status=RunStatus.COMPLETED,
+                    stop_reason=StopReason.DIRECT_ANSWER,
+                    answer=calculator_answer,
                 )
             return self._finish(
                 recorder=recorder,
@@ -526,6 +563,49 @@ class AgentRuntime:
             raise RuntimeError("streaming answer returned no content")
         return "".join(parts)
 
+    @staticmethod
+    def _tool_call_fingerprint(tool_call: ToolCall) -> str:
+        return json.dumps(
+            {
+                "name": tool_call.name,
+                "arguments": dict(tool_call.arguments),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+
+    def _find_cached_tool_result(
+        self, state: AgentState, tool_call: ToolCall
+    ) -> ToolResult | None:
+        fingerprint = self._tool_call_fingerprint(tool_call)
+        for step in state.steps:
+            for previous_call, result in zip(
+                step.decision.tool_calls, step.tool_results, strict=False
+            ):
+                if (
+                    result.succeeded
+                    and self._tool_call_fingerprint(previous_call) == fingerprint
+                ):
+                    return result
+        return None
+
+    @staticmethod
+    def _last_calculator_result(state: AgentState) -> str | None:
+        if not state.steps:
+            return None
+        last_step = state.steps[-1]
+        if not last_step.decision.tool_calls:
+            return None
+        if any(call.name != "calculator" for call in last_step.decision.tool_calls):
+            return None
+        if len(last_step.tool_results) != len(last_step.decision.tool_calls):
+            return None
+        if any(not result.succeeded for result in last_step.tool_results):
+            return None
+        return last_step.tool_results[-1].content
+
     async def _execute_tool(
         self,
         tool_call: ToolCall,
@@ -534,6 +614,7 @@ class AgentRuntime:
         effective_deadline: float | None,
         cancel_event: asyncio.Event | None,
         request_id: str | None,
+        metadata: Mapping[str, object] | None = None,
     ) -> ToolResult:
         if self._tool_executor is not None:
             remaining = self._remaining(effective_deadline)
@@ -545,6 +626,7 @@ class AgentRuntime:
                         run_id=run_id,
                         step_index=step_index,
                         request_id=request_id,
+                        metadata=metadata or {},
                     ),
                     timeout_seconds=remaining,
                 ),
@@ -577,6 +659,7 @@ class AgentRuntime:
                         run_id=run_id,
                         step_index=step_index,
                         request_id=request_id,
+                        metadata=metadata or {},
                     ),
                 ),
                 effective_deadline=effective_deadline,

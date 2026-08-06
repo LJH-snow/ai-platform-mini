@@ -72,3 +72,11 @@ class NoRelevantContextError(RAGError):
 
 class RAGStorageUnavailableError(RAGError):
     """Raised when the RAG storage backend (e.g. pgvector) is unreachable."""
+
+
+class RAGDocumentValidationError(RAGError):
+    """Raised when an uploaded document cannot be safely parsed."""
+
+
+class RAGDocumentTooLargeError(RAGError):
+    """Raised when an uploaded document exceeds the configured byte limit."""

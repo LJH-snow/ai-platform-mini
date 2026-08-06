@@ -18,6 +18,7 @@ from app.core.container import (
     provide_embedder,
     provide_llm_provider,
     provide_mcp_manager,
+    provide_rag_ingestion_queue,
 )
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, setup_logging
@@ -27,6 +28,7 @@ from app.middleware.context import ContextMiddleware
 if TYPE_CHECKING:
     from app.providers.base import LLMProvider
     from app.rag.ollama_embedder import OllamaEmbedder
+    from app.rag.queue import RAGIngestionQueue
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider: LLMProvider | None = None
     embedder: OllamaEmbedder | None = None
     mcp_manager = None
+    ingestion_queue: RAGIngestionQueue | None = None
     db_initialized = False
 
     try:
@@ -68,6 +71,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     settings.rag_embedding_model,
                     settings.rag_embedding_dimensions,
                 )
+            ingestion_queue = provide_rag_ingestion_queue()
+            if ingestion_queue is not None:
+                await ingestion_queue.start()
+                logger.info("RAG ingestion worker started.")
 
         if settings.mcp_enabled:
             mcp_manager = provide_mcp_manager()
@@ -89,6 +96,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # BaseException.  Use a nested try/finally to guarantee it.
         cancellation: asyncio.CancelledError | None = None
         try:
+            if ingestion_queue is not None:
+                try:
+                    await ingestion_queue.stop()
+                except asyncio.CancelledError as exc:
+                    cancellation = exc
+                    logger.warning("RAG ingestion worker stop was cancelled.")
+                except Exception:
+                    logger.exception("Failed to stop RAG ingestion worker.")
             if embedder is not None:
                 try:
                     await embedder.close()

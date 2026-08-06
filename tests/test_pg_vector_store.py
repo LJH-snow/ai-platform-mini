@@ -6,6 +6,8 @@ from app.exceptions.base import ConflictError
 from app.rag.pg_vector_store import PgVectorStore
 from app.rag.vector_store import SearchResult
 
+OWNER_KEY_HASH = "a" * 64
+
 
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
@@ -58,6 +60,7 @@ class TestPgVectorStoreAddDocument:
             embedding_dimensions=768,
             chunks=["hello world"],
             embeddings=[[0.1, 0.2, 0.3]],
+            owner_key_hash=OWNER_KEY_HASH,
         )
 
         assert doc_id == "test-doc-id"
@@ -77,7 +80,7 @@ class TestPgVectorStoreAddDocument:
 
         store = PgVectorStore(session_factory=session_factory)
 
-        with pytest.raises(ConflictError, match="already exists"):
+        with pytest.raises(ConflictError, match="conflicts"):
             await store.add_document(
                 source_path="test.txt",
                 content_sha256="abc123",
@@ -85,54 +88,44 @@ class TestPgVectorStoreAddDocument:
                 embedding_dimensions=768,
                 chunks=["hello"],
                 embeddings=[[0.1]],
+                owner_key_hash=OWNER_KEY_HASH,
             )
 
         session.commit.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_add_document_supersedes_old_version(self) -> None:
-        """When same path but different SHA-256, old doc is deleted first."""
+    async def test_add_document_rejects_same_path_for_same_owner(self) -> None:
+        """A same-owner filename cannot silently replace an existing document."""
         session_factory, session = _make_mock_session_factory()
-
-        old_doc = MagicMock()
-        old_doc.id = "old-doc-id"
 
         model_result = MagicMock()
         model_result.all.return_value = []
-        # SHA-256 check (no match), path check (match), then delete.
+        # SHA-256 check (no match), path check (match).
         sha_result = MagicMock()
         sha_result.scalar_one_or_none.return_value = None
         path_result = MagicMock()
-        path_result.scalar_one_or_none.return_value = old_doc
-        delete_result = MagicMock()
+        path_result.scalar_one_or_none.return_value = "old-doc-id"
         session.execute.side_effect = [
             MagicMock(),
             model_result,
             sha_result,
             path_result,
-            delete_result,
         ]
-
-        def _set_doc_id(doc: object) -> None:
-            doc.id = "new-doc-id"  # type: ignore[attr-defined]
-
-        session.add.side_effect = _set_doc_id
 
         store = PgVectorStore(session_factory=session_factory)
 
-        doc_id = await store.add_document(
-            source_path="test.txt",
-            content_sha256="new_hash",
-            embedding_model="nomic-embed-text",
-            embedding_dimensions=768,
-            chunks=["updated content"],
-            embeddings=[[0.4, 0.5, 0.6]],
-        )
+        with pytest.raises(ConflictError, match="conflicts"):
+            await store.add_document(
+                source_path="test.txt",
+                content_sha256="new_hash",
+                embedding_model="nomic-embed-text",
+                embedding_dimensions=768,
+                chunks=["updated content"],
+                embeddings=[[0.4, 0.5, 0.6]],
+                owner_key_hash=OWNER_KEY_HASH,
+            )
 
-        assert doc_id == "new-doc-id"
-        # Five execute calls: advisory lock, model check, SHA check, path check, delete
-        assert session.execute.call_count == 5
-        session.commit.assert_called_once()
+        session.commit.assert_not_awaited()
 
 
 class TestPgVectorStoreSearch:
@@ -152,7 +145,9 @@ class TestPgVectorStoreSearch:
         session.execute.return_value = result_proxy
 
         store = PgVectorStore(session_factory=session_factory)
-        results = await store.search(query_embedding=[0.1, 0.2, 0.3], top_k=5)
+        results = await store.search(
+            query_embedding=[0.1, 0.2, 0.3], top_k=5, owner_key_hash="a" * 64
+        )
 
         assert len(results) == 1
         assert isinstance(results[0], SearchResult)
@@ -170,7 +165,9 @@ class TestPgVectorStoreSearch:
         session.execute.return_value = result_proxy
 
         store = PgVectorStore(session_factory=session_factory)
-        results = await store.search(query_embedding=[0.1], top_k=5)
+        results = await store.search(
+            query_embedding=[0.1], top_k=5, owner_key_hash="a" * 64
+        )
 
         assert results == []
 
@@ -189,7 +186,7 @@ class TestPgVectorStoreSearch:
         from app.exceptions.base import RAGStorageUnavailableError
 
         with pytest.raises(RAGStorageUnavailableError, match="RAG storage unavailable"):
-            await store.search(query_embedding=[0.1], top_k=5)
+            await store.search(query_embedding=[0.1], top_k=5, owner_key_hash="a" * 64)
 
     @pytest.mark.asyncio
     async def test_add_document_unexpected_integrity_error_raises_storage_unavailable(
@@ -235,4 +232,5 @@ class TestPgVectorStoreSearch:
                 embedding_dimensions=768,
                 chunks=["hello"],
                 embeddings=[[0.1]],
+                owner_key_hash="a" * 64,
             )

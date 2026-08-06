@@ -106,6 +106,7 @@ class ToolResult:
     succeeded: bool
     error: str | None = None
     truncated: bool = False
+    cached: bool = False
 
 
 @dataclass(frozen=True)

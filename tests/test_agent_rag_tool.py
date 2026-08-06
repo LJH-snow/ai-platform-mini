@@ -26,7 +26,12 @@ class FakeRAGService:
     error: Exception | None = None
     prepare_calls: list[ChatRequest] = field(default_factory=list)
 
-    async def prepare(self, request: ChatRequest) -> PreparedRAGRequest:
+    async def prepare(
+        self,
+        request: ChatRequest,
+        *,
+        owner_key_hash: str,
+    ) -> PreparedRAGRequest:
         self.prepare_calls.append(request)
         if self.error is not None:
             raise self.error
@@ -81,7 +86,10 @@ def _runtime(
 ) -> AgentRuntime:
     tool = KnowledgeSearchTool(rag_service)  # type: ignore[arg-type]
     executor = ToolExecutor(ToolRegistry([tool]))
-    return AgentRuntime(model, tool_executor=executor)
+    return AgentRuntime(
+        model,
+        tool_executor=executor,
+    )
 
 
 @pytest.mark.asyncio
@@ -105,6 +113,7 @@ async def test_agent_calls_knowledge_search_and_uses_result_for_final_answer() -
     result = await _runtime(rag_service, model).run(
         "How does the agent runtime work?",
         run_id="agent-rag-success",
+        tool_context_metadata={"owner_key_hash": "a" * 64},
     )
 
     assert result.status is RunStatus.COMPLETED
@@ -164,7 +173,10 @@ async def test_structured_knowledge_errors_are_safe_for_model_feedback(
         ]
     )
 
-    result = await _runtime(rag_service, model).run("find the relevant policy")
+    result = await _runtime(rag_service, model).run(
+        "find the relevant policy",
+        tool_context_metadata={"owner_key_hash": "a" * 64},
+    )
 
     assert result.status is RunStatus.COMPLETED
     assert result.answer == "The knowledge base does not provide enough information."
@@ -198,7 +210,10 @@ async def test_unexpected_tool_exception_is_normalized_without_internal_details(
         ]
     )
 
-    result = await _runtime(rag_service, model).run("search the knowledge base")
+    result = await _runtime(rag_service, model).run(
+        "search the knowledge base",
+        tool_context_metadata={"owner_key_hash": "a" * 64},
+    )
 
     assert result.status is RunStatus.COMPLETED
     assert result.answer == "I could not access the knowledge base."

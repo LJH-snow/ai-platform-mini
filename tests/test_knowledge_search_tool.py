@@ -22,7 +22,11 @@ from app.tools.models import RiskLevel, ToolContext
 
 @pytest.fixture
 def context() -> ToolContext:
-    return ToolContext(run_id="run-1", step_index=0)
+    return ToolContext(
+        run_id="run-1",
+        step_index=0,
+        metadata={"owner_key_hash": "a" * 64},
+    )
 
 
 def _prepared_request() -> PreparedRAGRequest:
@@ -46,8 +50,16 @@ class _StubRAGService:
     def __init__(self, result: object) -> None:
         self.prepare_mock = AsyncMock(return_value=result)
 
-    async def prepare(self, request: ChatRequest) -> PreparedRAGRequest:
-        return cast(PreparedRAGRequest, await self.prepare_mock(request))
+    async def prepare(
+        self,
+        request: ChatRequest,
+        *,
+        owner_key_hash: str,
+    ) -> PreparedRAGRequest:
+        return cast(
+            PreparedRAGRequest,
+            await self.prepare_mock(request, owner_key_hash=owner_key_hash),
+        )
 
 
 def _tool_with_prepare_result(

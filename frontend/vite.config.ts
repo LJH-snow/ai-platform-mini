@@ -1,4 +1,5 @@
-import { defineConfig, type ProxyOptions } from 'vite'
+import { defineConfig } from 'vitest/config'
+import type { ProxyOptions } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const DEFAULT_DEV_API_BASE_URL = 'http://127.0.0.1:8000'
@@ -10,19 +11,32 @@ const createDevApiProxy = (): ProxyOptions => {
   return {
     target,
     changeOrigin: true,
-    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+    configure: apiKey
+      ? (proxy) => {
+          proxy.on('proxyReq', (proxyRequest, request) => {
+            if (!request.headers.authorization) {
+              proxyRequest.setHeader('Authorization', `Bearer ${apiKey}`)
+            }
+          })
+        }
+      : undefined,
   }
 }
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
   plugins: [react()],
+  test: {
+    testTimeout: 10_000,
+    hookTimeout: 10_000,
+  },
   ...(command === 'serve'
     ? {
         server: {
           proxy: {
             '/api': createDevApiProxy(),
             '/v1': createDevApiProxy(),
+            '/admin': createDevApiProxy(),
           },
         },
       }

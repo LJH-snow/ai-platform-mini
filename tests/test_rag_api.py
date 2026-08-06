@@ -341,7 +341,10 @@ class TestRAGAPIErrorMapping:
 
         mock_rag = AsyncMock(spec=RAGService)
 
-        async def _prepare(request: ChatRequest) -> PreparedRAGRequest:
+        async def _prepare(
+            request: ChatRequest, *, owner_key_hash: str
+        ) -> PreparedRAGRequest:
+            del owner_key_hash
             call_order.append("prepare")
             return _make_prepared(
                 messages=(("system", "context"), ("user", request.message))

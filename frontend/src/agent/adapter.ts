@@ -110,8 +110,19 @@ const safeNullableInteger = (value: unknown): number | null =>
     ? value
     : null
 
+const safeNullableCount = (value: unknown, max: number): number | null =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= max ? value : null
+
 const safeNullableDistance = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 2 ? value : null
+
+const safeTimestamp = (value: unknown): string | null =>
+  typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : null
+
+const safeNullableDuration = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 120_000
+    ? value
+    : null
 
 const normalizeRagStatus = (value: AgentRagApiStatus): AgentRagStatus => {
   if (!RAG_STATUSES.has(value)) return 'failed'
@@ -226,6 +237,7 @@ const adaptEvent = (event: AgentEventApiSummary): AgentTraceEvent => {
     id: [kind, event.step_index ?? 'run', status ?? '', stopReason ?? ''].join(':'),
     kind,
     stepIndex: event.step_index,
+    occurredAt: safeTimestamp(event.occurred_at),
     status,
     stopReason,
   }
@@ -244,11 +256,38 @@ const deduplicateEvents = (events: AgentEventApiSummary[]): AgentTraceEvent[] =>
   return result
 }
 
+const LOCALIZED_TOOL_NAMES: Record<string, string> = {
+  calculator: '计算器',
+  knowledge_search: '知识搜索',
+}
+
+export const localizeStepSummary = (
+  decisionKind: AgentTraceStep['decisionKind'] | null | undefined,
+  toolNames: string[],
+  toolCount: number | null | undefined,
+): string | null => {
+  if (decisionKind === 'final_answer') return '模型准备生成最终回答。'
+  if (decisionKind === 'invalid') return '模型决策格式无效。'
+  if (decisionKind !== 'tool_call') return null
+  if (toolNames.length === 0) return '模型计划调用工具，但后端未提供工具名称。'
+
+  const names = toolNames.map((name) => LOCALIZED_TOOL_NAMES[name] ?? name).join('、')
+  return typeof toolCount === 'number'
+    ? `模型计划调用 ${toolCount} 个工具：${names}。`
+    : `模型计划调用工具：${names}。`
+}
+
 const getStepSummary = (step: AgentStepApiSummary, toolNames: string[]): string => {
-  if (step.decision_kind === 'final_answer') return '模型生成最终回答。'
-  if (step.decision_kind === 'invalid') return '模型决策格式无效。'
-  if (toolNames.length === 0) return '模型决定调用工具，但后端未提供工具名称。'
-  return `模型决定调用：${toolNames.join('、')}。`
+  const localizedSummary = localizeStepSummary(
+    step.decision_kind,
+    toolNames,
+    safeNullableCount(step.tool_count, 32),
+  )
+  if (localizedSummary) return localizedSummary
+
+  const backendSummary = safeString(step.summary, 256)
+  if (backendSummary) return backendSummary
+  return '后端未提供步骤摘要。'
 }
 
 const adaptToolCall = (
@@ -271,14 +310,17 @@ const adaptToolCall = (
     known: KNOWN_TOOLS.has(name),
     status,
     stepIndex,
-    startedAt: null,
-    completedAt: null,
-    durationMs: null,
-    inputSummary: null,
-    outputSummary: null,
+    argumentCount: safeNullableCount(call.argument_count, 128),
+    inputSummary: safeString(call.input_summary, 256),
+    outputSummary: safeString(call.output_summary, 256),
+    resultChars: safeNullableCount(call.result_chars, 8192),
     errorCode: status === 'succeeded' ? null : normalizeToolErrorCode(call.error_code),
     errorMessage,
     truncated: typeof call.truncated === 'boolean' ? call.truncated : null,
+    cached: call.cached === true,
+    startedAt: safeTimestamp(call.started_at),
+    completedAt: safeTimestamp(call.completed_at),
+    durationMs: safeNullableDuration(call.duration_ms),
     rag: name === 'knowledge_search' ? adaptRag(call.rag) : null,
   }
 }
@@ -302,10 +344,13 @@ const adaptLegacyToolCall = (
     startedAt: null,
     completedAt: null,
     durationMs: null,
+    argumentCount: null,
     inputSummary: null,
     outputSummary: null,
+    resultChars: null,
     ...getToolError(status),
     truncated: null,
+    cached: false,
     rag: null,
   }
 }
@@ -329,10 +374,11 @@ const adaptStep = (
     index: step.index,
     decisionKind: step.decision_kind,
     status: getStepStatus(step, runStatus),
-    startedAt: null,
-    completedAt: null,
-    durationMs: null,
+    startedAt: safeTimestamp(step.started_at),
+    completedAt: safeTimestamp(step.completed_at),
+    durationMs: safeNullableDuration(step.duration_ms),
     toolNames: safeToolNames,
+    toolCount: safeNullableCount(step.tool_count, 32),
     summary: getStepSummary(step, safeToolNames),
     toolCalls,
     events: events.filter((event) => event.stepIndex === step.index),
@@ -361,6 +407,9 @@ export function adaptAgentRunResponse(response: AgentRunApiResponse): AgentRun {
     status,
     answer: response.answer,
     stopReason: normalizeStopReason(response.stop_reason),
+    startedAt: safeTimestamp(response.started_at),
+    completedAt: safeTimestamp(response.completed_at),
+    durationMs: safeNullableDuration(response.duration_ms),
     steps,
     events,
     usage: {

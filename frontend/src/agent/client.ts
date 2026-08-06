@@ -7,7 +7,7 @@ import type {
   AgentRunApiResponse,
   AgentToolApiErrorCode,
 } from './api-types.ts'
-import type { AgentRun, AgentRunInput } from './types.ts'
+import { DEFAULT_AGENT_TIMEOUT_SECONDS, type AgentRun, type AgentRunInput } from './types.ts'
 
 export type AgentClientOptions = {
   apiBaseUrl?: string
@@ -58,6 +58,12 @@ const joinUrl = (baseUrl: string | undefined, path: string): string => {
   }
   return `${baseUrl.replace(/\/$/, '')}${path}`
 }
+
+const agentRequestBody = (input: AgentRunInput): AgentRunApiRequest => ({
+  message: input.message,
+  history: input.history,
+  timeout_seconds: input.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS,
+})
 
 const safeBackendMessage = (status: number): string => {
   if (status === 401 || status === 403) {
@@ -253,10 +259,7 @@ export function createAgentClient(options: AgentClientOptions = {}): AgentClient
 
   return {
     async runAgent(input, signal) {
-      const body: AgentRunApiRequest = {
-        message: input.message,
-        history: input.history,
-      }
+      const body = agentRequestBody(input)
 
       let response: Response
       try {
@@ -297,7 +300,7 @@ export function createAgentClient(options: AgentClientOptions = {}): AgentClient
       return adaptAgentRunResponse(payload)
     },
     async streamAgent(input, handlers, signal) {
-      const body: AgentRunApiRequest = { message: input.message, history: input.history }
+      const body = agentRequestBody(input)
       let response: Response
       try {
         response = await fetchImpl(joinUrl(options.apiBaseUrl, '/api/v1/agent/runs/stream'), {

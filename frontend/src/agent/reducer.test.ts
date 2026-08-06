@@ -14,6 +14,90 @@ const e = (event: AgentStreamEvent['event'], sequence: number, extra = {}): Agen
 })
 
 describe('Agent stream reducer', () => {
+  it('uses a human-readable pending-analysis fallback before step_planned arrives', () => {
+    const state = apply([e('run_started', 0), e('step_started', 1, { step_index: 1 })])
+
+    expect(state.run?.steps[0]).toMatchObject({
+      decisionKind: 'unknown',
+      summary: '模型正在分析任务，判断是否需要调用工具。',
+    })
+  })
+
+  it('retains real planned step and tool metadata without inventing missing values', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('step_planned', 1, {
+        step_index: 1,
+        decision_kind: 'tool_call',
+        tool_names: ['calculator'],
+        tool_count: 1,
+        summary: 'Planned 1 tool call(s): calculator.',
+      }),
+      e('tool_started', 2, {
+        step_index: 1,
+        call_id: 'calc-1',
+        tool_name: 'calculator',
+        argument_count: 1,
+        input_summary: '12 + 8',
+      }),
+      e('tool_completed', 3, {
+        step_index: 1,
+        call_id: 'calc-1',
+        tool_name: 'calculator',
+        succeeded: true,
+        output_summary: '20',
+        result_chars: 2,
+      }),
+    ])
+    expect(state.run?.steps[0]).toMatchObject({
+      decisionKind: 'tool_call',
+      toolNames: ['calculator'],
+      toolCount: 1,
+      summary: '模型计划调用 1 个工具：计算器。',
+    })
+    expect(state.run?.steps[0]?.toolCalls[0]).toMatchObject({
+      argumentCount: 1,
+      inputSummary: '12 + 8',
+      outputSummary: '20',
+      resultChars: 2,
+    })
+
+    const finalState = apply([
+      e('run_started', 0),
+      e('step_planned', 1, {
+        step_index: 1,
+        decision_kind: 'final_answer',
+        summary: 'Planned final answer.',
+      }),
+    ])
+    expect(finalState.run?.steps[0]?.summary).toBe('模型准备生成最终回答。')
+
+    const legacyState = apply([e('run_started', 0), e('step_started', 1, { step_index: 1 })])
+    expect(legacyState.run?.steps[0]).toMatchObject({
+      toolCount: null,
+      summary: '模型正在分析任务，判断是否需要调用工具。',
+    })
+    expect(legacyState.run?.steps[0]?.toolCalls).toEqual([])
+  })
+
+  it('keeps cached execution metadata on a repeated SSE tool call', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('step_started', 1, { step_index: 1 }),
+      e('tool_started', 2, { step_index: 1, call_id: 'calc-1', tool_name: 'calculator' }),
+      e('tool_completed', 3, {
+        step_index: 1,
+        call_id: 'calc-1',
+        tool_name: 'calculator',
+        succeeded: true,
+        cached: true,
+        output_summary: '16',
+      }),
+    ])
+
+    expect(state.run?.steps[0]?.toolCalls[0]?.cached).toBe(true)
+  })
+
   it('builds a multi-step calculator and RAG lifecycle', () => {
     const state = apply([
       e('run_started', 0),
@@ -63,6 +147,48 @@ describe('Agent stream reducer', () => {
     expect(state.run?.status).toBe('completed')
   })
 
+  it('derives lifecycle timing and attaches step events from real SSE timestamps', () => {
+    const state = apply([
+      e('run_started', 0, { occurred_at: '2026-08-06T12:00:00.000Z' }),
+      e('step_started', 1, { step_index: 1, occurred_at: '2026-08-06T12:00:00.000Z' }),
+      e('tool_started', 2, {
+        step_index: 1,
+        call_id: 'calc-1',
+        tool_name: 'calculator',
+        occurred_at: '2026-08-06T12:00:00.100Z',
+      }),
+      e('tool_completed', 3, {
+        step_index: 1,
+        call_id: 'calc-1',
+        tool_name: 'calculator',
+        succeeded: true,
+        occurred_at: '2026-08-06T12:00:00.350Z',
+      }),
+      e('step_completed', 4, {
+        step_index: 1,
+        status: 'completed',
+        occurred_at: '2026-08-06T12:00:00.500Z',
+      }),
+    ])
+
+    expect(state.run?.steps[0]).toMatchObject({
+      startedAt: '2026-08-06T12:00:00.000Z',
+      completedAt: '2026-08-06T12:00:00.500Z',
+      durationMs: 500,
+      events: [
+        { kind: 'step_started' },
+        { kind: 'tool_started' },
+        { kind: 'tool_completed' },
+        { kind: 'step_completed' },
+      ],
+    })
+    expect(state.run?.steps[0]?.toolCalls[0]).toMatchObject({
+      startedAt: '2026-08-06T12:00:00.100Z',
+      completedAt: '2026-08-06T12:00:00.350Z',
+      durationMs: 250,
+    })
+  })
+
   it('rejects duplicates, older sequences and events from another run', () => {
     const started = e('run_started', 0)
     const first = reduceAgentStream(initialAgentStreamState, started)
@@ -76,6 +202,23 @@ describe('Agent stream reducer', () => {
     expect(duplicate).toBe(first)
     expect(older).toBe(first)
     expect(other).toBe(first)
+  })
+
+  it('derives run lifecycle timing from run events', () => {
+    const state = apply([
+      e('run_started', 0, { occurred_at: '2026-08-06T12:00:00.000Z' }),
+      e('run_timed_out', 1, {
+        status: 'timed_out',
+        stop_reason: 'deadline_exceeded',
+        occurred_at: '2026-08-06T12:00:01.250Z',
+      }),
+    ])
+
+    expect(state.run).toMatchObject({
+      startedAt: '2026-08-06T12:00:00.000Z',
+      completedAt: '2026-08-06T12:00:01.250Z',
+      durationMs: 1250,
+    })
   })
 
   it('keeps exactly one terminal outcome', () => {

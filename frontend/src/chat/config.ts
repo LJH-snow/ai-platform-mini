@@ -1,6 +1,8 @@
 export type RuntimeConfig = {
   apiBaseUrl?: string
   apiKey?: string
+  ragEnabled?: boolean
+  ragMaxUploadBytes?: number
 }
 
 declare global {

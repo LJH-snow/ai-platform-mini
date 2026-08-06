@@ -17,7 +17,8 @@ data: <one JSON object>
 ```
 
 除启动阶段的 `stream_error` 外，公开事件均来自 Runtime Observer。Runtime 内部的
-`model_decision` 不会发送到客户端。
+`model_decision` 不会原样发送到客户端；它会被投影为安全的 `step_planned` 事件，
+只公开步骤类型、工具名称、工具数量和安全摘要。
 
 ## 公共字段
 
@@ -31,7 +32,15 @@ data: <one JSON object>
 | `sequence` | Runtime 事件序号；事件在 Observer 和 SSE 中按 FIFO 顺序发送 |
 | `step_index` | 1 起始的 Step 序号；仅 Step/Tool/Answer 相关事件提供 |
 | `call_id` | 模型真实 Tool Call ID；仅 Tool 事件提供 |
-| `tool_name` | 真实工具名；不包含工具参数 |
+| `tool_name` | 真实工具名；不包含原始工具参数 |
+| `decision_kind` | `step_planned` 的安全决策类型：`final_answer`、`tool_call` 或 `invalid` |
+| `tool_names` | `step_planned` 中真实请求的工具名称列表 |
+| `tool_count` | `step_planned` 中工具调用数量 |
+| `summary` | 步骤或工具的有限安全摘要；不包含模型内部推理 |
+| `argument_count` | Tool 参数对象的字段数量；不代表参数内容 |
+| `input_summary` | Tool 输入的安全摘要；calculator 仅提供有界且脱敏的 expression，knowledge_search 不提供原始 query，未知工具只提供参数数量 |
+| `output_summary` | Tool 输出的安全摘要；calculator 仅提供有界且脱敏的 result，knowledge_search 提供 RAG 状态摘要，未知工具不提供原始结果 |
+| `result_chars` | Tool 结果的有界字符数量；不包含结果内容 |
 | `status` | Run 或 Step 的公开状态 |
 | `stop_reason` | 终止原因；只在终止事件出现 |
 | `answer` | `assistant_message` 的完整真实回答；`answer_delta` 使用 `delta` 传递真实文本片段 |
@@ -46,7 +55,7 @@ data: <one JSON object>
 ## 事件生命周期
 
 在正常执行中，顺序是 `run_started`，随后每个 Step 的
-`step_started`、零个或多个 Tool 事件、`step_completed`，必要时在 Step 之间继续
+`step_started`、`step_planned`、零个或多个 Tool 事件、`step_completed`，必要时在 Step 之间继续
 下一个 Step；final answer 流会按 Runtime `sequence` 发送零个或多个 `answer_delta`，并在
 Runtime 累计完整答案后结束；非 streaming/legacy 路径可以发送一次完整的
 `assistant_message`。最后发送且只发送一个终止事件。`sequence` 是稳定的 Runtime
@@ -56,10 +65,11 @@ Runtime 累计完整答案后结束；非 streaming/legacy 路径可以发送一
 | --- | --- |
 | `run_started` | Runtime 开始；有 `run_id`、`request_id`、`sequence` |
 | `step_started` | Runtime 开始一个真实 Step；有 `step_index` |
-| `tool_started` | Runtime 开始真实工具调用；有 `step_index`、`call_id`、`tool_name` |
+| `step_planned` | `MODEL_DECISION` 的安全投影；有 `step_index`、`decision_kind`、`tool_names`、`tool_count` 和有限 `summary`，不含模型原始决策或思维链 |
+| `tool_started` | Runtime 开始真实工具调用；有 `step_index`、`call_id`、`tool_name`、`argument_count` 和安全 `input_summary` |
 | `rag_started` | `knowledge_search` 的 `tool_started` 安全投影；`rag.status` 为 `loading`，来源为空 |
-| `tool_completed` | 真实工具成功完成；有 Tool 关联字段和 `succeeded: true` |
-| `tool_failed` | 真实工具失败；有安全 `error_code`，不含原始错误详情 |
+| `tool_completed` | 真实工具成功完成；有 Tool 关联字段、`succeeded: true`、安全 `output_summary` 和有界 `result_chars` |
+| `tool_failed` | 真实工具失败；有安全 `error_code`，不含原始错误详情或原始输出 |
 | `step_completed` | Runtime 完成真实 Step；有 `step_index` |
 | `answer_delta` | 显式 Agent final-answer `ChatService.chat_stream()` provider chunk 提供的真实文本增量；按 `sequence` 顺序发送，不暴露模型 JSON，不补造 Token 数或 usage |
 | `assistant_message` | legacy/非 streaming 兼容事件，携带一次完整真实回答；前端不得将其拆成伪造增量 |
@@ -72,6 +82,9 @@ Runtime 累计完整答案后结束；非 streaming/legacy 路径可以发送一
 
 终止事件由 Runtime 的单次 `run_stopped` 映射而来，每个 Run 最多一个。Runtime 在
 异常、超时或取消收尾时会补齐已开始但未完成的 `step_completed`，再发送终止事件。
+
+`step_planned` 和 Tool 摘要字段均为可选新增字段，旧客户端可以忽略它们；旧的
+`run_started`、`step_started`、Tool、Answer 和终止事件语义保持不变。
 
 当前实现的 `stream_error` 最小负载为：
 
@@ -129,5 +142,5 @@ Embedding 失败、输出截断或输出格式错误分别保留真实可区分�
 
 阶段 6 不实现精确 Token 统计/usage、回答内精确引用、MCP UI、持久化 Trace 查询、
 复杂多 Agent 编排、事件历史回放或断线后的 Run 状态查询。`answer_delta` 是真实文本
-增量，但不是精确 Token 计数；后端没有提供事件时间、耗时、工具参数、工具原始输出
-和 Provider 原始响应，前后端均不伪造这些数据。
+增量，但不是精确 Token 计数；后端只提供经过边界控制的步骤和工具安全摘要，不提供
+原始工具参数、原始工具输出、Provider 原始响应、模型内部推理、事件时间或耗时，前后端均不伪造这些数据。
