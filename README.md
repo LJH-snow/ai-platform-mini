@@ -124,6 +124,55 @@ RAG 来源仍是不可信参考材料，不等同于回答中的精确引用。�
 
 > 详细字段边界和错误映射见 [Agent Run RAG public contract design](docs/superpowers/specs/2026-08-05-agent-rag-public-contract.md)。
 
+## LangGraph PDF report reference workflow
+
+项目新增了一个**参考实现**的 LangGraph 工作流，用于演示 low-level stateful
+orchestration：解析 PDF → RAG 检索 → 模型分析 → 人工审批（human-in-the-loop）
+→ 生成 Markdown 报告。它**不替换、不修改**现有 `AgentRuntime` 主链路，也
+**没有接入主 API 路由**；主 Agent 链路仍由自研 `AgentRuntime` 负责。
+
+- 工作流模块：`app/workflows/pdf_report.py`
+- CLI 入口：`scripts/run_pdf_workflow.py`
+- Graph：`parse_pdf → retrieve_context → analyze → request_approval`
+  （条件边：approved → `generate_report`；rejected → 带反馈重新 `analyze`；
+  超过 `max_revisions` 后结束）
+- Checkpointer：默认使用 `InMemorySaver` 演示中断后状态恢复与
+  `Command(resume=...)` 续跑；生产多实例场景应替换为 PostgreSQL checkpointer，
+  以支持跨进程/跨实例的持久化线程状态，取舍是引入额外的数据库表与序列化契约。
+- 复用现有组件：PDF 解析走 `app/rag/pdf_extractor.py`，检索走
+  `RAGService.prepare`（不修改其行为），模型调用走 `ProviderRouter` 边界，
+  报告写入只使用标准库。
+
+CLI 需要 `RAG_ENABLED=true`、PostgreSQL/pgvector、Ollama Embedding 和可用的
+LLM Provider：
+
+```bash
+python scripts/run_pdf_workflow.py docs/report.pdf \
+  --owner-key-hash <64位SHA-256> \
+  --topic "季度业务回顾" \
+  --approve
+```
+
+`--approve` 自动批准；`--reject-with-feedback "补充风险章节"` 会在每次
+interrupt 时以该反馈拒绝当前草稿，CLI 自动循环处理，直到达到
+`--max-revisions`（默认 2）后以 `status: "rejected"` 结束，批准仍需在交互
+模式下输入 `{"decision":"approved"}`。不加这两个参数时 CLI 会在 interrupt
+处等待 JSON 决策（`{"decision":"approved"}` 或
+`{"decision":"rejected","feedback":"..."}`）；输入空行则暂停并保留 checkpoint，
+输出 `status: "pending_approval"` 和 `thread_id`。默认 `InMemorySaver` 只在
+进程生命周期内有效，跨进程恢复需要替换为 PostgreSQL checkpointer。
+
+可通过 `--max-document-characters`、`--max-reference-characters` 和
+`--max-reference-total-characters` 控制喂给模型的 PDF 文本和引用区大小；
+单条引用先按 content 上限截断，引用区再按总上限截断。成功或暂停时输出 JSON
+运行摘要，包含报告路径、页数、引用数、模型、token 用量和 `thread_id`。
+
+离线测试使用 fake extractor / fake retriever / fake model，覆盖 graph
+compile、节点执行、interrupt 后 resume、rejected 后带反馈重跑和 max revisions
+终止，不访问外网、不调用真实 LLM。该 workflow 是参考实现，生产默认路径仍然
+是 `AgentRuntime`；后续如果需要把它接进 API，应统一走 `ChatService` 服务边界
+（响应校验、错误转换、usage 收集），并单独评审线程模型、配额和租户边界。
+
 ## Agent token budget 与 RAG 回填
 
 Agent 前端默认显式发送 `token_budget=8192`、`max_steps=4` 和

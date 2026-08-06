@@ -21,6 +21,7 @@ dependencies = [
     "opentelemetry-api>=1.44.0",
     "opentelemetry-sdk>=1.44.0",
     "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+    "langgraph>=1.2.10",
 ]
 
 [tool.setuptools.packages.find]
