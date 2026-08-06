@@ -21,6 +21,8 @@ export const AGENT_STREAM_EVENTS = [
 
 export type AgentStreamEventName = (typeof AGENT_STREAM_EVENTS)[number]
 
+export const MAX_AGENT_CUMULATIVE_TOKEN_USAGE = 1_000_000_000
+
 const isAgentStreamEventName = (value: string): value is AgentStreamEventName =>
   (AGENT_STREAM_EVENTS as readonly string[]).includes(value)
 
@@ -47,6 +49,7 @@ export type AgentStreamEvent = {
   input_summary?: string | null
   output_summary?: string | null
   result_chars?: number | null
+  cumulative_token_usage?: number | null
   error_code?: string | null
   rag?: AgentRagApiSummary | null
   message?: string | null
@@ -177,6 +180,8 @@ export function parseAgentStreamEvent(eventName: string, data: string): AgentStr
     (record.input_summary !== undefined && !isNullableString(record.input_summary)) ||
     (record.output_summary !== undefined && !isNullableString(record.output_summary)) ||
     (record.error_code !== undefined && !isNullableString(record.error_code)) ||
+    (record.cumulative_token_usage !== undefined &&
+      !isNullableBoundedInteger(record.cumulative_token_usage, MAX_AGENT_CUMULATIVE_TOKEN_USAGE)) ||
     (record.message !== undefined && !isNullableString(record.message)) ||
     (record.rag !== undefined && record.rag !== null && !isValidRag(record.rag))
   ) {
@@ -244,6 +249,9 @@ export function parseAgentStreamEvent(eventName: string, data: string): AgentStr
       : {}),
     ...(typeof record.error_code === 'string' || record.error_code === null
       ? { error_code: record.error_code }
+      : {}),
+    ...(typeof record.cumulative_token_usage === 'number' || record.cumulative_token_usage === null
+      ? { cumulative_token_usage: record.cumulative_token_usage }
       : {}),
     ...(isRecord(record.rag) || record.rag === null ? { rag: record.rag } : {}),
     ...(typeof record.message === 'string' || record.message === null

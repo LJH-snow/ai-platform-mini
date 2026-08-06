@@ -22,7 +22,7 @@ from app.agents.models import (
     ToolCall,
     ToolResult,
 )
-from app.api.agent import _to_response, get_agent_service
+from app.api.agent import _to_response, _to_stream_event, get_agent_service
 from app.auth.models import APIKey
 from app.core.container import provide_agent_run_record_service
 from app.core.context import RequestContext
@@ -31,7 +31,13 @@ from app.main import app
 from app.mcp import MCPToolAdapter, MCPToolCallResult, MCPToolDefinition
 from app.providers.results import ProviderChatResult
 from app.runs import InMemoryRunTraceRecorder, RunTraceRecorderFactory
-from app.schemas.agent import AgentRunRequest
+from app.schemas.agent import (
+    DEFAULT_AGENT_MAX_STEPS,
+    DEFAULT_AGENT_TIMEOUT_SECONDS,
+    DEFAULT_AGENT_TOKEN_BUDGET,
+    MAX_AGENT_TOKEN_BUDGET,
+    AgentRunRequest,
+)
 from app.schemas.chat import ChatMessage, ChatResponse
 from app.services.agent_service import (
     AgentRunOutcome,
@@ -390,20 +396,51 @@ def test_agent_endpoint_preserves_quota_error_mapping() -> None:
     assert response.json()["code"] == "QUOTA_EXCEEDED"
 
 
-def test_agent_request_defaults_to_two_minute_timeout() -> None:
+def test_agent_request_uses_safe_bounded_defaults() -> None:
     request = AgentRunRequest(message="hello")
 
-    assert request.timeout_seconds == 120.0
+    assert request.token_budget == DEFAULT_AGENT_TOKEN_BUDGET
+    assert request.max_steps == DEFAULT_AGENT_MAX_STEPS
+    assert request.timeout_seconds == DEFAULT_AGENT_TIMEOUT_SECONDS
 
 
 def test_agent_request_validation_rejects_runtime_limits() -> None:
-    response = client.post(
-        "/api/v1/agent/runs",
-        json={"message": "hello", "max_steps": 21},
-        headers=_AUTH_HEADERS,
+    service = FakeAgentService(outcome=_outcome())
+    _override(service)
+    try:
+        for payload in (
+            {"max_steps": 21},
+            {"token_budget": MAX_AGENT_TOKEN_BUDGET + 1},
+            {"timeout_seconds": 120.1},
+        ):
+            response = client.post(
+                "/api/v1/agent/runs",
+                json={"message": "hello", **payload},
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 422
+    finally:
+        _clear_overrides()
+
+
+def test_stream_event_carries_real_cumulative_token_usage() -> None:
+    occurred_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    event = AgentEvent(
+        kind=AgentEventKind.RUN_STOPPED,
+        run_id="run-usage",
+        sequence=3,
+        occurred_at=occurred_at,
+        status=RunStatus.STOPPED,
+        stop_reason=StopReason.TOKEN_BUDGET_EXCEEDED,
+        cumulative_token_usage=1234,
     )
 
-    assert response.status_code == 422
+    stream_event = _to_stream_event(event, "request-1")
+
+    assert stream_event.event == "run_stopped"
+    assert stream_event.stop_reason == "token_budget_exceeded"
+    assert stream_event.cumulative_token_usage == 1234
 
 
 def test_chat_service_agent_model_parses_final_answer_json() -> None:

@@ -6,6 +6,8 @@ export type AgentRunApiRequest = {
   message: string
   history: ChatApiMessage[]
   timeout_seconds: number
+  token_budget: number
+  max_steps: number
 }
 
 export type AgentRagApiStatus =

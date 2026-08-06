@@ -231,6 +231,66 @@ describe('Agent stream reducer', () => {
     expect(state.run?.events).toHaveLength(2)
   })
 
+  it('keeps real cumulative token usage from SSE terminal events', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('step_planned', 1, {
+        step_index: 1,
+        decision_kind: 'tool_call',
+        tool_names: ['knowledge_search'],
+        tool_count: 1,
+        cumulative_token_usage: 900,
+      }),
+      e('rag_started', 2, {
+        step_index: 1,
+        call_id: 'rag-1',
+        tool_name: 'knowledge_search',
+        rag: { status: 'loading', references: [] },
+      }),
+      e('tool_completed', 3, {
+        step_index: 1,
+        call_id: 'rag-1',
+        tool_name: 'knowledge_search',
+        succeeded: true,
+        rag: {
+          status: 'success_with_sources',
+          references: [
+            {
+              document_id: 'doc-1',
+              chunk_id: 'chunk-1',
+              chunk_index: 0,
+              content: '真实来源',
+              distance: 0.2,
+            },
+          ],
+        },
+      }),
+      e('run_stopped', 4, {
+        status: 'stopped',
+        stop_reason: 'token_budget_exceeded',
+        cumulative_token_usage: 9000,
+      }),
+    ])
+
+    expect(state.terminal).toBe(true)
+    expect(state.run).toMatchObject({
+      status: 'stopped',
+      stopReason: 'token_budget_exceeded',
+      answer: null,
+      usage: {
+        promptTokens: null,
+        completionTokens: null,
+        totalTokens: 9000,
+        estimated: false,
+      },
+    })
+    expect(state.run?.steps[0]?.toolCalls[0]).toMatchObject({
+      name: 'knowledge_search',
+      status: 'succeeded',
+    })
+    expect(state.run?.steps[0]?.toolCalls[0]?.rag?.references).toHaveLength(1)
+  })
+
   it('accumulates answer deltas after tools and does not duplicate legacy answer', () => {
     const state = apply([
       e('run_started', 0),

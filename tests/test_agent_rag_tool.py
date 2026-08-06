@@ -8,9 +8,11 @@ import pytest
 
 from app.agents import (
     AgentDecision,
+    AgentEventKind,
     AgentRuntime,
     AgentState,
     RunStatus,
+    StopReason,
     ToolCall,
 )
 from app.exceptions.base import KnowledgeBaseEmptyError, NoRelevantContextError
@@ -135,6 +137,158 @@ async def test_agent_calls_knowledge_search_and_uses_result_for_final_answer() -
         "tool",
     ]
     assert len(result.state.steps) == 2
+
+
+@pytest.mark.asyncio
+async def test_agent_rag_with_8192_budget_completes_final_answer() -> None:
+    rag_service = FakeRAGService(prepared=_prepared_request())
+    model = KnowledgeAwareModel(
+        responses=[
+            AgentDecision(
+                tool_calls=(
+                    ToolCall(
+                        call_id="knowledge-call-budget",
+                        name="knowledge_search",
+                        arguments={"query": "How does the agent runtime work?"},
+                    ),
+                ),
+                token_usage=1024,
+            ),
+            AgentDecision(
+                answer="Agent Runtime uses a bounded model-tool loop.",
+                token_usage=2048,
+            ),
+        ]
+    )
+
+    result = await _runtime(rag_service, model).run(
+        "How does the agent runtime work?",
+        run_id="agent-rag-budget-ok",
+        token_budget=8192,
+        tool_context_metadata={"owner_key_hash": "a" * 64},
+    )
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.stop_reason is StopReason.DIRECT_ANSWER
+    assert result.answer == "Agent Runtime uses a bounded model-tool loop."
+    assert result.token_usage == 3072
+    assert result.state.steps[0].tool_results[0].succeeded is True
+    assert len(result.state.steps) == 2
+    assert [
+        event.cumulative_token_usage
+        for event in result.events
+        if event.kind is AgentEventKind.MODEL_DECISION
+    ] == [1024, 3072]
+    assert result.events[-1].kind is AgentEventKind.RUN_STOPPED
+    assert result.events[-1].stop_reason is StopReason.DIRECT_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_agent_rag_over_budget_stops_without_fake_answer() -> None:
+    rag_service = FakeRAGService(prepared=_prepared_request())
+    model = KnowledgeAwareModel(
+        responses=[
+            AgentDecision(
+                tool_calls=(
+                    ToolCall(
+                        call_id="knowledge-call-over",
+                        name="knowledge_search",
+                        arguments={"query": "search the knowledge base"},
+                    ),
+                ),
+                token_usage=3000,
+            ),
+            AgentDecision(
+                answer="must not be returned",
+                token_usage=6000,
+            ),
+        ]
+    )
+
+    result = await _runtime(rag_service, model).run(
+        "search the knowledge base",
+        run_id="agent-rag-budget-stop",
+        token_budget=5000,
+        tool_context_metadata={"owner_key_hash": "a" * 64},
+    )
+
+    assert result.status is RunStatus.STOPPED
+    assert result.stop_reason is StopReason.TOKEN_BUDGET_EXCEEDED
+    assert result.answer is None
+    assert result.token_usage == 9000
+    assert len(result.state.steps) == 2
+    assert result.state.steps[1].decision.answer == "must not be returned"
+    assert result.state.messages[-1].role == "tool"
+    assert [
+        event.cumulative_token_usage
+        for event in result.events
+        if event.kind is AgentEventKind.MODEL_DECISION
+    ] == [3000, 9000]
+    assert result.events[-1].kind is AgentEventKind.RUN_STOPPED
+    assert result.events[-1].stop_reason is StopReason.TOKEN_BUDGET_EXCEEDED
+    assert all(event.kind is not AgentEventKind.ANSWER for event in result.events)
+
+
+@pytest.mark.asyncio
+async def test_agent_rag_output_is_bounded_and_keeps_source_identifiers() -> None:
+    document_ids = {f"doc-{index}-" + ("d" * 300) for index in range(10)}
+    chunk_ids = {f"chunk-{index}-" + ("c" * 300) for index in range(10)}
+    references = tuple(
+        RAGReference(
+            document_id=f"doc-{index}-" + ("d" * 300),
+            chunk_id=f"chunk-{index}-" + ("c" * 300),
+            chunk_index=index,
+            content="retrieved passage " + ("x" * 5_000),
+            distance=0.1,
+        )
+        for index in range(10)
+    )
+    rag_service = FakeRAGService(
+        prepared=PreparedRAGRequest(
+            enhanced_request=ChatRequest(message="ignored"),
+            references=references,
+        )
+    )
+    model = KnowledgeAwareModel(
+        responses=[
+            AgentDecision(
+                tool_calls=(
+                    ToolCall(
+                        call_id="knowledge-call-bounded",
+                        name="knowledge_search",
+                        arguments={"query": "find bounded context"},
+                    ),
+                )
+            ),
+            AgentDecision(answer="The knowledge base context is bounded."),
+        ]
+    )
+
+    result = await _runtime(rag_service, model).run(
+        "find bounded context",
+        run_id="agent-rag-bounded",
+        token_budget=8192,
+        tool_context_metadata={"owner_key_hash": "a" * 64},
+    )
+
+    tool_result = result.state.steps[0].tool_results[0]
+    assert tool_result.succeeded is True
+    assert tool_result.truncated is True
+    assert len(tool_result.content) <= 8192
+    payload = json.loads(tool_result.content)
+    assert payload["ok"] is True
+    assert len(payload["results"]) >= 1
+    assert {item["document_id"] for item in payload["results"]} <= document_ids
+    assert {item["chunk_id"] for item in payload["results"]} <= chunk_ids
+    assert len(model.tool_contents) == 1
+    assert len(model.tool_contents[0]) <= 8192
+    assert all(
+        "secret" not in text
+        for text in (
+            tool_result.content,
+            *(message.content for message in result.state.messages),
+        )
+    )
 
 
 @pytest.mark.asyncio

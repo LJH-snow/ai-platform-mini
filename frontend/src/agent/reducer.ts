@@ -264,6 +264,12 @@ export function reduceAgentStream(
   }
   if (event.event === 'assistant_message' && !answerDeltaSeen)
     run = { ...run, answer: event.answer ?? run.answer }
+  if (event.cumulative_token_usage !== undefined && event.cumulative_token_usage !== null) {
+    run = {
+      ...run,
+      usage: { ...run.usage, totalTokens: event.cumulative_token_usage },
+    }
+  }
   if (
     event.event === 'run_completed' ||
     event.event === 'run_failed' ||

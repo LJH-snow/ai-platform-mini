@@ -126,4 +126,30 @@ describe('Agent SSE parser', () => {
       AgentStreamFormatError,
     )
   })
+
+  it('parses real cumulative token usage and rejects unsafe values', () => {
+    expect(
+      parseAgentStreamEvent(
+        'run_stopped',
+        event(1, {
+          status: 'stopped',
+          stop_reason: 'token_budget_exceeded',
+          cumulative_token_usage: 9000,
+        }),
+      ),
+    ).toMatchObject({
+      event: 'run_stopped',
+      stop_reason: 'token_budget_exceeded',
+      cumulative_token_usage: 9000,
+    })
+    expect(
+      parseAgentStreamEvent('run_completed', event(2, { cumulative_token_usage: null })),
+    ).toMatchObject({ cumulative_token_usage: null })
+    expect(() =>
+      parseAgentStreamEvent('run_completed', event(3, { cumulative_token_usage: -1 })),
+    ).toThrow(AgentStreamFormatError)
+    expect(() =>
+      parseAgentStreamEvent('run_completed', event(4, { cumulative_token_usage: 1_000_000_001 })),
+    ).toThrow(AgentStreamFormatError)
+  })
 })

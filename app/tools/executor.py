@@ -18,6 +18,7 @@ from app.tools.registry import ToolRegistry
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _DEFAULT_OUTPUT_MAX_CHARS = 8_192
 _OUTPUT_TRUNCATION_MARKER = "...[tool output truncated]"
+_PROTECTED_IDENTIFIER_KEYS = frozenset({"document_id", "chunk_id", "call_id", "id"})
 _INVALID_ARGUMENTS_CODE = "invalid_tool_arguments"
 _NOT_FOUND_CODE = "tool_not_found"
 _PERMISSION_DENIED_CODE = "tool_permission_denied"
@@ -334,6 +335,12 @@ def _find_longest_string(
     path: tuple[str | int, ...] = (),
 ) -> tuple[tuple[str | int, ...], str] | None:
     if isinstance(value, str):
+        if (
+            path
+            and isinstance(path[-1], str)
+            and path[-1] in _PROTECTED_IDENTIFIER_KEYS
+        ):
+            return None
         return path, value
 
     candidates: list[tuple[tuple[str | int, ...], str]] = []

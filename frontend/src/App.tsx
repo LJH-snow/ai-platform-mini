@@ -117,6 +117,11 @@ const runStatusLabels: Record<AgentRunStatus, string> = {
   unknown: '未知状态',
 }
 
+const agentRunStatusLabel = (run: AgentRun): string =>
+  run.status === 'stopped' && run.stopReason === 'token_budget_exceeded'
+    ? '预算超限'
+    : runStatusLabels[run.status]
+
 const toolStatusLabels: Record<AgentToolCall['status'], string> = {
   running: '工具调用中',
   succeeded: '工具调用成功',
@@ -159,6 +164,9 @@ const fallbackAnswerForRun = (run: AgentRun): string => {
   if (run.status === 'cancelled') return 'Agent 运行已取消，未返回最终回答。'
   if (run.status === 'timed_out') return 'Agent 运行超时，未返回最终回答。'
   if (run.status === 'stopped') {
+    if (run.stopReason === 'token_budget_exceeded') {
+      return 'Agent 达到 token 预算，已完成检索但未生成最终回答。'
+    }
     const reason = run.stopReason ? `停止原因：${run.stopReason}。` : ''
     return `Agent 运行已停止。${reason}已完成 ${run.steps.length} 个步骤，但未返回最终回答。`
   }
@@ -789,7 +797,9 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             : run.status === 'cancelled'
               ? 'Agent Run 已被后端取消。'
               : run.status === 'stopped'
-                ? 'Agent Run 已停止。'
+                ? run.stopReason === 'token_budget_exceeded'
+                  ? 'Agent 达到 token 预算，已完成检索但未生成最终回答。'
+                  : 'Agent Run 已停止。'
                 : 'Agent Run 失败，可重试。'
       const ragAnnouncement = getRagAnnouncement(run)
       setAnnouncement(ragAnnouncement ? `${ragAnnouncement} ${runAnnouncement}` : runAnnouncement)
@@ -915,7 +925,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   }
 
   const traceStatus = agentRun
-    ? runStatusLabels[agentRun.status]
+    ? agentRunStatusLabel(agentRun)
     : traceUnavailableMessage
       ? 'Trace 不可用'
       : '无运行结果'

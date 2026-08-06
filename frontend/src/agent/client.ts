@@ -7,7 +7,18 @@ import type {
   AgentRunApiResponse,
   AgentToolApiErrorCode,
 } from './api-types.ts'
-import { DEFAULT_AGENT_TIMEOUT_SECONDS, type AgentRun, type AgentRunInput } from './types.ts'
+import {
+  DEFAULT_AGENT_MAX_STEPS,
+  DEFAULT_AGENT_TIMEOUT_SECONDS,
+  DEFAULT_AGENT_TOKEN_BUDGET,
+  MAX_AGENT_MAX_STEPS,
+  MAX_AGENT_TIMEOUT_SECONDS,
+  MAX_AGENT_TOKEN_BUDGET,
+  MIN_AGENT_MAX_STEPS,
+  MIN_AGENT_TOKEN_BUDGET,
+  type AgentRun,
+  type AgentRunInput,
+} from './types.ts'
 
 export type AgentClientOptions = {
   apiBaseUrl?: string
@@ -59,11 +70,50 @@ const joinUrl = (baseUrl: string | undefined, path: string): string => {
   return `${baseUrl.replace(/\/$/, '')}${path}`
 }
 
-const agentRequestBody = (input: AgentRunInput): AgentRunApiRequest => ({
-  message: input.message,
-  history: input.history,
-  timeout_seconds: input.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS,
-})
+const assertAgentRunParameters = (input: AgentRunInput): void => {
+  if (
+    input.tokenBudget !== undefined &&
+    (!Number.isInteger(input.tokenBudget) ||
+      input.tokenBudget < MIN_AGENT_TOKEN_BUDGET ||
+      input.tokenBudget > MAX_AGENT_TOKEN_BUDGET)
+  ) {
+    throw new RangeError(
+      `token_budget 必须是 ${MIN_AGENT_TOKEN_BUDGET} 到 ${MAX_AGENT_TOKEN_BUDGET} 之间的整数。`,
+    )
+  }
+  if (
+    input.maxSteps !== undefined &&
+    (!Number.isInteger(input.maxSteps) ||
+      input.maxSteps < MIN_AGENT_MAX_STEPS ||
+      input.maxSteps > MAX_AGENT_MAX_STEPS)
+  ) {
+    throw new RangeError(
+      `max_steps 必须是 ${MIN_AGENT_MAX_STEPS} 到 ${MAX_AGENT_MAX_STEPS} 之间的整数。`,
+    )
+  }
+  if (
+    input.timeoutSeconds !== undefined &&
+    (typeof input.timeoutSeconds !== 'number' ||
+      !Number.isFinite(input.timeoutSeconds) ||
+      input.timeoutSeconds <= 0 ||
+      input.timeoutSeconds > MAX_AGENT_TIMEOUT_SECONDS)
+  ) {
+    throw new RangeError(
+      `timeout_seconds 必须是大于 0 且不超过 ${MAX_AGENT_TIMEOUT_SECONDS} 的数字。`,
+    )
+  }
+}
+
+const agentRequestBody = (input: AgentRunInput): AgentRunApiRequest => {
+  assertAgentRunParameters(input)
+  return {
+    message: input.message,
+    history: input.history,
+    token_budget: input.tokenBudget ?? DEFAULT_AGENT_TOKEN_BUDGET,
+    max_steps: input.maxSteps ?? DEFAULT_AGENT_MAX_STEPS,
+    timeout_seconds: input.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS,
+  }
+}
 
 const safeBackendMessage = (status: number): string => {
   if (status === 401 || status === 403) {
