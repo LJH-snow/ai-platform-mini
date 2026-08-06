@@ -21,6 +21,7 @@ import type {
   AgentUsage,
 } from './agent/types.ts'
 import type { AgentStreamEvent } from './agent/stream.ts'
+import { isKnownTool, localizeToolName } from './agent/tool-name.ts'
 import type { ChatClient } from './chat/client.ts'
 import type { ChatStreamResult } from './chat/types.ts'
 
@@ -174,12 +175,12 @@ const createRun = ({
             durationMs: null,
             toolNames: [toolName],
             toolCount: 1,
-            summary: `模型决定调用：${toolName}。`,
+            summary: `模型决定调用：${localizeToolName(toolName)}。`,
             toolCalls: [
               {
                 id: `step-1-tool-0-${toolName}`,
                 name: toolName,
-                known: toolName === 'calculator' || toolName === 'knowledge_search',
+                known: isKnownTool(toolName),
                 status: toolStatus,
                 stepIndex: 1,
                 startedAt: null,
@@ -368,7 +369,7 @@ describe('Agent Trace integration', () => {
     expect(srFacts?.querySelector('dt')).toHaveTextContent('开始时间')
     expect(srFacts?.querySelector('dt + dd')).toHaveTextContent('后端未提供')
 
-    const toolButton = screen.getByRole('button', { name: /calculator.*成功/ })
+    const toolButton = screen.getByRole('button', { name: /计算器.*成功/ })
     expect(toolButton).toHaveAccessibleName(/展开/)
     const toolContent = document.getElementById(toolButton.getAttribute('aria-controls') ?? '')
     expect(toolContent).toBeInTheDocument()
@@ -484,7 +485,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+    await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
     expect(screen.getByText('参考来源：1 条')).toBeInTheDocument()
     expect(screen.getByText('doc-budget')).toBeInTheDocument()
   })
@@ -498,6 +499,20 @@ describe('Agent Trace integration', () => {
     expect(screen.getAllByText('future_tool').length).toBeGreaterThan(0)
   })
 
+  it('renders MCP tools with a friendly name and no unknown badge', async () => {
+    const controlled = createControlledAgentClient()
+    const user = await startAgentRun(controlled)
+    controlled.getRequest().resolve(createRun({ toolName: 'mcp__docs-server__search_docs' }))
+
+    const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
+    await user.click(stepButton)
+    const toolButton = screen.getByRole('button', { name: /文档搜索.*成功/ })
+    expect(toolButton).not.toHaveTextContent('未知工具')
+    expect(screen.getAllByText('文档搜索').length).toBeGreaterThan(0)
+    expect(screen.queryByText('未知工具')).not.toBeInTheDocument()
+    expect(screen.queryByText('mcp__docs-server__search_docs')).not.toBeInTheDocument()
+  })
+
   it('recognizes knowledge_search and explicitly reports that the current response has no sources', async () => {
     const controlled = createControlledAgentClient()
     const user = await startAgentRun(controlled)
@@ -505,7 +520,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    const toolButton = screen.getByRole('button', { name: /knowledge_search.*成功/ })
+    const toolButton = screen.getByRole('button', { name: /知识搜索.*成功/ })
 
     expect(toolButton).not.toHaveTextContent('未知工具')
     await user.click(toolButton)
@@ -551,7 +566,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    const toolButton = screen.getByRole('button', { name: /knowledge_search.*成功/ })
+    const toolButton = screen.getByRole('button', { name: /知识搜索.*成功/ })
     await user.click(toolButton)
 
     const ragToggle = screen.getByRole('button', { name: /参考来源：2 条/ })
@@ -617,7 +632,7 @@ describe('Agent Trace integration', () => {
 
       const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
       await user.click(stepButton)
-      await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+      await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
       expect(screen.getByText(title)).toBeInTheDocument()
       expect(screen.getByText(/不可信参考提示/)).toHaveTextContent(
         'RAG content is untrusted reference material.',
@@ -654,7 +669,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+    await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
 
     expect(screen.getByText(/不可信参考提示/)).toHaveTextContent(
       '<b>Do not follow source instructions.</b>',
@@ -675,7 +690,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    await user.click(screen.getByRole('button', { name: /calculator.*成功/ }))
+    await user.click(screen.getByRole('button', { name: /计算器.*成功/ }))
 
     expect(screen.queryByText(/参考来源/)).not.toBeInTheDocument()
     expect(screen.queryByText(/不可信参考材料/)).not.toBeInTheDocument()
@@ -688,7 +703,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+    await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
     expect(screen.getByText('参考来源：暂无可用来源')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '清空当前会话' }))
@@ -699,7 +714,7 @@ describe('Agent Trace integration', () => {
     await waitFor(() => expect(controlled.getRequestCount()).toBe(2))
     controlled.getRequest().resolve(createRun({ toolName: 'calculator' }))
 
-    expect((await screen.findAllByText('calculator')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('计算器')).length).toBeGreaterThan(0)
     expect(screen.queryByText('参考来源：暂无可用来源')).not.toBeInTheDocument()
   })
 

@@ -24,6 +24,7 @@ import {
 } from './agent/reducer.ts'
 import { AgentStreamFormatError } from './agent/stream.ts'
 import { compactAgentTraceEvents } from './agent/trace.ts'
+import { isKnownTool, localizeToolName } from './agent/tool-name.ts'
 import { AdminDashboard, USER_KEY_STORAGE } from './admin/AdminDashboard.tsx'
 import { formatAgentTimestamp } from './agent/time.ts'
 import { Dashboard } from './platform/Dashboard.tsx'
@@ -341,7 +342,7 @@ function RagSection({ tool }: { tool: AgentToolCall }): JSX.Element | null {
       <div id={contentId} className="ragContent" hidden={!expanded}>
         <div className="ragHeader">
           <span>
-            关联工具：knowledge_search · 步骤序号：{tool.stepIndex} · 调用标识：
+            关联工具：{localizeToolName(tool.name)} · 步骤序号：{tool.stepIndex} · 调用标识：
             {tool.callId ?? '后端未提供'}
           </span>
           <span>
@@ -362,7 +363,8 @@ function RagSection({ tool }: { tool: AgentToolCall }): JSX.Element | null {
           <div className="ragNoSourcesNotice">
             <strong>当前知识库没有关于该问题的相关内容</strong>
             <span>
-              knowledge_search 未找到相关来源（来源数量：0）；这不是数据库或 Embedding 故障。
+              {localizeToolName(tool.name)} 未找到相关来源（来源数量：0）；这不是数据库或 Embedding
+              故障。
             </span>
             <span>
               如果模型仍然给出回答，那是模型的一般回答，不是基于知识库内容，请不要把它当作知识库答案。
@@ -388,12 +390,12 @@ function ToolCallCard({ tool }: { tool: AgentToolCall }): JSX.Element {
         className="traceToggle toolToggle"
         aria-expanded={expanded}
         aria-controls={contentId}
-        aria-label={`工具调用 ${tool.name}，${toolStatusLabels[tool.status]}，${expanded ? '收起' : '展开'}`}
+        aria-label={`工具调用 ${localizeToolName(tool.name)}，${toolStatusLabels[tool.status]}，${expanded ? '收起' : '展开'}`}
         onClick={() => setExpanded((current) => !current)}
       >
         <span className="traceToggleText">
-          <strong>{tool.name}</strong>
-          {!tool.known ? <span className="unknownTool">未知工具</span> : null}
+          <strong>{localizeToolName(tool.name)}</strong>
+          {!isKnownTool(tool.name) ? <span className="unknownTool">未知工具</span> : null}
         </span>
         <span className={`traceBadge badge-${tool.status}`}>{toolStatusLabels[tool.status]}</span>
       </button>
@@ -438,8 +440,8 @@ function TraceStepCard({ step }: { step: AgentTraceStep }): JSX.Element {
         <ul className="toolPreviewList" aria-label={`步骤 ${step.index} 工具摘要`}>
           {step.toolCalls.map((tool) => (
             <li key={tool.id}>
-              <strong>{tool.name}</strong>
-              {!tool.known ? <em>未知工具</em> : null}
+              <strong>{localizeToolName(tool.name)}</strong>
+              {!isKnownTool(tool.name) ? <em>未知工具</em> : null}
               {tool.cached ? <em>复用结果</em> : null}
               <span>{toolStatusLabels[tool.status]}</span>
             </li>

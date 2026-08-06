@@ -22,8 +22,8 @@ import type {
   AgentTraceEvent,
   AgentTraceStep,
 } from './types.ts'
+import { isKnownTool, localizeToolName } from './tool-name.ts'
 
-const KNOWN_TOOLS = new Set(['calculator', 'knowledge_search'])
 const SAFE_STOP_REASONS = new Set([
   'direct_answer',
   'max_steps',
@@ -256,11 +256,6 @@ const deduplicateEvents = (events: AgentEventApiSummary[]): AgentTraceEvent[] =>
   return result
 }
 
-const LOCALIZED_TOOL_NAMES: Record<string, string> = {
-  calculator: '计算器',
-  knowledge_search: '知识搜索',
-}
-
 export const localizeStepSummary = (
   decisionKind: AgentTraceStep['decisionKind'] | null | undefined,
   toolNames: string[],
@@ -271,7 +266,7 @@ export const localizeStepSummary = (
   if (decisionKind !== 'tool_call') return null
   if (toolNames.length === 0) return '模型计划调用工具，但后端未提供工具名称。'
 
-  const names = toolNames.map((name) => LOCALIZED_TOOL_NAMES[name] ?? name).join('、')
+  const names = toolNames.map((name) => localizeToolName(name)).join('、')
   return typeof toolCount === 'number'
     ? `模型计划调用 ${toolCount} 个工具：${names}。`
     : `模型计划调用工具：${names}。`
@@ -307,7 +302,7 @@ const adaptToolCall = (
     id: `step-${stepIndex}-tool-${toolIndex}`,
     name,
     callId: safeString(call.call_id, 128),
-    known: KNOWN_TOOLS.has(name),
+    known: isKnownTool(name),
     status,
     stepIndex,
     argumentCount: safeNullableCount(call.argument_count, 128),
@@ -338,7 +333,7 @@ const adaptLegacyToolCall = (
     id: `step-${stepIndex}-tool-${toolIndex}`,
     name: safeName,
     callId: null,
-    known: KNOWN_TOOLS.has(safeName),
+    known: isKnownTool(safeName),
     status,
     stepIndex,
     startedAt: null,

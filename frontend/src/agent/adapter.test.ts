@@ -5,6 +5,7 @@ import {
   normalizeStopReason,
   sanitizeSummary,
 } from './adapter.ts'
+import { isKnownTool, localizeToolName } from './tool-name.ts'
 import type { AgentRunApiResponse } from './api-types.ts'
 
 const baseResponse = (): AgentRunApiResponse => ({
@@ -33,12 +34,46 @@ describe('step summary localization', () => {
     expect(localizeStepSummary('tool_call', ['knowledge_search'], null)).toBe(
       '模型计划调用工具：知识搜索。',
     )
+    expect(localizeStepSummary('tool_call', ['mcp__docs-server__search_docs'], 1)).toBe(
+      '模型计划调用 1 个工具：文档搜索。',
+    )
     expect(localizeStepSummary('tool_call', [], null)).toBe(
       '模型计划调用工具，但后端未提供工具名称。',
     )
     expect(localizeStepSummary('final_answer', [], null)).toBe('模型准备生成最终回答。')
     expect(localizeStepSummary('invalid', [], null)).toBe('模型决策格式无效。')
     expect(localizeStepSummary('unknown', ['calculator'], 1)).toBeNull()
+  })
+})
+
+describe('tool name helpers', () => {
+  it('recognizes MCP tool names as known', () => {
+    expect(isKnownTool('mcp__docs-server__search_docs')).toBe(true)
+  })
+
+  it('localizes exact MCP names from the mapping table', () => {
+    expect(localizeToolName('mcp__docs-server__search_docs')).toBe('文档搜索')
+  })
+
+  it('formats unmapped MCP names as readable labels', () => {
+    expect(localizeToolName('mcp__a__b')).toBe('MCP 工具：b（a）')
+  })
+
+  it('formats only unambiguous MCP fallback names', () => {
+    expect(localizeToolName('mcp__server__search')).toBe('MCP 工具：search（server）')
+  })
+
+  it('keeps ambiguous MCP names raw instead of guessing the server', () => {
+    expect(localizeToolName('mcp__')).toBe('MCP 工具')
+    expect(localizeToolName('mcp__server__')).toBe('mcp__server__')
+    expect(localizeToolName('mcp__a')).toBe('mcp__a')
+    expect(localizeToolName('mcp__a__b__c')).toBe('mcp__a__b__c')
+    expect(localizeToolName('mcp__my__server__search')).toBe('mcp__my__server__search')
+  })
+
+  it('keeps non-MCP unknown tools unknown', () => {
+    expect(isKnownTool('mystery_tool')).toBe(false)
+    expect(localizeToolName('mystery_tool')).toBe('mystery_tool')
   })
 })
 
@@ -263,6 +298,26 @@ describe('adaptAgentRunResponse', () => {
     })
     expect(run.steps[0]?.toolCalls[0]).not.toHaveProperty('references')
     expect(run.steps[0]?.toolCalls[0]).not.toHaveProperty('distance')
+  })
+
+  it('recognizes MCP tool calls as known with a localized summary', () => {
+    const run = adaptAgentRunResponse({
+      ...baseResponse(),
+      steps: [
+        {
+          index: 1,
+          decision_kind: 'tool_call',
+          tool_names: ['mcp__docs-server__search_docs'],
+          tool_succeeded: true,
+        },
+      ],
+    })
+
+    expect(run.steps[0]?.toolCalls[0]).toMatchObject({
+      name: 'mcp__docs-server__search_docs',
+      known: true,
+    })
+    expect(run.steps[0]?.summary).toBe('模型计划调用工具：文档搜索。')
   })
 
   it('does not expose the run stop reason as a tool error code', () => {

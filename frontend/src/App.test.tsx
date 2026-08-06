@@ -382,7 +382,7 @@ describe('App', () => {
     const stepButton = screen.getByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
     expect(screen.getByText('工具数量：1')).toBeVisible()
-    const toolButton = screen.getByRole('button', { name: /工具调用 knowledge_search.*成功/ })
+    const toolButton = screen.getByRole('button', { name: /工具调用 知识搜索.*成功/ })
     await user.click(toolButton)
     expect(screen.getByText('参数数量：1')).toBeVisible()
     expect(screen.getByText('输入摘要：阶段六前端可访问性')).toBeVisible()
@@ -782,7 +782,7 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByText('知识库没有相关内容。')).toBeInTheDocument())
 
     await user.click(screen.getByRole('button', { name: /步骤 1.*工具调用/ }))
-    await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+    await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
 
     expect(screen.getByText('当前知识库没有关于该问题的相关内容')).toBeInTheDocument()
     expect(screen.getAllByText(/来源数量：0/).length).toBeGreaterThan(0)

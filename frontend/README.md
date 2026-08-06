@@ -31,7 +31,8 @@
 
 ### Tool Call 卡片
 
-- 支持 `calculator` 和未知工具名称。
+- 支持 `calculator`、`knowledge_search`、MCP 风格工具（`mcp__server__tool`）和未知工具名称。
+- MCP 工具名称在 `frontend/src/agent/tool-name.ts` 的 `MCP_TOOL_NAME_MAP` 中维护精确展示名；未映射且格式明确的名称显示为 `MCP 工具：tool（server）`；只有前缀的 `mcp__` 显示通用标签 `MCP 工具`；`mcp__server__`、`mcp__a`、`mcp__a__b__c`、`mcp__my__server__search` 等无法明确解析出 server/tool 的名称保留原始名，避免误判。
 - 可表达工具成功、失败、超时、取消和未知状态；同步请求等待期间不会伪造具体工具正在执行。
 - 工具卡片只展示后端安全投影：`calculator` 可展示脱敏后的 expression/result，`knowledge_search` 隐藏原始 query、展示 RAG 状态与来源，未知工具只展示参数数量和结果字符数；原始 payload、调用耗时和详细错误仍显示“后端未提供”。
 - 工具摘要可展开或收起；长文本会安全截断，并清理 API Key、Bearer Token、内部路径和常见堆栈行。
@@ -96,7 +97,7 @@
 
 - **事件时间与步骤耗时**：当前公开 API 未提供，前端不推算或伪造。
 - **详细工具载荷和错误**：前端不读取 Provider 或内部 Runtime 原始对象；公开 UI 只展示后端安全投影，原始 payload、Prompt、Provider 响应和堆栈不公开。
-- 精确 Token 统计/usage、事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排不在阶段 6 范围；`answer_delta` 是真实文本增量，不等同于逐 Token 计数。
+- 精确 Token 统计/usage、事件历史回放、持久化 Trace 查询、回答内精确引用、完整 MCP 工具管理/配置 UI 和复杂多 Agent 编排不在阶段 6 范围；`answer_delta` 是真实文本增量，不等同于逐 Token 计数。前端只负责 `mcp__` 风格工具名称的友好展示，不改变后端原始工具名。
 - 启动失败的 `stream_error` 可以缺少 `run_id`/`sequence`；前端解析器会将缺失字段归一化，并由客户端归类为 `AgentNetworkError`。该帧只表示流启动或连接边界错误，不代表 Agent Run 已进入任何终态。
 
 详细事件字段和边界见 [Agent SSE 事件契约](../docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md)。
