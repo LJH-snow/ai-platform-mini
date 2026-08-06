@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +12,7 @@ from app.core.container import (
     provide_mcp_manager,
     provide_usage_service,
 )
-from app.exceptions.base import ProviderError
+from app.exceptions.base import ProviderError, ProviderUnavailableError
 from app.main import app
 from app.mcp import (
     MCPReadiness,
@@ -94,8 +94,37 @@ class _MockProvider:
 @pytest.fixture
 def _override_provider() -> Generator[None, None, None]:
     app.dependency_overrides[provide_llm_provider] = lambda: _MockProvider()
-    yield
+    settings = MagicMock(auth_storage="memory", rag_enabled=False)
+    with patch("app.api.health.get_settings", return_value=settings):
+        yield
     app.dependency_overrides.pop(provide_llm_provider, None)
+
+
+def _async_context(value: object) -> MagicMock:
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=value)
+    context.__aexit__ = AsyncMock(return_value=False)
+    return context
+
+
+def _mock_engine() -> MagicMock:
+    engine = MagicMock()
+    conn = AsyncMock()
+    conn.execute = AsyncMock()
+    conn.commit = AsyncMock()
+    engine.connect.return_value = _async_context(conn)
+    return engine
+
+
+_DISABLED_RAG: dict[str, str | bool | None] = {
+    "enabled": False,
+    "status": "disabled",
+    "database": "not_checked",
+    "database_reason": None,
+    "embedding": "not_checked",
+    "embedding_reason": None,
+    "embedding_model": None,
+}
 
 
 # --- Readiness probe tests ---
@@ -108,6 +137,7 @@ def test_readiness_returns_200_when_provider_ok(
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ready"
+    assert data["rag"]["status"] == "disabled"
 
 
 def test_readiness_returns_503_when_provider_fails() -> None:
@@ -123,12 +153,15 @@ def test_readiness_returns_503_when_provider_fails() -> None:
             pass
 
     app.dependency_overrides[provide_llm_provider] = lambda: _FailingProvider()
+    settings = MagicMock(auth_storage="memory", rag_enabled=False)
     try:
-        response = client.get("/api/v1/ready")
+        with patch("app.api.health.get_settings", return_value=settings):
+            response = client.get("/api/v1/ready")
         assert response.status_code == 503
         data = response.json()
         assert data["status"] == "not_ready"
         assert data["checks"]["provider"] == "failed"
+        assert data["rag"]["enabled"] is False
     finally:
         app.dependency_overrides.pop(provide_llm_provider, None)
 
@@ -161,6 +194,7 @@ def test_mcp_health_and_readiness_share_lifecycle_boundary(
     settings = MagicMock(
         mcp_enabled=True,
         auth_storage="memory",
+        rag_enabled=False,
     )
 
     try:
@@ -184,7 +218,11 @@ def test_mcp_health_and_readiness_share_lifecycle_boundary(
         "status": "ready",
     }
     assert readiness_response.status_code == 200
-    assert readiness_response.json()["checks"]["mcp"] == "ready"
+    assert readiness_response.json() == {
+        "status": "ready",
+        "checks": {"provider": "ok", "mcp": "ready"},
+        "rag": _DISABLED_RAG,
+    }
 
 
 def test_mcp_discovery_failure_does_not_block_application_readiness(
@@ -202,7 +240,7 @@ def test_mcp_discovery_failure_does_not_block_application_readiness(
         ),
     )
     app.dependency_overrides[provide_mcp_manager] = lambda: manager
-    settings = MagicMock(mcp_enabled=True, auth_storage="memory")
+    settings = MagicMock(mcp_enabled=True, auth_storage="memory", rag_enabled=False)
 
     try:
         with patch("app.api.health.get_settings", return_value=settings):
@@ -215,6 +253,7 @@ def test_mcp_discovery_failure_does_not_block_application_readiness(
     assert readiness_response.json() == {
         "status": "ready",
         "checks": {"provider": "ok", "mcp": "not_ready"},
+        "rag": _DISABLED_RAG,
     }
     assert health_response.status_code == 503
     assert health_response.json()["status"] == "not_ready"
@@ -241,7 +280,7 @@ def test_degraded_mcp_discovery_does_not_block_application_readiness(
         ),
     )
     app.dependency_overrides[provide_mcp_manager] = lambda: manager
-    settings = MagicMock(mcp_enabled=True, auth_storage="memory")
+    settings = MagicMock(mcp_enabled=True, auth_storage="memory", rag_enabled=False)
 
     try:
         with patch("app.api.health.get_settings", return_value=settings):
@@ -253,4 +292,183 @@ def test_degraded_mcp_discovery_does_not_block_application_readiness(
     assert response.json() == {
         "status": "ready",
         "checks": {"provider": "ok", "mcp": "degraded"},
+        "rag": _DISABLED_RAG,
     }
+
+
+def test_readiness_reports_rag_ready_when_enabled(
+    _override_provider: None,
+) -> None:
+    settings = MagicMock(
+        auth_storage="memory",
+        rag_enabled=True,
+        rag_embedding_model="nomic-embed-text",
+        mcp_enabled=False,
+    )
+    engine = _mock_engine()
+    embedder = AsyncMock()
+    embedder.embed.return_value = [[0.1] * 768]
+
+    with (
+        patch("app.api.health.get_settings", return_value=settings),
+        patch("app.db.init.get_engine", return_value=engine),
+        patch("app.api.health.provide_embedder", return_value=embedder),
+    ):
+        response = client.get("/api/v1/ready")
+
+    assert response.status_code == 200
+    assert response.json()["rag"] == {
+        "enabled": True,
+        "status": "ready",
+        "database": "ok",
+        "database_reason": None,
+        "embedding": "ok",
+        "embedding_reason": None,
+        "embedding_model": "nomic-embed-text",
+    }
+    embedder.embed.assert_awaited_once_with(["ping"])
+
+
+def test_readiness_reports_rag_disabled_without_probing(
+    _override_provider: None,
+) -> None:
+    settings = MagicMock(auth_storage="memory", rag_enabled=False, mcp_enabled=False)
+
+    with (
+        patch("app.api.health.get_settings", return_value=settings),
+        patch("app.db.init.get_engine") as mock_engine,
+        patch("app.api.health.provide_embedder") as mock_embedder,
+    ):
+        response = client.get("/api/v1/ready")
+
+    assert response.status_code == 200
+    assert response.json()["rag"] == _DISABLED_RAG
+    mock_engine.assert_not_called()
+    mock_embedder.assert_not_called()
+
+
+def test_readiness_reports_database_unavailable_when_rag_enabled(
+    _override_provider: None,
+) -> None:
+    settings = MagicMock(
+        auth_storage="memory",
+        rag_enabled=True,
+        rag_embedding_model="nomic-embed-text",
+        mcp_enabled=False,
+    )
+    engine = _mock_engine()
+    conn = engine.connect.return_value.__aenter__.return_value
+    conn.execute = AsyncMock(side_effect=RuntimeError("connection refused"))
+    embedder = AsyncMock()
+
+    with (
+        patch("app.api.health.get_settings", return_value=settings),
+        patch("app.db.init.get_engine", return_value=engine),
+        patch("app.api.health.provide_embedder", return_value=embedder),
+    ):
+        response = client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "not_ready"
+    assert data["rag"]["database"] == "unavailable"
+    assert data["rag"]["database_reason"] == "connection_failed"
+    assert data["rag"]["status"] == "database_unavailable"
+    assert data["rag"]["embedding"] == "not_checked"
+    embedder.embed.assert_not_awaited()
+
+
+def test_readiness_reports_embedding_unavailable_when_rag_enabled(
+    _override_provider: None,
+) -> None:
+    settings = MagicMock(
+        auth_storage="memory",
+        rag_enabled=True,
+        rag_embedding_model="nomic-embed-text",
+        mcp_enabled=False,
+    )
+    engine = _mock_engine()
+    embedder = AsyncMock()
+    embedder.embed.side_effect = ProviderUnavailableError(
+        "http://ollama.internal:11434"
+    )
+
+    with (
+        patch("app.api.health.get_settings", return_value=settings),
+        patch("app.db.init.get_engine", return_value=engine),
+        patch("app.api.health.provide_embedder", return_value=embedder),
+    ):
+        response = client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "not_ready"
+    assert data["rag"]["database"] == "ok"
+    assert data["rag"]["embedding"] == "unavailable"
+    assert data["rag"]["embedding_reason"] == "connection_failed"
+    assert data["rag"]["status"] == "embedding_unavailable"
+    embedder.embed.assert_awaited_once_with(["ping"])
+
+
+def test_readiness_preserves_provider_and_database_fields(
+    _override_provider: None,
+) -> None:
+    settings = MagicMock(auth_storage="postgres", rag_enabled=False, mcp_enabled=False)
+    engine = _mock_engine()
+
+    with (
+        patch("app.api.health.get_settings", return_value=settings),
+        patch("app.db.init.get_engine", return_value=engine),
+    ):
+        response = client.get("/api/v1/ready")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["checks"]["provider"] == "ok"
+    assert data["checks"]["database"] == "ok"
+    assert data["rag"]["enabled"] is False
+    assert "database" in data["checks"]
+
+
+def test_readiness_does_not_leak_secrets_or_raw_provider_errors(
+    _override_provider: None,
+) -> None:
+    settings = MagicMock(
+        auth_storage="memory",
+        rag_enabled=True,
+        rag_embedding_model="nomic-embed-text",
+        mcp_enabled=False,
+    )
+    engine = _mock_engine()
+    conn = engine.connect.return_value.__aenter__.return_value
+    conn.execute = AsyncMock(
+        side_effect=RuntimeError("password=hunter2 host=db.internal")
+    )
+    embedder = AsyncMock()
+    embedder.embed.side_effect = ProviderUnavailableError(
+        "Bearer sk-secret http://embedding.internal/v1"
+    )
+
+    with (
+        patch("app.api.health.get_settings", return_value=settings),
+        patch("app.db.init.get_engine", return_value=engine),
+        patch("app.api.health.provide_embedder", return_value=embedder),
+    ):
+        database_response = client.get("/api/v1/ready")
+
+    database_body = str(database_response.json())
+    assert "hunter2" not in database_body
+    assert "db.internal" not in database_body
+
+    ready_engine = _mock_engine()
+    with (
+        patch("app.api.health.get_settings", return_value=settings),
+        patch("app.db.init.get_engine", return_value=ready_engine),
+        patch("app.api.health.provide_embedder", return_value=embedder),
+    ):
+        embedding_response = client.get("/api/v1/ready")
+
+    embedding_body = str(embedding_response.json())
+    assert "sk-secret" not in embedding_body
+    assert "embedding.internal" not in embedding_body
+    assert "password" not in embedding_body

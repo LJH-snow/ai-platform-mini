@@ -35,10 +35,13 @@ class AgentEventKind(StrEnum):
     """Observable lifecycle events emitted by the runtime."""
 
     RUN_STARTED = "run_started"
+    STEP_STARTED = "step_started"
+    STEP_COMPLETED = "step_completed"
     MODEL_DECISION = "model_decision"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
     TOOL_FAILED = "tool_failed"
+    ANSWER_DELTA = "answer_delta"
     ANSWER = "answer"
     RUN_STOPPED = "run_stopped"
 
@@ -83,6 +86,17 @@ class AgentDecision:
 
 
 @dataclass(frozen=True)
+class AgentAnswerChunk:
+    """One provider-produced text chunk for an explicitly streamed answer."""
+
+    content: str
+    model: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    done: bool = False
+
+
+@dataclass(frozen=True)
 class ToolResult:
     """A normalized tool result that is appended to agent state."""
 
@@ -92,6 +106,7 @@ class ToolResult:
     succeeded: bool
     error: str | None = None
     truncated: bool = False
+    cached: bool = False
 
 
 @dataclass(frozen=True)

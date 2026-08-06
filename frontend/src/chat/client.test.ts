@@ -81,7 +81,7 @@ describe('createChatClient', () => {
       new Response(
         JSON.stringify({
           code: 'AUTHENTICATION_ERROR',
-          message: 'Missing Authorization header.',
+          message: 'Chat 请求未通过鉴权，请检查运行时凭据。',
           request_id: 'req-auth-123',
         }),
         {
@@ -104,7 +104,7 @@ describe('createChatClient', () => {
         status: 401,
         code: 'AUTHENTICATION_ERROR',
         requestId: 'req-auth-123',
-        message: 'Missing Authorization header.',
+        message: 'Chat 请求未通过鉴权，请检查运行时凭据。',
       }),
     )
     expect(onRequestId).toHaveBeenCalledWith('req-auth-123')

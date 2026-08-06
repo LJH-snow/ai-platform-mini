@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
@@ -19,13 +19,17 @@ from app.agents.models import (
     AgentStep,
     RunStatus,
     StopReason,
+    ToolCall,
+    ToolResult,
 )
-from app.api.agent import get_agent_service
+from app.api.agent import _to_response, get_agent_service
 from app.auth.models import APIKey
+from app.core.container import provide_agent_run_record_service
 from app.core.context import RequestContext
 from app.exceptions.base import ProviderError, QuotaExceededError
 from app.main import app
 from app.mcp import MCPToolAdapter, MCPToolCallResult, MCPToolDefinition
+from app.providers.results import ProviderChatResult
 from app.runs import InMemoryRunTraceRecorder, RunTraceRecorderFactory
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatResponse
@@ -61,6 +65,22 @@ class FakeAgentService:
             raise self.error
         assert self.outcome is not None
         return self.outcome
+
+
+@dataclass
+class FakeAgentRunRecordService:
+    saved_models: list[str | None]
+
+    async def save(
+        self,
+        response: object,
+        request: AgentRunRequest,
+        context: RequestContext,
+        api_key: APIKey,
+        model: str | None = None,
+    ) -> None:
+        del response, request, context, api_key
+        self.saved_models.append(model)
 
 
 def _outcome(
@@ -110,12 +130,115 @@ def _outcome(
     )
 
 
+def test_agent_response_exposes_step_and_tool_lifecycle_timing() -> None:
+    run_id = "run-timing-1"
+    start = datetime(2026, 8, 6, 12, 0, 0, tzinfo=UTC)
+    call = ToolCall(
+        call_id="calc-1", name="calculator", arguments={"expression": "12 + 3"}
+    )
+    result = ToolResult(
+        call_id="calc-1", name="calculator", content="15", succeeded=True
+    )
+    step = AgentStep(
+        index=1, decision=AgentDecision(tool_calls=(call,)), tool_results=(result,)
+    )
+    events = (
+        AgentEvent(AgentEventKind.RUN_STARTED, run_id, 1, start),
+        AgentEvent(AgentEventKind.STEP_STARTED, run_id, 2, start, step_index=1),
+        AgentEvent(
+            AgentEventKind.TOOL_STARTED, run_id, 3, start, step_index=1, tool_call=call
+        ),
+        AgentEvent(
+            AgentEventKind.TOOL_COMPLETED,
+            run_id,
+            4,
+            start.replace(microsecond=250000),
+            step_index=1,
+            tool_call=call,
+            tool_result=result,
+        ),
+        AgentEvent(
+            AgentEventKind.STEP_COMPLETED,
+            run_id,
+            5,
+            start.replace(microsecond=500000),
+            step_index=1,
+            status=RunStatus.COMPLETED,
+        ),
+        AgentEvent(
+            AgentEventKind.RUN_STOPPED,
+            run_id,
+            6,
+            start.replace(microsecond=750000),
+            status=RunStatus.COMPLETED,
+            stop_reason=StopReason.DIRECT_ANSWER,
+        ),
+    )
+    state = AgentState(run_id=run_id, user_input="calculate")
+    state.steps.append(step)
+    outcome = AgentRunOutcome(
+        result=AgentRunResult(
+            run_id=run_id,
+            status=RunStatus.COMPLETED,
+            stop_reason=StopReason.DIRECT_ANSWER,
+            answer="15",
+            state=state,
+            events=events,
+            token_usage=0,
+        ),
+        model="test-model",
+        prompt_tokens=None,
+        completion_tokens=None,
+        estimated_usage=True,
+    )
+
+    body = _to_response(outcome).model_dump(mode="json")
+
+    assert body["events"][1]["occurred_at"] == start.isoformat().replace("+00:00", "Z")
+    assert body["started_at"] == start.isoformat().replace("+00:00", "Z")
+    assert body["completed_at"] == start.replace(
+        microsecond=750000
+    ).isoformat().replace("+00:00", "Z")
+    assert body["duration_ms"] == 750.0
+    assert body["steps"][0]["started_at"] == start.isoformat().replace("+00:00", "Z")
+    assert body["steps"][0]["completed_at"] == start.replace(
+        microsecond=500000
+    ).isoformat().replace("+00:00", "Z")
+    assert body["steps"][0]["duration_ms"] == 500.0
+    assert body["steps"][0]["tool_calls"][0]["started_at"] == start.isoformat().replace(
+        "+00:00", "Z"
+    )
+    assert body["steps"][0]["tool_calls"][0]["completed_at"] == start.replace(
+        microsecond=250000
+    ).isoformat().replace("+00:00", "Z")
+    assert body["steps"][0]["tool_calls"][0]["duration_ms"] == 250.0
+
+
 def _override(service: FakeAgentService) -> None:
     app.dependency_overrides[get_agent_service] = lambda: service
 
 
 def _clear_overrides() -> None:
     app.dependency_overrides.pop(get_agent_service, None)
+
+
+def test_agent_endpoint_persists_effective_model_name() -> None:
+    service = FakeAgentService(outcome=_outcome())
+    record_service = FakeAgentRunRecordService(saved_models=[])
+    _override(service)
+    app.dependency_overrides[provide_agent_run_record_service] = lambda: record_service
+    try:
+        response = client.post(
+            "/api/v1/agent/runs",
+            json={"message": "hello"},
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        _clear_overrides()
+        app.dependency_overrides.pop(provide_agent_run_record_service, None)
+
+    assert response.status_code == 200
+    assert record_service.saved_models == ["test-model"]
 
 
 def test_agent_endpoint_returns_direct_answer_and_usage() -> None:
@@ -217,6 +340,11 @@ def test_agent_endpoint_returns_step_summary_without_tool_payloads() -> None:
             "index": 1,
             "decision_kind": "final_answer",
             "tool_names": [],
+            "tool_count": 0,
+            "summary": "Final answer planned.",
+            "started_at": None,
+            "completed_at": None,
+            "duration_ms": None,
             "tool_succeeded": None,
         }
     ]
@@ -260,6 +388,12 @@ def test_agent_endpoint_preserves_quota_error_mapping() -> None:
     assert response.status_code == 429
     assert response.headers["Retry-After"] == "9"
     assert response.json()["code"] == "QUOTA_EXCEEDED"
+
+
+def test_agent_request_defaults_to_two_minute_timeout() -> None:
+    request = AgentRunRequest(message="hello")
+
+    assert request.timeout_seconds == 120.0
 
 
 def test_agent_request_validation_rejects_runtime_limits() -> None:
@@ -431,6 +565,150 @@ class _FakeChatService:
         )
 
 
+class _CountingStreamingChatService(_FakeChatService):
+    def __init__(
+        self,
+        *,
+        stream_mode: str = "success",
+    ) -> None:
+        super().__init__(prompt_tokens=4, completion_tokens=2)
+        self.stream_calls = 0
+        self.stream_mode = stream_mode
+
+    async def chat_stream(self, request: object) -> AsyncIterator[ProviderChatResult]:
+        del request
+        self.stream_calls += 1
+        if self.stream_mode == "error":
+            raise ProviderError("provider stream failed")
+        if self.stream_mode == "empty":
+            return
+        yield ProviderChatResult(
+            model="test-model",
+            created_at=None,
+            role="assistant",
+            content="real answer",
+            done=False,
+            done_reason=None,
+        )
+        yield ProviderChatResult(
+            model="test-model",
+            created_at=None,
+            role="assistant",
+            content="",
+            done=True,
+            done_reason="stop",
+            prompt_tokens=3,
+            completion_tokens=2,
+        )
+
+
+class _StreamingRuntime:
+    def __init__(self, model: AgentModel) -> None:
+        self._runtime = AgentRuntime(model)
+
+    async def run(self, user_input: str, **kwargs: object) -> AgentRunResult:
+        return await self._runtime.run(user_input, **kwargs)  # type: ignore[arg-type]
+
+
+def _streaming_runtime_factory(
+    model: AgentModel,
+    tools: Mapping[str, AgentTool] | None,
+    *,
+    tool_executor: ToolExecutor | None = None,
+    recorder_factory: RunTraceRecorderFactory | None = None,
+    observer: object | None = None,
+) -> AgentRuntime:
+    del tools, tool_executor, recorder_factory
+    runtime = AgentRuntime(model, observer=observer)  # type: ignore[arg-type]
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_agent_service_only_consumes_answer_stream_when_explicitly_enabled() -> (
+    None
+):
+    chat_service = _CountingStreamingChatService()
+    service = AgentService(
+        chat_service=chat_service,  # type: ignore[arg-type]
+        quota_service=_FakeQuotaService(),  # type: ignore[arg-type]
+        usage_collector=_FakeUsageCollector(),  # type: ignore[arg-type]
+        runtime_factory=_streaming_runtime_factory,
+    )
+    request = AgentRunRequest(message="hello", model="test-model")
+    context = RequestContext(request_id="request-1", api_key="hashed")
+    api_key = APIKey(key="hashed", name="test")
+
+    sync_outcome = await service.run(request, context=context, api_key=api_key)
+    assert sync_outcome.result.answer == "hello"
+    assert chat_service.stream_calls == 0
+
+    stream_outcome = await service.run(
+        request,
+        context=context,
+        api_key=api_key,
+        streaming=True,
+    )
+    assert stream_outcome.result.answer == "real answer"
+    assert chat_service.stream_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_mode", ["error", "empty"])
+async def test_stream_failure_or_empty_stream_has_unknown_usage_and_one_terminal(
+    stream_mode: str,
+) -> None:
+    chat_service = _CountingStreamingChatService(stream_mode=stream_mode)
+    adapter = _ChatServiceAgentModel(
+        chat_service,  # type: ignore[arg-type]
+        AgentRunRequest(message="hello", model="test-model"),
+    )
+    if stream_mode == "error":
+        with pytest.raises(ProviderError):
+            async for _ in adapter.stream_answer(
+                AgentState(run_id="run-adapter", user_input="hello")
+            ):
+                pass
+    else:
+        chunks = [
+            chunk
+            async for chunk in adapter.stream_answer(
+                AgentState(run_id="run-adapter", user_input="hello")
+            )
+        ]
+        assert chunks == []
+    assert adapter.prompt_tokens is None
+    assert adapter.completion_tokens is None
+
+    chat_service = _CountingStreamingChatService(stream_mode=stream_mode)
+    collector = _FakeUsageCollector()
+    service = AgentService(
+        chat_service=chat_service,  # type: ignore[arg-type]
+        quota_service=_FakeQuotaService(),  # type: ignore[arg-type]
+        usage_collector=collector,  # type: ignore[arg-type]
+        runtime_factory=_streaming_runtime_factory,
+    )
+    observer = _RecordingObserver()
+
+    with pytest.raises(ProviderError):
+        await service.run(
+            AgentRunRequest(message="hello", model="test-model"),
+            context=RequestContext(request_id="request-1", api_key="hashed"),
+            api_key=APIKey(key="hashed", name="test"),
+            observer=observer,
+            streaming=True,
+        )
+
+    assert len(collector.responses) == 1
+    recorded = collector.responses[0]
+    assert isinstance(recorded, ChatResponse)
+    assert recorded.prompt_tokens == 4
+    assert recorded.completion_tokens is None
+    terminal_events = [
+        event for event in observer.events if event.kind is AgentEventKind.RUN_STOPPED
+    ]
+    assert len(terminal_events) == 1
+
+
 class _ToolThenAnswerChatService:
     default_model = "test-model"
 
@@ -546,6 +824,14 @@ class _FakeUsageCollector:
         self.responses.append(response)
 
 
+class _RecordingObserver:
+    def __init__(self) -> None:
+        self.events: list[AgentEvent] = []
+
+    def observe(self, event: AgentEvent) -> None:
+        self.events.append(event)
+
+
 @pytest.mark.asyncio
 async def test_agent_service_passes_request_and_model_to_runtime_trace_boundary() -> (
     None
@@ -563,7 +849,9 @@ async def test_agent_service_passes_request_and_model_to_runtime_trace_boundary(
             token_budget: int | None,
             request_id: str | None,
             model: str | None,
+            **kwargs: object,
         ) -> AgentRunResult:
+            del kwargs
             captured.update(
                 {
                     "user_input": user_input,

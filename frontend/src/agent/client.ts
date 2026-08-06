@@ -1,4 +1,5 @@
 import { adaptAgentRunResponse } from './adapter.ts'
+import { AgentStreamFormatError, readAgentSse, type AgentStreamEvent } from './stream.ts'
 import type {
   AgentRagApiErrorCode,
   AgentRagApiStatus,
@@ -6,7 +7,7 @@ import type {
   AgentRunApiResponse,
   AgentToolApiErrorCode,
 } from './api-types.ts'
-import type { AgentRun, AgentRunInput } from './types.ts'
+import { DEFAULT_AGENT_TIMEOUT_SECONDS, type AgentRun, type AgentRunInput } from './types.ts'
 
 export type AgentClientOptions = {
   apiBaseUrl?: string
@@ -16,6 +17,11 @@ export type AgentClientOptions = {
 
 export type AgentClient = {
   runAgent: (input: AgentRunInput, signal: AbortSignal) => Promise<AgentRun>
+  streamAgent?: (
+    input: AgentRunInput,
+    handlers: { onEvent: (event: AgentStreamEvent) => void },
+    signal: AbortSignal,
+  ) => Promise<void>
 }
 
 export class AgentBackendError extends Error {
@@ -52,6 +58,12 @@ const joinUrl = (baseUrl: string | undefined, path: string): string => {
   }
   return `${baseUrl.replace(/\/$/, '')}${path}`
 }
+
+const agentRequestBody = (input: AgentRunInput): AgentRunApiRequest => ({
+  message: input.message,
+  history: input.history,
+  timeout_seconds: input.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS,
+})
 
 const safeBackendMessage = (status: number): string => {
   if (status === 401 || status === 403) {
@@ -94,6 +106,7 @@ const isApiStatus = (value: unknown): boolean =>
   ['completed', 'stopped', 'failed', 'cancelled', 'timed_out'].includes(String(value))
 
 const ragStatuses = new Set<AgentRagApiStatus>([
+  'loading',
   'success_with_sources',
   'no_relevant_sources',
   'knowledge_base_empty',
@@ -246,10 +259,7 @@ export function createAgentClient(options: AgentClientOptions = {}): AgentClient
 
   return {
     async runAgent(input, signal) {
-      const body: AgentRunApiRequest = {
-        message: input.message,
-        history: input.history,
-      }
+      const body = agentRequestBody(input)
 
       let response: Response
       try {
@@ -288,6 +298,43 @@ export function createAgentClient(options: AgentClientOptions = {}): AgentClient
         throw new AgentResponseError()
       }
       return adaptAgentRunResponse(payload)
+    },
+    async streamAgent(input, handlers, signal) {
+      const body = agentRequestBody(input)
+      let response: Response
+      try {
+        response = await fetchImpl(joinUrl(options.apiBaseUrl, '/api/v1/agent/runs/stream'), {
+          method: 'POST',
+          headers: {
+            Accept: 'text/event-stream',
+            'Content-Type': 'application/json',
+            ...(options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}),
+          },
+          body: JSON.stringify(body),
+          signal,
+        })
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw error
+        throw new AgentNetworkError()
+      }
+      if (!response.ok) {
+        throw new AgentBackendError(
+          safeBackendMessage(response.status),
+          response.status,
+          await getErrorCode(response),
+        )
+      }
+      if (!response.body) throw new AgentStreamFormatError()
+      try {
+        for await (const event of readAgentSse(response)) {
+          if (event.event === 'stream_error') throw new AgentNetworkError()
+          handlers.onEvent(event)
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw error
+        if (error instanceof AgentStreamFormatError) throw error
+        throw new AgentNetworkError()
+      }
     },
   }
 }

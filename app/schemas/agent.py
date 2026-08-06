@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -8,6 +9,7 @@ from app.agents.models import RunStatus, StopReason
 from app.schemas.chat import ChatMessage
 
 type AgentRAGStatus = Literal[
+    "loading",
     "success_with_sources",
     "no_relevant_sources",
     "knowledge_base_empty",
@@ -48,7 +50,7 @@ class AgentRunRequest(BaseModel):
     system_prompt: str | None = Field(default=None)
     history: list[ChatMessage] = Field(default_factory=list)
     max_steps: int = Field(default=5, ge=1, le=20)
-    timeout_seconds: float = Field(default=30.0, gt=0, le=120.0)
+    timeout_seconds: float = Field(default=120.0, gt=0, le=120.0)
     token_budget: int = Field(default=2048, gt=0, le=32768)
 
 
@@ -79,6 +81,14 @@ class AgentToolCallSummary(BaseModel):
     name: str = Field(max_length=128)
     succeeded: bool | None = None
     truncated: bool | None = None
+    cached: bool = False
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = Field(default=None, ge=0, le=120_000)
+    argument_count: int | None = Field(default=None, ge=0, le=128)
+    input_summary: str | None = Field(default=None, max_length=256)
+    output_summary: str | None = Field(default=None, max_length=256)
+    result_chars: int | None = Field(default=None, ge=0, le=8192)
     error_code: AgentToolErrorCode | None = None
     error_message: str | None = None
     rag: AgentRAGToolSummary | None = Field(
@@ -92,6 +102,11 @@ class AgentStepSummary(BaseModel):
     index: int = Field(ge=1)
     decision_kind: Literal["final_answer", "tool_call", "invalid"]
     tool_names: list[str] = Field(default_factory=list)
+    tool_count: int = Field(default=0, ge=0, le=32)
+    summary: str | None = Field(default=None, max_length=256)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = Field(default=None, ge=0, le=120_000)
     tool_succeeded: bool | None = None
     tool_calls: list[AgentToolCallSummary] | None = Field(
         default=None,
@@ -103,6 +118,7 @@ class AgentEventSummary(BaseModel):
     """Safe event summary suitable for a synchronous API response."""
 
     kind: str
+    occurred_at: datetime
     step_index: int | None = Field(default=None, ge=1)
     status: RunStatus | None = None
     stop_reason: StopReason | None = None
@@ -124,6 +140,54 @@ class AgentRunResponse(BaseModel):
     status: RunStatus
     answer: str | None = None
     stop_reason: StopReason
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: float | None = Field(default=None, ge=0, le=120_000)
     steps: list[AgentStepSummary] = Field(default_factory=list)
     events: list[AgentEventSummary] = Field(default_factory=list)
     usage: AgentUsage
+
+
+class AgentStreamEvent(BaseModel):
+    """Safe SSE projection of one real Runtime lifecycle event."""
+
+    event: Literal[
+        "run_started",
+        "step_started",
+        "step_planned",
+        "step_completed",
+        "tool_started",
+        "rag_started",
+        "tool_completed",
+        "tool_failed",
+        "answer_delta",
+        "assistant_message",
+        "run_completed",
+        "run_failed",
+        "run_timed_out",
+        "run_cancelled",
+        "run_stopped",
+    ]
+    run_id: str
+    request_id: str | None = None
+    sequence: int
+    occurred_at: datetime
+    step_index: int | None = Field(default=None, ge=1)
+    call_id: str | None = Field(default=None, max_length=128)
+    tool_name: str | None = Field(default=None, max_length=128)
+    decision_kind: Literal["final_answer", "tool_call", "invalid"] | None = None
+    tool_names: list[str] | None = Field(default=None, max_length=32)
+    tool_count: int | None = Field(default=None, ge=0, le=32)
+    summary: str | None = Field(default=None, max_length=256)
+    argument_count: int | None = Field(default=None, ge=0, le=128)
+    input_summary: str | None = Field(default=None, max_length=256)
+    output_summary: str | None = Field(default=None, max_length=256)
+    result_chars: int | None = Field(default=None, ge=0, le=8192)
+    status: RunStatus | None = None
+    stop_reason: StopReason | None = None
+    answer: str | None = None
+    delta: str | None = None
+    succeeded: bool | None = None
+    cached: bool | None = None
+    error_code: AgentToolErrorCode | None = None
+    rag: AgentRAGToolSummary | None = None

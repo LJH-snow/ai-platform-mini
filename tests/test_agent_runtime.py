@@ -1,11 +1,12 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 
 import pytest
 
 from app.agents import (
+    AgentAnswerChunk,
     AgentDecision,
     AgentEventKind,
     AgentRuntime,
@@ -16,6 +17,7 @@ from app.agents import (
     ToolCall,
     ToolContext,
 )
+from app.agents.models import AgentEvent
 from app.tools import CalculatorTool, ToolExecutor, ToolRegistry
 
 
@@ -32,6 +34,151 @@ class ScriptedModel:
         if not self.responses:
             raise AssertionError("the scripted model ran out of responses")
         return self.responses.pop(0)
+
+
+@dataclass
+class StreamingScriptedModel:
+    responses: list[AgentDecision]
+    chunks: list[AgentAnswerChunk]
+    closed: bool = False
+
+    async def decide(self, state: AgentState) -> AgentDecision:
+        del state
+        return self.responses.pop(0)
+
+    async def stream_answer(self, state: AgentState) -> AsyncIterator[AgentAnswerChunk]:
+        del state
+        try:
+            for chunk in self.chunks:
+                await asyncio.sleep(0)
+                yield chunk
+        finally:
+            self.closed = True
+
+
+class RecordingObserver:
+    def __init__(self) -> None:
+        self.events: list[AgentEvent] = []
+
+    def observe(self, event: AgentEvent) -> None:
+        self.events.append(event)
+
+
+@pytest.mark.asyncio
+async def test_streaming_direct_answer_emits_real_deltas_in_order() -> None:
+    model = StreamingScriptedModel(
+        responses=[AgentDecision(answer="decision placeholder")],
+        chunks=[
+            AgentAnswerChunk(content="real "),
+            AgentAnswerChunk(content="answer"),
+            AgentAnswerChunk(content="", done=True),
+        ],
+    )
+    observer = RecordingObserver()
+
+    result = await AgentRuntime(model, observer=observer).run(
+        "hello", stream_answer=True
+    )
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.answer == "real answer"
+    assert [event.kind for event in observer.events] == [
+        AgentEventKind.RUN_STARTED,
+        AgentEventKind.STEP_STARTED,
+        AgentEventKind.MODEL_DECISION,
+        AgentEventKind.ANSWER_DELTA,
+        AgentEventKind.ANSWER_DELTA,
+        AgentEventKind.STEP_COMPLETED,
+        AgentEventKind.RUN_STOPPED,
+    ]
+    assert [
+        event.message
+        for event in observer.events
+        if event.kind is AgentEventKind.ANSWER_DELTA
+    ] == [
+        "real ",
+        "answer",
+    ]
+    assert model.closed is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_then_answer_keeps_single_runtime_loop() -> None:
+    model = StreamingScriptedModel(
+        responses=[
+            AgentDecision(tool_calls=(ToolCall("call-1", "echo", {"value": "x"}),)),
+            AgentDecision(answer="placeholder"),
+        ],
+        chunks=[
+            AgentAnswerChunk(content="after tool"),
+            AgentAnswerChunk(content="", done=True),
+        ],
+    )
+    result = await AgentRuntime(
+        model,
+        tools={"echo": EchoTool()},
+    ).run("use it", stream_answer=True)
+
+    assert result.answer == "after tool"
+    assert len(result.state.steps) == 2
+    assert [step.index for step in result.state.steps] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_streaming_empty_answer_fails_and_closes_iterator() -> None:
+    model = StreamingScriptedModel(
+        responses=[AgentDecision(answer="placeholder")],
+        chunks=[AgentAnswerChunk(content="", done=True)],
+    )
+
+    result = await AgentRuntime(model).run("hello", stream_answer=True)
+
+    assert result.status is RunStatus.FAILED
+    assert result.stop_reason is StopReason.MODEL_ERROR
+    assert model.closed is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_timeout_and_cancel_close_provider_iterator() -> None:
+    class BlockingStreamingModel(StreamingScriptedModel):
+        def __init__(self, responses: list[AgentDecision]) -> None:
+            super().__init__(responses=responses, chunks=[])
+            self.started = asyncio.Event()
+
+        async def stream_answer(
+            self, state: AgentState
+        ) -> AsyncIterator[AgentAnswerChunk]:
+            del state
+            try:
+                self.started.set()
+                await asyncio.Future()
+                yield AgentAnswerChunk(content="unreachable")
+            finally:
+                self.closed = True
+
+    timeout_model = BlockingStreamingModel(
+        responses=[AgentDecision(answer="placeholder")]
+    )
+    timeout_result = await AgentRuntime(timeout_model).run(
+        "hello", stream_answer=True, timeout=0.01
+    )
+    assert timeout_result.status is RunStatus.TIMED_OUT
+    assert timeout_model.closed is True
+
+    cancel_model = BlockingStreamingModel(
+        responses=[AgentDecision(answer="placeholder")]
+    )
+    cancel_event = asyncio.Event()
+    task = asyncio.create_task(
+        AgentRuntime(cancel_model).run(
+            "hello", stream_answer=True, cancel_event=cancel_event
+        )
+    )
+    await asyncio.wait_for(cancel_model.started.wait(), timeout=1)
+    cancel_event.set()
+    cancel_result = await task
+    assert cancel_result.status is RunStatus.CANCELLED
+    assert cancel_model.closed is True
 
 
 @dataclass
@@ -337,6 +484,35 @@ async def test_unknown_token_usage_does_not_trigger_budget_stop() -> None:
     assert decision_event.decision is not None
     assert decision_event.decision.token_usage is None
     assert decision_event.cumulative_token_usage == 0
+
+
+@pytest.mark.asyncio
+async def test_repeated_calculator_calls_are_cached_and_finalized() -> None:
+    calculator = CalculatorTool()
+    model = ScriptedModel(
+        [
+            AgentDecision(
+                tool_calls=(ToolCall("call-1", "calculator", {"expression": "3*2"}),)
+            ),
+            AgentDecision(
+                tool_calls=(ToolCall("call-2", "calculator", {"expression": "3*2"}),)
+            ),
+            AgentDecision(
+                tool_calls=(ToolCall("call-3", "calculator", {"expression": "3*2"}),)
+            ),
+        ]
+    )
+
+    result = await AgentRuntime(model, tools={"calculator": calculator}).run(
+        "计算 3*2", max_steps=3
+    )
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.stop_reason is StopReason.DIRECT_ANSWER
+    assert result.answer == "6"
+    assert len(result.state.steps) == 2
+    assert result.state.steps[1].tool_results[0].cached is True
+    assert len(model.responses) == 1
 
 
 @pytest.mark.asyncio

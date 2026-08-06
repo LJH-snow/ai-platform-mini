@@ -1,3 +1,5 @@
+export const DEFAULT_AGENT_TIMEOUT_SECONDS = 120
+
 export type AgentRunStatus =
   | 'idle'
   | 'running'
@@ -7,6 +9,23 @@ export type AgentRunStatus =
   | 'cancelled'
   | 'timed_out'
   | 'unknown'
+
+export type AgentLiveStatus =
+  | 'connecting'
+  | 'running'
+  | 'waiting'
+  | 'tool_running'
+  | 'tool_completed'
+  | 'tool_failed'
+  | 'rag_loading'
+  | 'rag_completed'
+  | 'completed'
+  | 'failed'
+  | 'timeout'
+  | 'cancelled'
+  | 'connection_lost'
+  | 'response_format_error'
+  | 'client_stopped'
 
 export type AgentToolStatus =
   | 'running'
@@ -19,12 +38,23 @@ export type AgentToolStatus =
 export type AgentTraceEvent = {
   id: string
   kind: string
+  occurredAt?: string | null
   stepIndex: number | null
   status: AgentRunStatus | null
   stopReason: string | null
+  sequence?: number
+  decisionKind?: AgentTraceStep['decisionKind'] | null
+  toolNames?: string[]
+  toolCount?: number | null
+  summary?: string | null
+  argumentCount?: number | null
+  inputSummary?: string | null
+  outputSummary?: string | null
+  resultChars?: number | null
 }
 
 export type AgentRagStatus =
+  | 'loading'
   | 'success_with_sources'
   | 'no_relevant_sources'
   | 'knowledge_base_empty'
@@ -71,11 +101,14 @@ export type AgentToolCall = {
   startedAt: string | null
   completedAt: string | null
   durationMs: number | null
+  argumentCount: number | null
   inputSummary: string | null
   outputSummary: string | null
+  resultChars: number | null
   errorCode: string | null
   errorMessage: string | null
   truncated: boolean | null
+  cached?: boolean
   rag: AgentRag | null
 }
 
@@ -88,6 +121,7 @@ export type AgentTraceStep = {
   completedAt: string | null
   durationMs: number | null
   toolNames: string[]
+  toolCount: number | null
   summary: string
   toolCalls: AgentToolCall[]
   events: AgentTraceEvent[]
@@ -105,12 +139,18 @@ export type AgentRun = {
   status: AgentRunStatus
   answer: string | null
   stopReason: string | null
+  startedAt?: string | null
+  completedAt?: string | null
+  durationMs?: number | null
   steps: AgentTraceStep[]
   events: AgentTraceEvent[]
   usage: AgentUsage
+  requestId?: string | null
+  lastSequence?: number
 }
 
 export type AgentRunInput = {
   message: string
   history: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
+  timeoutSeconds?: number
 }

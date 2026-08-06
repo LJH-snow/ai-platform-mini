@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
 from app.agents import (
+    AgentAnswerChunk,
     AgentDecision,
     AgentMessage,
     AgentModel,
@@ -17,13 +19,15 @@ from app.agents import (
     AgentTool,
     ToolCall,
 )
+from app.agents.runtime import AGENT_QUOTA_FAILURE
 from app.auth.models import APIKey
 from app.core.context import RequestContext
 from app.exceptions.base import ProviderError, QuotaExceededError
+from app.providers.results import ProviderChatResult
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.service import QuotaService
 from app.quota.token_estimator import estimate_prompt_tokens
-from app.runs.protocols import RunTraceRecorderFactory
+from app.runs.protocols import AgentEventObserver, RunTraceRecorderFactory
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
@@ -67,6 +71,20 @@ class AgentRuntimeFactory(Protocol):
     ) -> AgentRuntime: ...
 
 
+class AgentStreamingRuntimeFactory(Protocol):
+    """Optional extension implemented by runtimes that accept an observer."""
+
+    def __call__(
+        self,
+        model: AgentModel,
+        tools: Mapping[str, AgentTool] | None,
+        *,
+        tool_executor: ToolExecutor | None = None,
+        recorder_factory: RunTraceRecorderFactory | None = None,
+        observer: AgentEventObserver,
+    ) -> AgentRuntime: ...
+
+
 class _ChatServiceAgentModel:
     """Adapt ChatService's text response to the current Runtime protocol."""
 
@@ -84,6 +102,7 @@ class _ChatServiceAgentModel:
         self.actual_model = request.model or chat_service.default_model
         self._model_call_count = 0
         self._usage_complete = True
+        self._answer_stream_usage_recorded = False
         self._prompt_reservation_guard: Callable[[int], Awaitable[None]] | None = None
 
     def set_prompt_reservation_guard(
@@ -145,6 +164,84 @@ class _ChatServiceAgentModel:
             token_usage=token_usage,
             usage_complete=self._usage_complete,
         )
+
+    async def _reserve_prompt(self, transcript: str, system_prompt: str) -> None:
+        if self._prompt_reservation_guard is not None:
+            await self._prompt_reservation_guard(
+                estimate_prompt_tokens(
+                    [
+                        ("system", system_prompt),
+                        (
+                            "user",
+                            f"{transcript}\n\n"
+                            "Write the final answer to the user. Return answer text "
+                            "only; do not return JSON or discuss this instruction.",
+                        ),
+                    ]
+                )
+            )
+
+    async def _record_chunk_usage(self, chunk: ProviderChatResult) -> None:
+        if not chunk.done or self._answer_stream_usage_recorded:
+            return
+        self._answer_stream_usage_recorded = True
+        prompt_tokens = chunk.prompt_tokens
+        completion_tokens = chunk.completion_tokens
+        if prompt_tokens is None or completion_tokens is None:
+            self._usage_complete = False
+        if prompt_tokens is None:
+            self.prompt_tokens = None
+        elif self.prompt_tokens is not None:
+            self.prompt_tokens += prompt_tokens
+        if completion_tokens is None:
+            self.completion_tokens = None
+        elif self.completion_tokens is not None:
+            self.completion_tokens += completion_tokens
+
+    def _mark_answer_stream_usage_incomplete(self) -> None:
+        """Discard completion totals when the final answer stream is incomplete."""
+        self._usage_complete = False
+        self.completion_tokens = None
+        if self.prompt_tokens == 0:
+            self.prompt_tokens = None
+
+    async def stream_answer(self, state: AgentState) -> AsyncIterator[AgentAnswerChunk]:
+        """Stream a fresh final answer; never forwards the JSON decision response."""
+        transcript = self._build_transcript(state)
+        system_prompt = self._request.system_prompt or ""
+        await self._reserve_prompt(transcript, system_prompt)
+        request = ChatRequest(
+            message=(
+                f"{transcript}\n\n"
+                "Write the final answer to the user. Return answer text only; "
+                "do not return JSON or discuss this instruction."
+            ),
+            model=self._request.model,
+            system_prompt=system_prompt or None,
+            history=[],
+            max_tokens=self._remaining_max_tokens(),
+        )
+        self._model_call_count += 1
+        saw_terminal = False
+        try:
+            async for chunk in self._chat_service.chat_stream(request):
+                await self._record_chunk_usage(chunk)
+                if chunk.model:
+                    self.actual_model = chunk.model
+                saw_terminal = saw_terminal or chunk.done
+                yield AgentAnswerChunk(
+                    content=chunk.content,
+                    model=chunk.model,
+                    prompt_tokens=chunk.prompt_tokens,
+                    completion_tokens=chunk.completion_tokens,
+                    done=chunk.done,
+                )
+        except BaseException:
+            self._mark_answer_stream_usage_incomplete()
+            raise
+        finally:
+            if not saw_terminal:
+                self._mark_answer_stream_usage_incomplete()
 
     @property
     def has_model_call(self) -> bool:
@@ -268,6 +365,9 @@ class AgentService:
         *,
         context: RequestContext,
         api_key: APIKey,
+        observer: AgentEventObserver | None = None,
+        cancel_event: asyncio.Event | None = None,
+        streaming: bool = False,
     ) -> AgentRunOutcome:
         """Run an Agent request and settle platform quota and usage boundaries."""
         model = _ChatServiceAgentModel(
@@ -299,32 +399,75 @@ class AgentService:
 
         model.set_prompt_reservation_guard(ensure_prompt_reservation)
         if self._recorder_factory is None:
-            runtime = self._runtime_factory(
-                model,
-                None,
-                tool_executor=self._tool_executor,
-            )
+            if observer is None:
+                runtime = self._runtime_factory(
+                    model, None, tool_executor=self._tool_executor
+                )
+            else:
+                streaming_factory = cast(
+                    AgentStreamingRuntimeFactory, self._runtime_factory
+                )
+                runtime = streaming_factory(
+                    model, None, tool_executor=self._tool_executor, observer=observer
+                )
         else:
-            runtime = self._runtime_factory(
-                model,
-                None,
-                tool_executor=self._tool_executor,
-                recorder_factory=self._recorder_factory,
-            )
+            if observer is None:
+                runtime = self._runtime_factory(
+                    model,
+                    None,
+                    tool_executor=self._tool_executor,
+                    recorder_factory=self._recorder_factory,
+                )
+            else:
+                streaming_factory = cast(
+                    AgentStreamingRuntimeFactory, self._runtime_factory
+                )
+                runtime = streaming_factory(
+                    model,
+                    None,
+                    tool_executor=self._tool_executor,
+                    recorder_factory=self._recorder_factory,
+                    observer=observer,
+                )
         started = time.monotonic()
 
         async with ReservationLifecycle(reservation, self._quota_service) as lifecycle:
             try:
-                result = await lifecycle.run(
-                    runtime.run(
-                        request.message,
-                        max_steps=request.max_steps,
-                        timeout=request.timeout_seconds,
-                        token_budget=request.token_budget,
-                        request_id=context.request_id,
-                        model=model.actual_model,
-                    )
+                runtime_kwargs: dict[str, object] = {}
+                if streaming:
+                    runtime_kwargs["stream_answer"] = True
+                runtime_run = cast(
+                    Callable[..., Awaitable[AgentRunResult]], runtime.run
                 )
+                if cancel_event is not None:
+                    result = await lifecycle.run(
+                        runtime_run(
+                            request.message,
+                            max_steps=request.max_steps,
+                            timeout=request.timeout_seconds,
+                            token_budget=request.token_budget,
+                            request_id=context.request_id,
+                            model=model.actual_model,
+                            cancel_event=cancel_event,
+                            tool_context_metadata={"owner_key_hash": api_key.key},
+                            **runtime_kwargs,
+                        ),
+                        return_quota_failure_result=True,
+                    )
+                else:
+                    result = await lifecycle.run(
+                        runtime_run(
+                            request.message,
+                            max_steps=request.max_steps,
+                            timeout=request.timeout_seconds,
+                            token_budget=request.token_budget,
+                            request_id=context.request_id,
+                            model=model.actual_model,
+                            tool_context_metadata={"owner_key_hash": api_key.key},
+                            **runtime_kwargs,
+                        ),
+                        return_quota_failure_result=True,
+                    )
             except QuotaExceededError:
                 if model.has_model_call:
                     elapsed_ms = (time.monotonic() - started) * 1000
@@ -338,19 +481,25 @@ class AgentService:
                 raise
 
             elapsed_ms = (time.monotonic() - started) * 1000
+            quota_failure = result.error == AGENT_QUOTA_FAILURE
             await self._record_usage(
                 context=context,
                 model=model,
                 answer=result.answer,
-                stop_reason=result.stop_reason.value,
+                stop_reason=(
+                    "quota_exceeded" if quota_failure else result.stop_reason.value
+                ),
                 latency_ms=elapsed_ms,
             )
-            await lifecycle.settle()
+            if quota_failure:
+                await lifecycle.release()
+            else:
+                await lifecycle.settle()
 
-        if result.status.value == "failed":
+        if result.status.value == "failed" and not quota_failure:
             raise self._map_runtime_failure(result)
 
-        return AgentRunOutcome(
+        outcome = AgentRunOutcome(
             result=result,
             model=model.actual_model,
             prompt_tokens=model.prompt_tokens,
@@ -359,6 +508,9 @@ class AgentService:
                 model.prompt_tokens is None or model.completion_tokens is None
             ),
         )
+        if quota_failure and observer is None and not streaming:
+            raise QuotaExceededError("Quota exceeded.")
+        return outcome
 
     async def _record_usage(
         self,

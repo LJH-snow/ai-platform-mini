@@ -42,6 +42,18 @@ def _admin_key_hashes() -> frozenset[str]:
     return frozenset(hash_api_key(k.strip()) for k in raw.split(",") if k.strip())
 
 
+def is_configured_admin_key_hash(key_hash: str) -> bool:
+    """Return whether a key hash belongs to the configured admin allowlist."""
+
+    return key_hash in _admin_key_hashes()
+
+
+def is_configured_admin_key_prefix(prefix: str) -> bool:
+    """Return whether a hash prefix belongs to a configured admin key."""
+
+    return any(key_hash.startswith(prefix) for key_hash in _admin_key_hashes())
+
+
 async def require_admin_key(
     request: Request,
     credentials: Annotated[

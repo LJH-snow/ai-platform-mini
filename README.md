@@ -14,7 +14,8 @@
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
-- 前端 Agent Console：[阶段 4 已接入同步 Agent Run Trace、Tool 级 RAG 来源卡片与安全降级；不提供 Agent SSE、实时 Trace 或回答内精确引用](docs/roadmap/2026-08-05-frontend-agent-console-development-roadmap.md)
+- 前端 Agent Console：[阶段 6 已接入 Agent SSE、实时 Trace、Tool/RAG 状态和错误边界；开发期 Vite proxy 已用于真实浏览器流式验证](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md)
+- 前端平台壳层：默认 Dashboard、对话工作台、Prompt Studio、模型目录和管理员后台导航已接入。
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
@@ -42,7 +43,9 @@
 
 ## Agent Run RAG public contract
 
-`POST /api/v1/agent/runs` 保持同步 JSON 语义。对于实际执行的 `knowledge_search` Tool Call，响应可以在对应的 `steps[].tool_calls[]` 中增加可选 `rag` 字段；旧客户端可以忽略该字段。该扩展不提供 Agent SSE、实时 Trace 或回答内精确引用。
+`POST /api/v1/agent/runs` 保持同步 JSON 语义。对于实际执行的 `knowledge_search` Tool Call，响应可以在对应的 `steps[].tool_calls[]` 中增加可选 `rag` 字段；旧客户端可以忽略该字段。Agent SSE 另由 `POST /api/v1/agent/runs/stream` 提供，RAG 事件仍只使用同一安全投影，不提供回答内精确引用。
+
+Agent SSE 还会把内部 `MODEL_DECISION` 投影为可选的 `step_planned` 事件，公开 `decision_kind`、`tool_names`、`tool_count` 和安全 `summary`。Tool 事件可以公开有限的 `argument_count`、`input_summary`、`output_summary` 和 `result_chars`：calculator 的 expression/result 会经过长度限制和敏感信息清洗，knowledge_search 不公开原始 query，只提供检索状态和 RAG 安全来源，未知工具只提供参数数量和结果字符数。原始 Tool payload、Prompt、Provider 响应和模型内部推理仍不会公开。
 
 公开的 `rag` 结构为：
 
@@ -83,11 +86,11 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 阶段 3 当前能力：
 
 - 普通模式继续解析 `POST /v1/chat/completions?stream=true` 的真实 SSE 增量，不把普通聊天伪装成 Agent Trace；
-- Agent 模式使用同步 JSON 请求，等待期间明确显示“完成后加载 Trace，非实时”；
+- Agent 模式现在使用 Agent SSE 实时更新；同步 JSON 客户端仍保留用于兼容和回归；
 - 左侧最终回答与右侧 Run 状态联动，支持 `completed`、`stopped`、`failed`、`cancelled`、`timed_out`，并区分浏览器中止等待与后端取消终态；
 - 领域适配层稳定排序并去重步骤/事件，组件不直接依赖后端原始 JSON；
-- 步骤卡片展示序号、决策类型、状态、工具名称和安全摘要；后端公开契约没有时间戳与耗时，因此显示“后端未提供”，不会补零或伪造；
-- Tool Call 卡片支持 `calculator` 与未知工具的成功、失败、超时、取消和未知状态；当前公开契约不包含工具输入/输出及错误详情，因此对应摘要明确显示“后端未提供”；
+- 步骤卡片展示序号、决策类型、状态、工具名称和后端提供的安全摘要；后端公开契约没有时间戳与耗时，因此显示“后端未提供”，不会补零或伪造；
+- Tool Call 卡片支持 `calculator` 与未知工具的成功、失败、超时、取消和未知状态；后端现在提供有界安全摘要：calculator 展示脱敏后的 expression/result，knowledge_search 隐藏原始 query 并展示 RAG 状态，未知工具只展示参数数量和结果字符数；原始 payload 仍显示为“后端未提供”；
 - 仅在后端响应包含 `run_id` 时展示 Run ID；Token 仅在公开 `usage` 字段非空时展示实际值；
 - 支持步骤与工具摘要展开/收起、停止本地请求、失败后重新运行、新建会话和清空会话；窄屏布局避免 Trace 横向溢出；
 - 前端对 HTTP、网络、Abort 和异常响应进行安全归一化，不渲染堆栈、内部路径、API Key、Provider 原始响应或模型思维链。
@@ -99,7 +102,18 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - 支持有来源、来源缺失、空来源、无相关来源、知识库为空、RAG 服务不可用、Embedding 失败、输出不可用和其他失败状态；服务故障不会伪装成无相关来源；
 - 来源片段遵循后端公开边界，并在前端显示截断/安全提示；RAG 内容始终作为不可信参考材料以普通文本渲染，不执行其中的指令或 HTML。
 
-当前边界：后端 Agent Run API 是同步 JSON，不提供 Agent SSE，因此运行中的具体模型决策和工具状态无法实时展示；前端只在请求完成后渲染真实 Trace 和 Tool 级来源卡片。来源列表用于安全展示检索结果，不证明回答中的精确引用，也不提供实时 RAG Trace。公开响应也没有事件时间、步骤耗时、工具参数、工具输出或工具错误详情。Agent SSE、持久化 Trace 查询和回答内精确引用均未实现。
+阶段 5 当前能力：
+
+- 核心输入、发送、停止、新建、清空、重试以及 Step/Tool/RAG disclosure 均支持键盘操作，并提供正确的 `aria-expanded`、`aria-controls` 和动态 accessible name；多行输入保留 Enter，使用 `Ctrl/⌘ + Enter` 发送或运行；
+- 通过单独的低频 live region 播报 Chat、Agent、RAG 和重试关键状态，SSE 增量不会逐条触发播报；状态同时提供文字和结构表达，不依赖颜色；
+- Request ID 与真实 Run ID 提供复制反馈；Chat/Agent 错误使用安全文案并支持重试，重试和会话切换隔离旧回答、Trace、来源、错误及晚到回调；
+- 响应式目标覆盖 320px、375px、768px、1024px 和 1440px，长回答与长标识支持换行或安全截断；
+- Agent SSE 解析真实的 `run_started`、Step、Tool、RAG、回答和终止事件；事件按 `run_id`/`sequence` 隔离，重复或乱序事件安全忽略；
+- 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（7 个测试文件、79 个测试全部通过）和生产构建。真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行；320px、375px、768px、1024px、1440px 五档均无横向溢出。`npm run a11y:smoke` 已使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG 路径通过：初始空态与真实 Agent/RAG 状态均为 axe `violations=0`；初始空态另有 1 个 `incomplete` 的 color-contrast（`.emptyIcon` 内容过短，axe 无法判断），不能表述为 axe 完全没有 incomplete。4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、键盘 Space 后焦点保持、live region 非逐字播报和 320px 无横向溢出均通过；完整 VoiceOver/NVDA/Orca 仍未验证。
+
+当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 仅是 legacy/非 streaming 兼容事件，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。后端不提供事件时间、步骤耗时或精确 Token 统计/usage，前端不补造这些数据。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。开发期 Vite proxy 的 key 只由 Node proxy 注入，不进入浏览器 bundle；真实浏览器已验证空库 `RAG loading` → `knowledge_base_empty` → `run_completed`，并在真实 ingest 53 个 chunks 后验证 `success_with_sources` 和 5 条安全来源；该次 UI Run 后续因 `token_budget_exceeded` 停止。独立真实 SSE 请求收到多个 `answer_delta`，并以唯一 `run_timed_out`（`deadline_exceeded`）终止，不能写成 `run_completed`。当前默认 `RAG_ENABLED=false`，上述验证使用显式真实依赖；RAG 安全投影和状态仅由后端/组件测试及真实验证覆盖，不能伪造来源。完整屏幕阅读器仍未验证；事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
+
+> [Agent SSE 事件契约](docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md) 和 [阶段 6 开发记录](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md) 记录真实事件、字段、顺序、终止与取消边界。
 
 启动前端开发服务器：
 
@@ -109,20 +123,31 @@ npm install
 npm run dev
 ```
 
+连接本地后端和开发 API Key：
+
+```bash
+cd frontend
+AI_PLATFORM_DEV_API_BASE_URL=http://127.0.0.1:8000 \
+AI_PLATFORM_DEV_API_KEY=sk-your-dev-key \
+npm run dev
+```
+
 ### 前端鉴权与跨源边界
 
-前端通过运行时配置读取 Chat/Agent API 地址和 Bearer API Key，不把真实 API Key 写入源码、Git、默认配置或构建产物。开发时可以在页面加载前注入运行时配置：
+开发期 Vite dev server 会把同源 `/api` 和 `/v1` 转发到 `AI_PLATFORM_DEV_API_BASE_URL`（默认 `http://127.0.0.1:8000`），并从 Node 进程环境变量 `AI_PLATFORM_DEV_API_KEY` 注入后端请求的 `Authorization` header。它们不使用 `VITE_` 前缀，不进入 `import.meta.env`，也不会写入浏览器源码、Git、默认配置或生产构建；普通 Chat SSE 和 Agent SSE 都通过标准 Vite proxy 保持流式。
+
+生产入口仍通过运行时配置读取 Chat/Agent API 地址和 Bearer API Key。开发时如需绕过 dev proxy，也可以在页面加载前注入运行时配置：
 
 ```html
 <script>
   window.__AI_PLATFORM_RUNTIME_CONFIG__ = {
-    apiBaseUrl: 'http://localhost:8000',
-    apiKey: '<runtime-injected-key>',
-  }
+    apiBaseUrl: "http://localhost:8000",
+    apiKey: "<runtime-injected-key>",
+  };
 </script>
 ```
 
-当前后端未启用 `CORSMiddleware`，Vite 也没有默认 proxy；浏览器跨源直连仍需后端允许对应 Origin。浏览器中的 Bearer Key 不属于生产级密钥保护方案，生产部署应优先使用同源 BFF/服务端代理或其他受控鉴权边界。本阶段不修改后端，也不通过前端绕过 CORS 或鉴权。
+生产构建不启用 Vite dev proxy；浏览器跨源直连仍需后端允许对应 Origin。浏览器中的 Bearer Key 不属于生产级密钥保护方案，生产部署应优先使用同源 BFF/服务端代理或其他受控鉴权边界。本阶段不修改后端，也不通过前端绕过 CORS 或鉴权。
 
 前端验证命令：
 
@@ -195,22 +220,22 @@ INTEGRATION_TEST=1 pytest
 
 ## API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/v1/health` | Liveness probe |
-| GET | `/api/v1/ready` | Readiness probe (checks downstream) |
-| GET | `/api/v1/health/mcp` | MCP lifecycle/readiness status (when enabled) |
-| GET | `/api/v1/usage` | Token usage statistics |
-| POST | `/v1/chat/completions` | OpenAI-compatible chat completions (supports SSE streaming) |
-| GET | `/api/v1/models` | List available LLM models |
-| POST | `/api/v1/chat` | Generate a chat completion with model-based provider routing |
-| POST | `/api/v1/chat/rag` | RAG-enhanced chat completion (requires `RAG_ENABLED=true`) |
-| POST | `/api/v1/agent/runs` | Bounded Agent Runtime run (model decision and controlled tool loop) |
-| POST | `/admin/api-keys` | Create a new API key (admin only) |
-| GET | `/admin/api-keys` | List all API keys (admin only) |
-| DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only) |
-| GET | `/admin/usage/daily` | Get daily token usage for an API key (admin only) |
-| GET | `/admin/usage/monthly` | Get monthly token usage for an API key (admin only) |
+| Method | Path                       | Description                                                         |
+| ------ | -------------------------- | ------------------------------------------------------------------- |
+| GET    | `/api/v1/health`           | Liveness probe                                                      |
+| GET    | `/api/v1/ready`            | Readiness probe (checks downstream)                                 |
+| GET    | `/api/v1/health/mcp`       | MCP lifecycle/readiness status (when enabled)                       |
+| GET    | `/api/v1/usage`            | Token usage statistics                                              |
+| POST   | `/v1/chat/completions`     | OpenAI-compatible chat completions (supports SSE streaming)         |
+| GET    | `/api/v1/models`           | List available LLM models                                           |
+| POST   | `/api/v1/chat`             | Generate a chat completion with model-based provider routing        |
+| POST   | `/api/v1/chat/rag`         | RAG-enhanced chat completion (requires `RAG_ENABLED=true`)          |
+| POST   | `/api/v1/agent/runs`       | Bounded Agent Runtime run (model decision and controlled tool loop) |
+| POST   | `/admin/api-keys`          | Create a new API key (admin only)                                   |
+| GET    | `/admin/api-keys`          | List all API keys (admin only)                                      |
+| DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only)                       |
+| GET    | `/admin/usage/daily`       | Get daily token usage for an API key (admin only)                   |
+| GET    | `/admin/usage/monthly`     | Get monthly token usage for an API key (admin only)                 |
 
 ### Chat request example
 
@@ -229,7 +254,7 @@ INTEGRATION_TEST=1 pytest
 {
   "model": "qwen3:4b",
   "created_at": "2026-08-02T00:00:00Z",
-  "message": {"role": "assistant", "content": "Hi there!"},
+  "message": { "role": "assistant", "content": "Hi there!" },
   "done": true,
   "done_reason": "stop"
 }
@@ -320,8 +345,8 @@ DEBUG=false
 LOG_LEVEL=INFO
 LLM_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_DEFAULT_MODEL=qwen3:4b
-OLLAMA_TIMEOUT_SECONDS=60
+OLLAMA_DEFAULT_MODEL=qwen3:4b-instruct
+OLLAMA_TIMEOUT_SECONDS=120
 
 # OpenAI Provider (non-default `gpt-*` models route here)
 OPENAI_API_KEY=
@@ -351,6 +376,9 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 
 # RAG (Retrieval-Augmented Generation)
 RAG_ENABLED=false
+
+# Agent Runtime
+# Agent requests default to a 120-second global deadline; the frontend sends this explicitly.
 RAG_EMBEDDING_MODEL=nomic-embed-text
 RAG_EMBEDDING_DIMENSIONS=768
 RAG_CHUNK_SIZE=500
@@ -683,7 +711,7 @@ RAG 两阶段设计（prepare/answer）将检索与生成解耦，允许在配�
 - 实现独立于 FastAPI 的有界 Agent Runtime：模型决策、Tool 调用、结果回填和多步循环
 - 支持 `max_steps`、deadline/timeout、外部取消和 provider-reported Token budget；未知 Token 用量不会被伪装成 0
 - 新增 `POST /api/v1/agent/runs`，通过 `AgentService` 复用现有 ChatService、鉴权、限流、Quota、Usage 和统一异常边界
-- API 只返回步骤和事件摘要，不暴露工具参数、工具输出或 Provider 原始响应
+- API 只返回步骤和事件安全摘要，不暴露原始工具参数、原始工具输出或 Provider 原始响应
 - 本 Sprint 不声称已经完成通用 Tool Registry、RAG Tool、MCP、Memory、Multi-Agent、Agent SSE 或前端 Agent UI
 
 ### Sprint 8 学习总结
@@ -712,7 +740,6 @@ Tool Registry 解决“有哪些工具”，Tool Executor 解决“能否安全�
 - 空知识库、无相关上下文、RAG 存储不可用和 embedding 失败映射为稳定错误码，未知异常仍由 ToolExecutor 安全归一化。
 - 容器仅在 RAG 服务可用时注册 `knowledge_search`；RAG 关闭时 Agent 继续保持 `calculator` 默认能力。
 - 新增普通 Agent + Knowledge Search 集成测试，并保留 `/api/v1/chat/rag` 兼容链路。
-
 
 ### Sprint 11（MCP foundation 已完成，生产化切片待后续）
 
@@ -748,3 +775,61 @@ RAG Tool 化的关键不是复制一套检索代码，而是把现有 `RAGServic
 #### Run Trace Foundation 学习总结
 
 Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制一套 Agent Loop。单 run Recorder 加上显式 `recorder_factory` 边界，可以在保持简单的同时避免并发状态污染。脱敏和截断必须位于记录边界，默认不保存 prompt、工具参数和外部检索原文。持久化、实时推送和查询接口应作为后续 Sprint 的独立能力演进。
+
+### 阶段 5 / Agent Console 收口与阶段 6 浏览器验收
+
+- 完成键盘可访问性、单独低频 live region、非颜色状态表达、Step/Tool/RAG disclosure、Request ID/Run ID 复制反馈、Chat/Agent 错误恢复和旧 Run 隔离。
+- 前端五项门禁通过：format、lint、typecheck、7 个测试文件中的 79 个测试和 build；真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
+- 真实浏览器已验证 320/375/768/1024/1440 五档无横向溢出，并核对 Agent 模式展示。`npm run a11y:smoke` 使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG 路径通过：初始空态与真实 Agent/RAG 状态 axe `violations=0`；初始空态有 1 个 `incomplete` color-contrast（`.emptyIcon` 内容过短无法判断），不是 violation，也不能写成 axe 完全无 incomplete。4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、Space 后焦点保持、live region 非逐字播报和 320px 无横向溢出通过。Ollama 已安装 `nomic-embed-text`，真实调用 `/api/embed` 返回 1 个 768 维向量；PostgreSQL/pgvector 空库的 Agent SSE 路径已观察到 `RAG loading` → `knowledge_base_empty` → `run_completed`。随后使用仓库已有 `docs/superpowers/specs/2026-08-04-agent-runtime-design.md` 真实 ingest 53 个 chunks，浏览器真实来源路径显示 `success_with_sources` 和 5 条真实来源，公开字段为 `document_id`、`chunk_id`、`chunk_index`、`distance`、`content` 的安全投影；该次 UI Run 后续因 `token_budget_exceeded` 停止。另一次直接真实 SSE 请求使用 `token_budget=8192`、`max_steps=3`，收到 `rag_started`、`tool_completed`（`success_with_sources`，5 条 refs）、多个真实 `answer_delta`，并以唯一 `run_timed_out`（`deadline_exceeded`）终止，因此不能把该次请求记录为 `run_completed`。当前默认 `RAG_ENABLED=false`；以上 RAG 浏览器验证使用显式启用的真实本地依赖，不能将测试或安全投影写成伪造来源。完整 VoiceOver/NVDA/Orca 仍未验证，浏览器 DOM、键盘、ARIA、live region 和五档响应式已验证。
+- 保留阶段 2—5 的 Chat SSE、同步 Agent Trace、Tool 状态和 RAG 来源契约；阶段 6 已实现 Agent SSE、实时 Trace 和实时 RAG 状态投影，持久化查询和回答内精确引用仍未实现。
+
+#### 阶段 5 学习总结
+
+本阶段确认可访问性状态应与视觉增量渲染分离，避免 SSE 内容更新造成过度播报；真实浏览器验证也必须覆盖代理、断连、重试和停止等待等状态边界。开发期 Vite proxy 让浏览器能够在不把 key 注入 bundle 的前提下观察真实 `answer_delta`、Trace 和 Tool Call；RAG 已通过真实 embedding、空库查询、53 个 chunks ingest、5 条安全来源和真实超时终止路径验证。成功来源那次 UI Run 因 `token_budget_exceeded` 停止，直接 SSE 验证则以唯一 `run_timed_out(deadline_exceeded)` 终止，不能改写为成功完成。浏览器 DOM、键盘、ARIA、live region 和五档响应式已验证，但完整屏幕阅读器仍受环境限制未完成；阶段 7 未进入，当前等待人工 Code Review。
+
+### 阶段 6 Review 修复收口（待人工 Code Review）
+
+- 将 Agent SSE 的“仍在执行”状态与最后展示事件状态分离，`tool_completed`/`tool_failed` 后不会误启用输入或覆盖活动请求。
+- 每次新的 Agent Run 都重置流式 reducer，保证 sequence、terminal、run_id、回答和 Trace 不跨 Run 污染。
+- Run 启动后发生 prompt quota 扩展或 reservation 续期失败时，Runtime、Service 和 SSE 统一以唯一 `run_failed` 终态收口；setup failure 只保留给 Run 尚未启动的初始化失败。
+- Agent SSE producer 发生未预期异常时，根据是否已观察到 `run_started` 选择 `stream_setup_failed` 或合成唯一 `run_failed`，避免已启动 Run 被错误伪装成 setup error。
+- Agent SSE 显式把 `X-RateLimit-Limit`、`X-RateLimit-Remaining` 和 `X-RateLimit-Reset` 传入实际的 `StreamingResponse`。
+- 新增前后端回归测试；第三轮修复后最终后端门禁为 478 passed、28 skipped，前端门禁为 7 个测试文件 83 passed，另有 1 个既有 Starlette/httpx 弃用警告。
+
+#### 阶段 6 Review 修复学习总结
+
+这轮修复确认了 SSE 的生命周期真相不能由最后一个展示事件推导，必须单独维护流是否仍在执行。流式 reducer 的 terminal 状态属于单个 Run，下一次执行前必须显式初始化，而不能依赖上次终态自然覆盖。配额续期失败通过带有领域异常标记的任务取消传递给 Runtime，并由 Service 统一记录用量、释放 reservation 和输出唯一失败终态，同时保留普通 Chat SSE 的既有异常语义。实际响应 Header 必须写入最终返回的 `StreamingResponse`，不能只修改 FastAPI 注入的临时 `Response`。此外，SSE producer 的异常分类必须依赖已观察到的生命周期事件，而不能仅依赖是否已经观察到终止事件。
+
+### 管理员后台与 HR RAG 演示
+
+当前前后端已支持管理员控制台：管理员登录后可以创建普通用户 API Key（原始 Key 只在创建成功时显示）、查看普通 Key 状态、撤销普通 Key、按北京时间查看 Token 用量，以及查询 Agent Run、工具调用和 RAG 来源的安全摘要。普通用户可在前端“用户 API Key”区域粘贴普通 Key，不需要在前端启动时注入用户 Key；开发环境代理仍可通过 `AI_PLATFORM_DEV_API_KEY` 提供可选的本地 fallback。
+
+认证 Key 使用 PostgreSQL 持久化时请设置 `AUTH_STORAGE=postgres`，RAG 演示请设置 `RAG_ENABLED=true` 并确保 PostgreSQL/pgvector 与 Ollama 可用。完整 HR 演示流程、提示词和常见问题见 [管理员、API Key 与 HR RAG 演示说明](docs/admin-rag-demo.md)。
+
+### 产品化前端平台壳层（2026-08-06）
+
+前端默认进入 **AI Platform Mini · 平台概览**，不再直接把工程控制台作为首页。平台导航现在包含：
+
+- 平台概览：展示 API Gateway、Model Provider、Agent Runtime 和 RAG 的真实配置状态，以及四条 HR 演示路径。
+- 对话工作台：保留真实 Chat SSE、Agent SSE、Agent Trace、Tool Call、RAG 来源、Request ID 和重试/停止行为。
+- Prompt Studio：提供代码审查、技术总结、面试模拟和知识库问答模板；模板编辑和保存使用浏览器 `localStorage`，可一键带入真实对话。
+- 模型目录：通过现有 `/api/v1/models` 读取真实模型列表，不伪造模型启停或删除能力。
+- 管理员后台：继续复用 API Key、Token 用量和 Agent Run 审计页面。
+
+本轮只扩展展示层，没有新增虚假统计和不存在的后端接口。默认首页不配置普通用户 Key 时会明确显示 `Key required`，模型目录也会提示先配置普通用户 Key。HR 演示建议按“平台概览 → Agent 工作流 → Trace/RAG 来源 → Prompt Studio → 管理员审计”的顺序进行。
+
+### Sprint 12（PDF 文档入库已完成）
+
+- 新增 `POST /api/v1/rag/documents`：接收 multipart PDF，执行签名校验、大小/页数/文本长度限制、`pypdf` 文本提取、分块、Ollama Embedding 和 pgvector 入库。
+- 新增 `GET /api/v1/rag/documents`：只返回文档元数据、分块数、文本字符数、Embedding 模型和创建时间，不返回原文或向量。
+- 上传接口返回 `202` 和任务状态；通过 `GET /api/v1/rag/tasks/{task_id}` 查询 queued/processing/completed/failed 状态。worker 仅在进程内暂存 PDF bytes，不保存原始 PDF 文件。
+- 文档和 chunks 使用 UUID；文档按 API Key 的 SHA-256 hash 隔离。新增 `DELETE /api/v1/rag/documents/{document_id}` 和 `GET /api/v1/rag/documents/{document_id}/preview`，仅允许所属 Key 访问。
+- 新增知识库页面：支持选择/拖拽 PDF、显示真实入库状态、列出已索引文档，并能跳转到 RAG 问答工作台。
+- 新增稳定错误边界：无效 PDF 返回 `RAG_DOCUMENT_INVALID`，超出上传限制返回 `RAG_DOCUMENT_TOO_LARGE`，存储和 Embedding 故障继续返回 503 类错误。
+- 新增 `pypdf` 和 `python-multipart` 依赖，以及上传大小、页数和文本字符数配置项。
+
+### Sprint 12 学习总结
+
+这次把 RAG 从“已有检索能力”延伸到“可演示的文档入库闭环”，前端展示的每个状态都对应真实后端阶段，没有伪造上传进度。PDF 解析只把受限的纯文本交给分块和 Embedding，API 返回安全元数据和有界文本预览，避免把向量或原始文件暴露给浏览器。文档列表复用 pgvector 元数据和分块聚合结果，并通过 API Key hash 实现租户隔离。
+
+> 当前队列是单进程内存实现，重启后未完成任务不会恢复；文档数据本身按 API Key hash 隔离。同名 PDF 上传会返回冲突，不会静默覆盖已有文档。

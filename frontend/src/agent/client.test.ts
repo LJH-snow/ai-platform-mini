@@ -45,6 +45,7 @@ describe('createAgentClient', () => {
         body: JSON.stringify({
           message: '2+2',
           history: [{ role: 'user', content: '之前的问题' }],
+          timeout_seconds: 120,
         }),
       }),
     )
@@ -80,6 +81,24 @@ describe('createAgentClient', () => {
     await expect(
       createAgentClient({ fetchImpl: networkFetch }).runAgent(
         { message: '网络', history: [] },
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(AgentNetworkError)
+  })
+
+  it('turns a startup stream_error without run metadata into a network error', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('event: stream_error\ndata: {"error_code":"provider_unavailable"}\n\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    )
+    const client = createAgentClient({ fetchImpl })
+
+    await expect(
+      client.streamAgent?.(
+        { message: '启动', history: [] },
+        { onEvent: vi.fn() },
         new AbortController().signal,
       ),
     ).rejects.toBeInstanceOf(AgentNetworkError)

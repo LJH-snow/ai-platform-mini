@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TypeVar, cast
 
 from app.agents.models import (
+    AgentAnswerChunk,
     AgentDecision,
     AgentEvent,
     AgentEventKind,
@@ -21,7 +24,7 @@ from app.agents.models import (
     ToolResult,
 )
 from app.agents.protocols import AgentModel, AgentTool, ToolContext
-from app.exceptions.base import QuotaExceededError
+from app.exceptions.base import QuotaExceededError, QuotaReservationError
 from app.runs.protocols import AgentEventObserver, RunTraceRecorderProtocol
 from app.tools.executor import ToolExecutor
 
@@ -31,8 +34,13 @@ _TOOL_OUTPUT_TRUNCATION_MARKER = "...[tool output truncated]"
 _TOOL_EXECUTION_ERROR = "tool_execution_failed"
 _TOOL_FAILURE_MESSAGE = "Tool execution failed."
 _TOOL_NOT_FOUND_MESSAGE = "Requested tool is unavailable."
+AGENT_QUOTA_FAILURE = "quota_exceeded"
 
 logger = logging.getLogger(__name__)
+
+
+def _is_quota_renewal_cancellation(error: asyncio.CancelledError) -> bool:
+    return any(isinstance(argument, QuotaReservationError) for argument in error.args)
 
 
 class AgentRuntime:
@@ -57,9 +65,7 @@ class AgentRuntime:
         self._tools = dict(tools or {})
         self._tool_executor = tool_executor
         self._tool_output_max_chars = tool_output_max_chars
-        if observer is not None and (
-            recorder is not None or recorder_factory is not None
-        ):
+        if observer is not None and recorder is not None:
             raise ValueError("provide observer or recorder, not both")
         if recorder is not None and recorder_factory is not None:
             raise ValueError("provide recorder or recorder_factory, not both")
@@ -79,6 +85,8 @@ class AgentRuntime:
         run_id: str | None = None,
         request_id: str | None = None,
         model: str | None = None,
+        stream_answer: bool = False,
+        tool_context_metadata: Mapping[str, object] | None = None,
     ) -> AgentRunResult:
         """Execute one bounded run and return all state and observability data."""
         if not user_input.strip():
@@ -141,6 +149,15 @@ class AgentRuntime:
                     )
 
                 step_index = len(state.steps) + 1
+                self._append_event(
+                    events,
+                    recorder=recorder,
+                    kind=AgentEventKind.STEP_STARTED,
+                    run_id=resolved_run_id,
+                    step_index=step_index,
+                    include_result=False,
+                    include_recorder=False,
+                )
                 try:
                     decision = await self._await_controlled(
                         self._model.decide(state),
@@ -155,7 +172,16 @@ class AgentRuntime:
                         status=self._status_for(stop.reason),
                         stop_reason=stop.reason,
                     )
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as cancellation:
+                    if _is_quota_renewal_cancellation(cancellation):
+                        return self._finish(
+                            recorder=recorder,
+                            state=state,
+                            events=events,
+                            status=RunStatus.FAILED,
+                            stop_reason=StopReason.MODEL_ERROR,
+                            error=AGENT_QUOTA_FAILURE,
+                        )
                     return self._finish(
                         recorder=recorder,
                         state=state,
@@ -164,7 +190,14 @@ class AgentRuntime:
                         stop_reason=StopReason.EXTERNAL_CANCELLED,
                     )
                 except QuotaExceededError:
-                    raise
+                    return self._finish(
+                        recorder=recorder,
+                        state=state,
+                        events=events,
+                        status=RunStatus.FAILED,
+                        stop_reason=StopReason.MODEL_ERROR,
+                        error=AGENT_QUOTA_FAILURE,
+                    )
                 except Exception as exc:
                     return self._finish(
                         recorder=recorder,
@@ -203,6 +236,15 @@ class AgentRuntime:
                     state.token_usage += decision.token_usage
                 if token_budget is not None and state.token_usage > token_budget:
                     state.steps.append(AgentStep(index=step_index, decision=decision))
+                    self._append_event(
+                        events,
+                        recorder=recorder,
+                        kind=AgentEventKind.STEP_COMPLETED,
+                        run_id=resolved_run_id,
+                        step_index=step_index,
+                        include_result=False,
+                        include_recorder=False,
+                    )
                     return self._finish(
                         recorder=recorder,
                         state=state,
@@ -212,25 +254,88 @@ class AgentRuntime:
                     )
 
                 if decision.answer is not None:
+                    answer = decision.answer
+                    if stream_answer:
+                        try:
+                            answer = await self._consume_answer_stream(
+                                events=events,
+                                state=state,
+                                step_index=step_index,
+                                effective_deadline=effective_deadline,
+                                cancel_event=cancel_event,
+                            )
+                        except _RuntimeStop as stop:
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=self._status_for(stop.reason),
+                                stop_reason=stop.reason,
+                            )
+                        except asyncio.CancelledError as cancellation:
+                            if _is_quota_renewal_cancellation(cancellation):
+                                return self._finish(
+                                    recorder=recorder,
+                                    state=state,
+                                    events=events,
+                                    status=RunStatus.FAILED,
+                                    stop_reason=StopReason.MODEL_ERROR,
+                                    error=AGENT_QUOTA_FAILURE,
+                                )
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.CANCELLED,
+                                stop_reason=StopReason.EXTERNAL_CANCELLED,
+                            )
+                        except QuotaExceededError:
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.FAILED,
+                                stop_reason=StopReason.MODEL_ERROR,
+                                error=AGENT_QUOTA_FAILURE,
+                            )
+                        except Exception as exc:
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.FAILED,
+                                stop_reason=StopReason.MODEL_ERROR,
+                                error=str(exc),
+                            )
                     state.messages.append(
-                        AgentMessage(role="assistant", content=decision.answer)
+                        AgentMessage(role="assistant", content=answer)
                     )
+                    if not stream_answer:
+                        self._append_event(
+                            events,
+                            recorder=recorder,
+                            kind=AgentEventKind.ANSWER,
+                            run_id=resolved_run_id,
+                            step_index=step_index,
+                            message=answer,
+                        )
+                    state.steps.append(AgentStep(index=step_index, decision=decision))
                     self._append_event(
                         events,
                         recorder=recorder,
-                        kind=AgentEventKind.ANSWER,
+                        kind=AgentEventKind.STEP_COMPLETED,
                         run_id=resolved_run_id,
                         step_index=step_index,
-                        message=decision.answer,
+                        include_result=False,
+                        include_recorder=False,
                     )
-                    state.steps.append(AgentStep(index=step_index, decision=decision))
                     return self._finish(
                         recorder=recorder,
                         state=state,
                         events=events,
                         status=RunStatus.COMPLETED,
                         stop_reason=StopReason.DIRECT_ANSWER,
-                        answer=decision.answer,
+                        answer=answer,
                     )
 
                 if (
@@ -248,6 +353,7 @@ class AgentRuntime:
                     )
 
                 tool_results: list[ToolResult] = []
+                reused_calculator_result: ToolResult | None = None
                 for tool_call in decision.tool_calls:
                     stop_reason = self._check_stop(effective_deadline, cancel_event)
                     if stop_reason is not None:
@@ -266,31 +372,51 @@ class AgentRuntime:
                         step_index=step_index,
                         tool_call=tool_call,
                     )
-                    try:
-                        result = await self._execute_tool(
-                            tool_call,
-                            resolved_run_id,
-                            step_index,
-                            effective_deadline,
-                            cancel_event,
-                            request_id=state.request_id,
+                    cached_result = self._find_cached_tool_result(state, tool_call)
+                    if cached_result is not None:
+                        result = replace(
+                            cached_result,
+                            call_id=tool_call.call_id,
+                            cached=True,
                         )
-                    except _RuntimeStop as stop:
-                        return self._finish(
-                            recorder=recorder,
-                            state=state,
-                            events=events,
-                            status=self._status_for(stop.reason),
-                            stop_reason=stop.reason,
-                        )
-                    except asyncio.CancelledError:
-                        return self._finish(
-                            recorder=recorder,
-                            state=state,
-                            events=events,
-                            status=RunStatus.CANCELLED,
-                            stop_reason=StopReason.EXTERNAL_CANCELLED,
-                        )
+                        if tool_call.name == "calculator":
+                            reused_calculator_result = result
+                    else:
+                        try:
+                            result = await self._execute_tool(
+                                tool_call,
+                                resolved_run_id,
+                                step_index,
+                                effective_deadline,
+                                cancel_event,
+                                request_id=state.request_id,
+                                metadata=tool_context_metadata,
+                            )
+                        except _RuntimeStop as stop:
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=self._status_for(stop.reason),
+                                stop_reason=stop.reason,
+                            )
+                        except asyncio.CancelledError as cancellation:
+                            if _is_quota_renewal_cancellation(cancellation):
+                                return self._finish(
+                                    recorder=recorder,
+                                    state=state,
+                                    events=events,
+                                    status=RunStatus.FAILED,
+                                    stop_reason=StopReason.MODEL_ERROR,
+                                    error=AGENT_QUOTA_FAILURE,
+                                )
+                            return self._finish(
+                                recorder=recorder,
+                                state=state,
+                                events=events,
+                                status=RunStatus.CANCELLED,
+                                stop_reason=StopReason.EXTERNAL_CANCELLED,
+                            )
                     tool_results.append(result)
                     state.messages.append(
                         AgentMessage(
@@ -322,6 +448,38 @@ class AgentRuntime:
                         tool_results=tuple(tool_results),
                     )
                 )
+                self._append_event(
+                    events,
+                    recorder=recorder,
+                    kind=AgentEventKind.STEP_COMPLETED,
+                    run_id=resolved_run_id,
+                    step_index=step_index,
+                    include_result=False,
+                    include_recorder=False,
+                )
+                if (
+                    reused_calculator_result is not None
+                    and all(call.name == "calculator" for call in decision.tool_calls)
+                    and reused_calculator_result.succeeded
+                ):
+                    return self._finish(
+                        recorder=recorder,
+                        state=state,
+                        events=events,
+                        status=RunStatus.COMPLETED,
+                        stop_reason=StopReason.DIRECT_ANSWER,
+                        answer=reused_calculator_result.content,
+                    )
+            calculator_answer = self._last_calculator_result(state)
+            if calculator_answer is not None:
+                return self._finish(
+                    recorder=recorder,
+                    state=state,
+                    events=events,
+                    status=RunStatus.COMPLETED,
+                    stop_reason=StopReason.DIRECT_ANSWER,
+                    answer=calculator_answer,
+                )
             return self._finish(
                 recorder=recorder,
                 state=state,
@@ -329,7 +487,25 @@ class AgentRuntime:
                 status=RunStatus.STOPPED,
                 stop_reason=StopReason.MAX_STEPS,
             )
-        except asyncio.CancelledError:
+        except QuotaExceededError:
+            return self._finish(
+                recorder=recorder,
+                state=state,
+                events=events,
+                status=RunStatus.FAILED,
+                stop_reason=StopReason.MODEL_ERROR,
+                error=AGENT_QUOTA_FAILURE,
+            )
+        except asyncio.CancelledError as cancellation:
+            if _is_quota_renewal_cancellation(cancellation):
+                return self._finish(
+                    recorder=recorder,
+                    state=state,
+                    events=events,
+                    status=RunStatus.FAILED,
+                    stop_reason=StopReason.MODEL_ERROR,
+                    error=AGENT_QUOTA_FAILURE,
+                )
             return self._finish(
                 recorder=recorder,
                 state=state,
@@ -337,6 +513,98 @@ class AgentRuntime:
                 status=RunStatus.CANCELLED,
                 stop_reason=StopReason.EXTERNAL_CANCELLED,
             )
+
+    async def _consume_answer_stream(
+        self,
+        *,
+        events: list[AgentEvent],
+        state: AgentState,
+        step_index: int,
+        effective_deadline: float | None,
+        cancel_event: asyncio.Event | None,
+    ) -> str:
+        stream_factory = getattr(self._model, "stream_answer", None)
+        if not callable(stream_factory):
+            raise RuntimeError("streaming answer is unavailable")
+        stream = stream_factory(state)
+        if not hasattr(stream, "__aiter__"):
+            raise RuntimeError("streaming answer returned an invalid iterator")
+        iterator = stream.__aiter__()
+        parts: list[str] = []
+        try:
+            while True:
+                try:
+                    chunk = await self._await_controlled(
+                        anext(iterator),
+                        effective_deadline=effective_deadline,
+                        cancel_event=cancel_event,
+                    )
+                except StopAsyncIteration:
+                    break
+                if not isinstance(chunk, AgentAnswerChunk):
+                    raise RuntimeError("streaming answer returned an invalid chunk")
+                if chunk.content:
+                    parts.append(chunk.content)
+                    self._append_event(
+                        events,
+                        recorder=None,
+                        kind=AgentEventKind.ANSWER_DELTA,
+                        run_id=state.run_id,
+                        step_index=step_index,
+                        message=chunk.content,
+                        include_result=False,
+                        include_recorder=False,
+                    )
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                await close()
+        if not parts:
+            raise RuntimeError("streaming answer returned no content")
+        return "".join(parts)
+
+    @staticmethod
+    def _tool_call_fingerprint(tool_call: ToolCall) -> str:
+        return json.dumps(
+            {
+                "name": tool_call.name,
+                "arguments": dict(tool_call.arguments),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+
+    def _find_cached_tool_result(
+        self, state: AgentState, tool_call: ToolCall
+    ) -> ToolResult | None:
+        fingerprint = self._tool_call_fingerprint(tool_call)
+        for step in state.steps:
+            for previous_call, result in zip(
+                step.decision.tool_calls, step.tool_results, strict=False
+            ):
+                if (
+                    result.succeeded
+                    and self._tool_call_fingerprint(previous_call) == fingerprint
+                ):
+                    return result
+        return None
+
+    @staticmethod
+    def _last_calculator_result(state: AgentState) -> str | None:
+        if not state.steps:
+            return None
+        last_step = state.steps[-1]
+        if not last_step.decision.tool_calls:
+            return None
+        if any(call.name != "calculator" for call in last_step.decision.tool_calls):
+            return None
+        if len(last_step.tool_results) != len(last_step.decision.tool_calls):
+            return None
+        if any(not result.succeeded for result in last_step.tool_results):
+            return None
+        return last_step.tool_results[-1].content
 
     async def _execute_tool(
         self,
@@ -346,6 +614,7 @@ class AgentRuntime:
         effective_deadline: float | None,
         cancel_event: asyncio.Event | None,
         request_id: str | None,
+        metadata: Mapping[str, object] | None = None,
     ) -> ToolResult:
         if self._tool_executor is not None:
             remaining = self._remaining(effective_deadline)
@@ -357,6 +626,7 @@ class AgentRuntime:
                         run_id=run_id,
                         step_index=step_index,
                         request_id=request_id,
+                        metadata=metadata or {},
                     ),
                     timeout_seconds=remaining,
                 ),
@@ -389,6 +659,7 @@ class AgentRuntime:
                         run_id=run_id,
                         step_index=step_index,
                         request_id=request_id,
+                        metadata=metadata or {},
                     ),
                 ),
                 effective_deadline=effective_deadline,
@@ -525,6 +796,8 @@ class AgentRuntime:
         status: RunStatus | None = None,
         stop_reason: StopReason | None = None,
         cumulative_token_usage: int | None = None,
+        include_result: bool = True,
+        include_recorder: bool = True,
     ) -> None:
         previous = events[-1] if events else None
         occurred_at = datetime.now(UTC)
@@ -547,7 +820,8 @@ class AgentRuntime:
         )
         events.append(event)
         self._notify_observer(event)
-        self._notify_recorder(recorder, event)
+        if include_recorder:
+            self._notify_recorder(recorder, event)
 
     def _notify_observer(self, event: AgentEvent) -> None:
         if self._observer is None or self._observer is self._recorder:
@@ -617,6 +891,11 @@ class AgentRuntime:
         answer: str | None = None,
         error: str | None = None,
     ) -> AgentRunResult:
+        self._complete_open_steps(
+            recorder=recorder,
+            events=events,
+            run_id=state.run_id,
+        )
         self._append_event(
             events,
             recorder=recorder,
@@ -627,21 +906,67 @@ class AgentRuntime:
             message=error,
             cumulative_token_usage=state.token_usage,
         )
+        result_events = tuple(
+            replace(event, sequence=index)
+            for index, event in enumerate(
+                (event for event in events if include_result_event(event)),
+                start=1,
+            )
+        )
         result = AgentRunResult(
             run_id=state.run_id,
             status=status,
             stop_reason=stop_reason,
             answer=answer,
             state=state,
-            events=tuple(events),
+            events=result_events,
             token_usage=state.token_usage,
             error=error,
         )
         self._notify_recorder_finish(recorder, result)
         return result
 
+    def _complete_open_steps(
+        self,
+        *,
+        recorder: RunTraceRecorderProtocol | None,
+        events: list[AgentEvent],
+        run_id: str,
+    ) -> None:
+        """Close every started step before publishing the run terminal event."""
+        started = {
+            event.step_index
+            for event in events
+            if event.kind is AgentEventKind.STEP_STARTED
+            and event.step_index is not None
+        }
+        completed = {
+            event.step_index
+            for event in events
+            if event.kind is AgentEventKind.STEP_COMPLETED
+            and event.step_index is not None
+        }
+        for step_index in sorted(started - completed):
+            self._append_event(
+                events,
+                recorder=recorder,
+                kind=AgentEventKind.STEP_COMPLETED,
+                run_id=run_id,
+                step_index=step_index,
+                include_result=False,
+                include_recorder=False,
+            )
+
 
 class _RuntimeStop(Exception):
     def __init__(self, reason: StopReason) -> None:
         super().__init__(reason.value)
         self.reason = reason
+
+
+def include_result_event(event: AgentEvent) -> bool:
+    """Keep synchronous result events backward-compatible with the old list."""
+    return event.kind not in {
+        AgentEventKind.STEP_STARTED,
+        AgentEventKind.STEP_COMPLETED,
+    }

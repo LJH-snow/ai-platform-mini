@@ -76,7 +76,13 @@ class KnowledgeSearchTool:
     ) -> object:
         """Return safe retrieval data, never an LLM answer."""
 
-        del context
+        owner_key_hash = context.metadata.get("owner_key_hash")
+        if not isinstance(owner_key_hash, str):
+            return self._error_result(
+                query="",
+                error_code="rag_unavailable",
+                message="Knowledge search requires an authenticated tenant.",
+            )
         query = arguments.get("query")
         if not isinstance(query, str) or not query.strip():
             return self._error_result(
@@ -93,8 +99,10 @@ class KnowledgeSearchTool:
 
         normalized_query = query.strip()
         try:
+            request = ChatRequest(message=normalized_query)
             prepared = await self._rag_service.prepare(
-                ChatRequest(message=normalized_query)
+                request,
+                owner_key_hash=owner_key_hash,
             )
         except KnowledgeBaseEmptyError:
             return self._error_result(

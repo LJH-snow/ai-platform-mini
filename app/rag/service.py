@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from app.exceptions.base import KnowledgeBaseEmptyError, NoRelevantContextError
 from app.rag.embedder import Embedder
-from app.rag.vector_store import VectorStore
+from app.rag.vector_store import VectorStore, validate_owner_key_hash
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
 
@@ -121,7 +121,12 @@ class RAGService:
         self._max_context_chars = max_context_chars
         self._max_distance = max_distance
 
-    async def prepare(self, request: ChatRequest) -> PreparedRAGRequest:
+    async def prepare(
+        self,
+        request: ChatRequest,
+        *,
+        owner_key_hash: str,
+    ) -> PreparedRAGRequest:
         """Retrieve relevant context and build the enhanced prompt.
 
         This is the first phase of RAG. It embeds the user question,
@@ -138,8 +143,13 @@ class RAGService:
             NoRelevantContextError: When results exist but none pass
                 the configured ``max_distance`` relevance threshold.
         """
+        owner_hash = validate_owner_key_hash(owner_key_hash)
         query_embedding = await self._embedder.embed_query(request.message)
-        results = await self._vector_store.search(query_embedding, self._top_k)
+        results = await self._vector_store.search(
+            query_embedding,
+            self._top_k,
+            owner_key_hash=owner_hash,
+        )
         if not results:
             raise KnowledgeBaseEmptyError(
                 "No relevant documents found in the knowledge base"

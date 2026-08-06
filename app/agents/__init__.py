@@ -1,4 +1,5 @@
 from app.agents.models import (
+    AgentAnswerChunk,
     AgentDecision,
     AgentEvent,
     AgentEventKind,
@@ -16,6 +17,7 @@ from app.agents.runtime import AgentRuntime
 
 __all__ = [
     "AgentDecision",
+    "AgentAnswerChunk",
     "AgentEvent",
     "AgentEventKind",
     "AgentMessage",

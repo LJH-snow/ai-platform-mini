@@ -12,6 +12,8 @@ dependencies = [
     "fastapi",
     "httpx",
     "pgvector",
+    "pypdf>=5.0,<7.0",
+    "python-multipart>=0.0.9,<1.0",
     "pydantic-settings",
     "sqlalchemy[asyncio]",
     "asyncpg",
