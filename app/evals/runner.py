@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import math
 import time
 from collections.abc import Awaitable, Callable, Iterable
 
 from app.agents.models import AgentRunResult
 from app.evals.jsonl import validate_golden_dataset
+from app.evals.matching import answer_matches_expected
 from app.evals.models import (
     EvalCase,
     EvalCaseResult,
@@ -15,6 +15,7 @@ from app.evals.models import (
     EvaluationReport,
     EvaluationSummary,
 )
+from app.evals.stats import percentile
 
 type RunCase = Callable[[EvalCase], Awaitable[AgentRunResult | EvalExecution]]
 
@@ -117,11 +118,7 @@ def _failed_case_result(
 def _answer_matches(case: EvalCase, answer: str | None) -> bool:
     """Use case-sensitive substring matching for every declared answer fragment."""
 
-    if case.expected_answer_contains is None:
-        return True
-    if answer is None:
-        return False
-    return all(fragment in answer for fragment in case.expected_answer_contains)
+    return answer_matches_expected(case.expected_answer_contains, answer)
 
 
 def _tools_match(case: EvalCase, actual_tools: tuple[str, ...]) -> bool | None:
@@ -163,7 +160,7 @@ def _build_report(results: tuple[EvalCaseResult, ...]) -> EvaluationReport:
         average_steps=(
             sum(result.steps for result in results) / count if count else 0.0
         ),
-        p95_latency_ms=_percentile(
+        p95_latency_ms=percentile(
             [result.latency_ms for result in results],
             percentile=0.95,
         ),
@@ -171,20 +168,3 @@ def _build_report(results: tuple[EvalCaseResult, ...]) -> EvaluationReport:
         average_tokens=(total_tokens / count if count else 0.0),
     )
     return EvaluationReport(results=results, summary=summary)
-
-
-def _percentile(values: list[float], *, percentile: float) -> float:
-    """Compute an interpolated percentile; empty input returns ``0.0``."""
-
-    if not values:
-        return 0.0
-    if not 0 <= percentile <= 1:
-        raise ValueError("percentile must be between zero and one")
-    ordered = sorted(values)
-    position = (len(ordered) - 1) * percentile
-    lower = math.floor(position)
-    upper = math.ceil(position)
-    if lower == upper:
-        return ordered[lower]
-    fraction = position - lower
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
