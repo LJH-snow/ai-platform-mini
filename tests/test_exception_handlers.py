@@ -1,10 +1,16 @@
 import asyncio
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.chat import get_chat_service
 from app.core.container import provide_quota_service
-from app.exceptions.base import ProviderError, ProviderUnavailableError
+from app.core.exceptions import register_exception_handlers
+from app.exceptions.base import (
+    ConversationNotFoundError,
+    ProviderError,
+    ProviderUnavailableError,
+)
 from app.exceptions.ollama import OllamaModelNotFoundError
 from app.main import app
 from app.quota.memory_repository import InMemoryQuotaRepository
@@ -157,3 +163,18 @@ def test_validation_error_on_empty_messages() -> None:
         headers=_AUTH_HEADERS,
     )
     assert response.status_code == 422
+
+
+def test_conversation_not_found_returns_404() -> None:
+    test_app = FastAPI()
+    register_exception_handlers(test_app)
+
+    @test_app.get("/boom")
+    async def boom() -> None:
+        raise ConversationNotFoundError("Conversation thread not found.")
+
+    with TestClient(test_app) as client:
+        response = client.get("/boom")
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "CONVERSATION_NOT_FOUND"

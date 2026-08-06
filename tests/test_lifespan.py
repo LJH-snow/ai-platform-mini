@@ -55,6 +55,7 @@ class TestLifespanErrorHandling:
                 "app.main.get_settings",
                 return_value=MagicMock(
                     auth_storage="postgres",
+                    conversation_storage="memory",
                     database_url=MagicMock(
                         get_secret_value=MagicMock(
                             return_value="postgresql+asyncpg://localhost/test"
@@ -116,6 +117,7 @@ class TestLifespanRAG:
                 "app.main.get_settings",
                 return_value=MagicMock(
                     auth_storage="memory",
+                    conversation_storage="memory",
                     rag_enabled=False,
                     initial_api_key=MagicMock(
                         get_secret_value=MagicMock(return_value="")
@@ -152,6 +154,7 @@ class TestLifespanRAG:
                 "app.main.get_settings",
                 return_value=MagicMock(
                     auth_storage="postgres",
+                    conversation_storage="memory",
                     rag_enabled=True,
                     database_url=MagicMock(
                         get_secret_value=MagicMock(
@@ -207,6 +210,7 @@ class TestLifespanRAG:
                 "app.main.get_settings",
                 return_value=MagicMock(
                     auth_storage="postgres",
+                    conversation_storage="memory",
                     rag_enabled=True,
                     database_url=MagicMock(
                         get_secret_value=MagicMock(

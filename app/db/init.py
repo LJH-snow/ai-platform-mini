@@ -2,6 +2,10 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from app.db.conversation_models import (
+    ConversationMessageTable,
+    ConversationThreadTable,
+)
 from app.db.models import (
     AgentRunRecordTable,
     APIKeyTable,
@@ -17,6 +21,8 @@ _CORE_TABLES = [
     DailyUsageTable,
     QuotaReservationTable,
     AgentRunRecordTable,
+    ConversationThreadTable,
+    ConversationMessageTable,
 ]
 
 _engine: AsyncEngine | None = None

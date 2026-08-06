@@ -22,6 +22,10 @@ class APIKeyNotFoundError(AppError):
     """Raised when an API key cannot be found by the given identifier."""
 
 
+class ConversationNotFoundError(AppError):
+    """Raised when a conversation thread is missing or not owned by the caller."""
+
+
 class RateLimitError(AppError):
     """Raised when the request rate exceeds the configured limit."""
 

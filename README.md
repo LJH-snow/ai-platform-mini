@@ -11,6 +11,7 @@
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
 - OpenAIProvider: 已接入 ProviderRouter、DI 和应用生命周期
 - Storage: Memory 或 PostgreSQL
+- Conversation memory: 服务端会话记忆存储层（`conversation_thread` / `conversation_message`），支持 `CONVERSATION_STORAGE=memory|postgres`；当前仅提供存储层 Service，不改变 Chat/Agent 公开 API
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
@@ -62,6 +63,27 @@
 - MCP foundation：提供 stdio JSON-RPC Client、工具发现、allowlist、`MCPToolAdapter`、生命周期 health/readiness 查询，以及运行时调用失败/断线的确定性测试；不接入默认生产配置
 - Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
+
+## Conversation memory
+
+服务端会话记忆由 `app/conversations/` 存储层提供，不改变 Chat/Agent 公开 API 或
+SSE 契约。
+
+- 配置：`CONVERSATION_STORAGE=memory|postgres`，默认 `memory`。
+- 表结构：`conversation_thread`（`id`、`owner_key_hash`、`title`、`created_at`、
+  `updated_at`）和 `conversation_message`（`id`、`thread_id`、`role`、`content`、
+  `token_count`、`created_at`）。
+- 能力：`ConversationService` 支持创建/获取线程、追加消息、按时间顺序加载历史；
+  所有查询按 `owner_key_hash` 隔离，跨租户线程统一返回 404
+  `CONVERSATION_NOT_FOUND`。
+- 边界：`memory` 模式仅适合单进程本地开发，多 worker/多实例不会共享会话；
+  生产环境请使用 `postgres` 模式。
+
+学习总结：本轮把 `history` 从客户端透传推进为服务端持久化，并用
+memory/postgres 双实现保证本地开发与生产路径一致。租户隔离被固化在 repository
+查询条件中，避免 Service 层遗漏导致跨租户读取。消息顺序使用自增 `id` 兜底，
+防止同一时间戳下依赖随机 UUID 排序。评审补充了异常契约和输入校验，确保两个
+存储后端的行为一致。
 
 ## Agent Run RAG public contract
 

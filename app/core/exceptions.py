@@ -8,6 +8,7 @@ from app.exceptions.base import (
     AuthenticationError,
     AuthorizationError,
     ConflictError,
+    ConversationNotFoundError,
     KnowledgeBaseEmptyError,
     ModelNotFoundError,
     NoRelevantContextError,
@@ -167,6 +168,21 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=404,
             content=ErrorResponse(
                 code=ErrorCode.API_KEY_NOT_FOUND,
+                message=str(exc),
+                request_id=request_id,
+            ).model_dump(),
+        )
+
+    @app.exception_handler(ConversationNotFoundError)
+    async def handle_conversation_not_found(
+        request: Request, exc: ConversationNotFoundError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s conversation_not_found %s", request_id, exc)
+        return JSONResponse(
+            status_code=404,
+            content=ErrorResponse(
+                code=ErrorCode.CONVERSATION_NOT_FOUND,
                 message=str(exc),
                 request_id=request_id,
             ).model_dump(),

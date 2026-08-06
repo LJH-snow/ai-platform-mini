@@ -52,7 +52,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     "RAG_ENABLED=true requires a PostgreSQL asyncpg database_url"
                 )
 
-        if settings.auth_storage == "postgres" or settings.rag_enabled:
+        if (
+            settings.auth_storage == "postgres"
+            or settings.conversation_storage == "postgres"
+            or settings.rag_enabled
+        ):
             from app.db.init import init_db
 
             await init_db(
