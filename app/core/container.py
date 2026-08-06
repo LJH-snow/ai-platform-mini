@@ -5,6 +5,9 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.conversations.memory_repository import InMemoryConversationRepository
+from app.conversations.repository import ConversationRepository
+from app.conversations.service import ConversationService
 from app.core.settings import RAG_EMBEDDING_DIMENSIONS, get_settings
 from app.providers.base import LLMProvider
 from app.providers.factory import create_llm_provider
@@ -73,6 +76,23 @@ def provide_usage_service() -> UsageService:
 @lru_cache
 def provide_usage_collector() -> UsageCollector:
     return UsageCollector(provide_usage_service())
+
+
+@lru_cache
+def provide_conversation_repository() -> ConversationRepository:
+    settings = get_settings()
+    if settings.conversation_storage == "postgres":
+        from app.conversations.postgres_repository import (
+            PostgresConversationRepository,
+        )
+
+        return PostgresConversationRepository(provide_session_factory())
+    return InMemoryConversationRepository()
+
+
+@lru_cache
+def provide_conversation_service() -> ConversationService:
+    return ConversationService(repository=provide_conversation_repository())
 
 
 @lru_cache
@@ -273,6 +293,8 @@ def clear_container_cache() -> None:
     provide_usage_collector.cache_clear()
     provide_usage_service.cache_clear()
     provide_usage_repository.cache_clear()
+    provide_conversation_service.cache_clear()
+    provide_conversation_repository.cache_clear()
     provide_session_factory.cache_clear()
     provide_llm_provider.cache_clear()
     # Auth module caches — may hold stale session factories after

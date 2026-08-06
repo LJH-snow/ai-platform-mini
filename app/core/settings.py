@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     admin_api_keys: SecretStr = SecretStr("")
     auth_enabled: bool = True
     auth_storage: Literal["memory", "postgres"] = "memory"
+    conversation_storage: Literal["memory", "postgres"] = "memory"
     initial_api_key: SecretStr = SecretStr("")
 
     rate_limit_enabled: bool = True
@@ -95,6 +96,16 @@ class Settings(BaseSettings):
         allowed = {"memory", "postgres"}
         if v not in allowed:
             raise ValueError(f"auth_storage must be one of {allowed}, got '{v}'")
+        return v
+
+    @field_validator("conversation_storage")
+    @classmethod
+    def validate_conversation_storage(cls, v: str) -> str:
+        allowed = {"memory", "postgres"}
+        if v not in allowed:
+            raise ValueError(
+                f"conversation_storage must be one of {allowed}, got '{v}'"
+            )
         return v
 
     @field_validator("quota_reservation_renewal_seconds")
