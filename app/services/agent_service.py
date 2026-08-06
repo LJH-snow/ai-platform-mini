@@ -22,7 +22,11 @@ from app.agents import (
 from app.agents.runtime import AGENT_QUOTA_FAILURE
 from app.auth.models import APIKey
 from app.core.context import RequestContext
-from app.exceptions.base import ProviderError, QuotaExceededError
+from app.exceptions.base import (
+    ProviderError,
+    QuotaExceededError,
+    RAGUnavailableError,
+)
 from app.providers.results import ProviderChatResult
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.service import QuotaService
@@ -44,6 +48,16 @@ Use exactly one of these shapes:
 Do not use Markdown fences or add explanatory text outside the JSON object.
 Only call a tool that appears in the available tools list, and use a JSON object
 that matches its parameters schema.
+""".strip()
+
+_RAG_PRESET_PROMPT = """
+You are answering from an indexed knowledge base. Before producing any final
+answer you MUST call the knowledge_search tool with the user's question as the
+query. Base your final answer only on the retrieved sources. If knowledge_search
+returns no relevant sources, an empty knowledge base, or an error, your final
+answer must explicitly state that the knowledge base has no relevant content for
+the question. Do not answer from unretrieved general knowledge and do not invent
+sources, distances, document names, or citations.
 """.strip()
 
 
@@ -97,6 +111,7 @@ class _ChatServiceAgentModel:
         self._chat_service = chat_service
         self._request = request
         self._tool_schemas = tuple(tool_schemas)
+        self._require_knowledge_search = request.preset == "rag"
         self.prompt_tokens: int | None = 0
         self.completion_tokens: int | None = 0
         self.actual_model = request.model or chat_service.default_model
@@ -158,11 +173,36 @@ class _ChatServiceAgentModel:
         ):
             token_usage = response.prompt_tokens + response.completion_tokens
         decision = self._parse_decision(response.message.content)
+        if (
+            self._require_knowledge_search
+            and not self._has_executed_knowledge_search(state)
+            and not any(call.name == "knowledge_search" for call in decision.tool_calls)
+        ):
+            decision = AgentDecision(
+                tool_calls=(
+                    ToolCall(
+                        call_id=f"knowledge-{len(state.steps) + 1}",
+                        name="knowledge_search",
+                        arguments={"query": state.user_input},
+                    ),
+                ),
+                token_usage=token_usage,
+                usage_complete=self._usage_complete,
+            )
         return AgentDecision(
             answer=decision.answer,
             tool_calls=decision.tool_calls,
             token_usage=token_usage,
             usage_complete=self._usage_complete,
+        )
+
+    @staticmethod
+    def _has_executed_knowledge_search(state: AgentState) -> bool:
+        """Whether knowledge_search already ran (succeeded or failed) this run."""
+        return any(
+            result.name == "knowledge_search"
+            for step in state.steps
+            for result in step.tool_results
         )
 
     async def _reserve_prompt(self, transcript: str, system_prompt: str) -> None:
@@ -253,12 +293,12 @@ class _ChatServiceAgentModel:
         tools_prompt = "\n\nAvailable tools:\n" + json.dumps(
             list(self._tool_schemas), ensure_ascii=False, sort_keys=True
         )
+        protocol_prompt = _AGENT_PROTOCOL_PROMPT
+        if self._require_knowledge_search:
+            protocol_prompt = f"{_RAG_PRESET_PROMPT}\n\n{protocol_prompt}"
         if self._request.system_prompt:
-            return (
-                f"{self._request.system_prompt}\n\n{_AGENT_PROTOCOL_PROMPT}"
-                f"{tools_prompt}"
-            )
-        return f"{_AGENT_PROTOCOL_PROMPT}{tools_prompt}"
+            return f"{self._request.system_prompt}\n\n{protocol_prompt}{tools_prompt}"
+        return f"{protocol_prompt}{tools_prompt}"
 
     def _build_transcript(self, state: AgentState) -> str:
         history = "\n".join(
@@ -370,6 +410,13 @@ class AgentService:
         streaming: bool = False,
     ) -> AgentRunOutcome:
         """Run an Agent request and settle platform quota and usage boundaries."""
+        if request.preset == "rag" and (
+            self._tool_registry.get("knowledge_search") is None
+        ):
+            raise RAGUnavailableError(
+                "The RAG preset requires RAG to be enabled and the "
+                "knowledge_search tool to be available."
+            )
         model = _ChatServiceAgentModel(
             self._chat_service,
             request,

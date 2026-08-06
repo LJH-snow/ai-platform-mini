@@ -1,5 +1,11 @@
 # 阶段 6 发现
 
+## 2026-08-06 文档收口记录
+
+- 已将 README 更新为面向 HR 的项目说明，明确展示 Agent Runtime、Tool Calling、RAG 闭环、SSE 可观察性、安全边界和推荐演示路径。
+- 已补记 RAG readiness、`preset="rag"`、Chat/Agent 模式隔离、长页面独立滚动和 Agent budget 修复，避免文档继续描述已经过时的“知识库入口进入 Chat 模式”或“默认 2048 budget”。
+- 尚未实现且仍明确记录：Ollama `num_ctx` 配置、多轮 transcript 的增量预算语义、完整屏幕阅读器验收、持久化 Trace 历史和回答内精确引用。
+
 ## 当前基线
 
 - 当前分支：`codex/sprint-7-multi-llm-gateway`；本轮开始前工作区已有阶段 6 文档、前端实现和 Vite 配置变更，本轮只继续修改指定文档，不回退既有变更。

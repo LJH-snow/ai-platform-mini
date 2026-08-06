@@ -87,6 +87,7 @@ const createControlledAgentClient = (): {
   client: AgentClient
   emit: (event: AgentStreamEvent, index?: number) => void
   finish: (index?: number) => void
+  getRequest: (index?: number) => ControlledAgentRequest
   getRequestCount: () => number
 } => {
   const requests: ControlledAgentRequest[] = []
@@ -116,6 +117,11 @@ const createControlledAgentClient = (): {
     client,
     emit: (event, index) => getRequest(index).onEvent(event),
     finish: (index) => getRequest(index).resolve(),
+    getRequest: (index = requests.length - 1) => {
+      const request = requests[index]
+      if (!request) throw new Error(`Missing controlled Agent request at index ${index}`)
+      return request
+    },
     getRequestCount: () => requests.length,
   }
 }
@@ -599,5 +605,231 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: '重试 Chat' }))
     await waitFor(() => expect(controlled.getRequestCount()).toBe(2))
     expect(screen.queryByText('Chat 服务暂时不可用，请稍后重试。')).not.toBeInTheDocument()
+  })
+
+  it('opens knowledge-base Q&A as an Agent Run with the RAG preset', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/api/v1/ready')) {
+          return new Response(
+            JSON.stringify({
+              rag: {
+                enabled: true,
+                status: 'ready',
+                database: 'ok',
+                database_reason: null,
+                embedding: 'ok',
+                embedding_reason: null,
+                embedding_model: 'nomic-embed-text',
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          )
+        }
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }),
+    )
+    const previousRuntimeConfig = window.__AI_PLATFORM_RUNTIME_CONFIG__
+    window.__AI_PLATFORM_RUNTIME_CONFIG__ = {
+      apiBaseUrl: 'http://localhost',
+      apiKey: 'sk-test',
+    }
+    const user = userEvent.setup()
+    const controlled = createControlledAgentClient()
+    render(<App agentClient={controlled.client} />)
+
+    try {
+      await user.click(screen.getByRole('button', { name: '知识库' }))
+      const openButton = await screen.findByRole('button', { name: /去知识库问答/ })
+      await waitFor(() => expect(openButton).toBeEnabled())
+      await user.click(openButton)
+
+      const modeGroup = screen.getByRole('group', { name: '请求模式' })
+      expect(within(modeGroup).getByRole('button', { name: 'Agent Run 模式' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      )
+      expect(within(modeGroup).getByRole('button', { name: '普通 Chat SSE 模式' })).toHaveAttribute(
+        'aria-pressed',
+        'false',
+      )
+
+      const modeStatus = screen.getByRole('group', { name: '当前请求模式状态' })
+      expect(within(modeStatus).getByText('Agent Run 模式')).toBeInTheDocument()
+      expect(within(modeStatus).getByText('RAG Agent preset')).toBeInTheDocument()
+
+      const input = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+      expect(input.value).toContain('必须先调用 knowledge_search')
+      expect(input.value).toContain('不要使用未检索到的知识进行回答')
+
+      await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+      await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+      expect(controlled.getRequest().input.preset).toBe('rag')
+
+      controlled.emit(agentEvent('run-kb', 'run_started', 0))
+      controlled.emit(agentEvent('run-kb', 'run_completed', 1, { status: 'completed' }))
+      controlled.finish(0)
+      await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已完成'))
+
+      await user.click(screen.getByRole('button', { name: '普通 Chat SSE 模式' }))
+      expect(
+        within(screen.getByRole('group', { name: '当前请求模式状态' })).queryByText(
+          'RAG Agent preset',
+        ),
+      ).not.toBeInTheDocument()
+    } finally {
+      vi.unstubAllGlobals()
+      if (previousRuntimeConfig === undefined) {
+        delete window.__AI_PLATFORM_RUNTIME_CONFIG__
+      } else {
+        window.__AI_PLATFORM_RUNTIME_CONFIG__ = previousRuntimeConfig
+      }
+    }
+  })
+
+  it('keeps Chat SSE free of Agent Tool Trace and labels the mode clearly', async () => {
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    renderConsole(<App chatClient={controlled.client} />)
+
+    const modeStatus = screen.getByRole('group', { name: '当前请求模式状态' })
+    expect(within(modeStatus).getByText('Chat SSE 模式')).toBeInTheDocument()
+    expect(
+      screen.getByText('普通对话，不执行工具调用，不会产生 Agent Tool Trace 或 RAG 来源。'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Chat SSE 模式' })).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Agent 步骤时间线' })).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('输入消息'), '普通问题')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    controlled.emitDelta('普通回答')
+    controlled.finish()
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已完成'))
+
+    expect(screen.getByRole('heading', { name: 'Chat SSE 模式' })).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Agent 步骤时间线' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/knowledge_search/)).not.toBeInTheDocument()
+  })
+
+  it('shows a real empty-sources state for no_relevant_sources, distinct from the model answer', async () => {
+    const user = userEvent.setup()
+    const agentClient: AgentClient = {
+      runAgent: vi.fn().mockResolvedValue({
+        runId: 'run-norelevant',
+        status: 'completed',
+        answer: '知识库没有相关内容。',
+        stopReason: null,
+        steps: [
+          {
+            id: 'step-1',
+            index: 1,
+            decisionKind: 'tool_call',
+            status: 'completed',
+            startedAt: '2026-08-05T00:00:00Z',
+            completedAt: '2026-08-05T00:00:01Z',
+            durationMs: 1000,
+            toolNames: ['knowledge_search'],
+            toolCount: 1,
+            summary: '查询知识库',
+            events: [],
+            toolCalls: [
+              {
+                id: 'tool-1',
+                name: 'knowledge_search',
+                known: true,
+                status: 'succeeded',
+                stepIndex: 1,
+                startedAt: '2026-08-05T00:00:00Z',
+                completedAt: '2026-08-05T00:00:01Z',
+                durationMs: 1000,
+                argumentCount: 1,
+                inputSummary: '知识搜索',
+                outputSummary: 'no relevant sources',
+                resultChars: 8,
+                errorCode: null,
+                errorMessage: null,
+                truncated: false,
+                rag: {
+                  status: 'no_relevant_sources',
+                  warning: null,
+                  errorCode: 'no_relevant_context',
+                  references: [],
+                },
+              },
+            ],
+          },
+        ],
+        events: [],
+        usage: {
+          promptTokens: null,
+          completionTokens: null,
+          totalTokens: null,
+          estimated: false,
+        },
+      }),
+    }
+    renderConsole(<App agentClient={agentClient} />)
+
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), '什么是智能体？')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(screen.getByText('知识库没有相关内容。')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: /步骤 1.*工具调用/ }))
+    await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+
+    expect(screen.getByText('当前知识库没有关于该问题的相关内容')).toBeInTheDocument()
+    expect(screen.getAllByText(/来源数量：0/).length).toBeGreaterThan(0)
+    expect(screen.queryByText('参考来源：来源暂不可用')).not.toBeInTheDocument()
+    expect(screen.getByText(/这不是数据库或 Embedding 故障/)).toBeInTheDocument()
+    expect(screen.getByText('知识库没有相关内容。')).toBeInTheDocument()
+  })
+
+  it('renders the conversation and trace panels as distinct scroll containers', async () => {
+    const user = userEvent.setup()
+    const chat = createControlledClient()
+    const agentClient: AgentClient = {
+      runAgent: vi.fn().mockResolvedValue({
+        runId: 'run-scroll',
+        status: 'completed',
+        answer: '滚动容器回答',
+        stopReason: null,
+        steps: [],
+        events: [],
+        usage: {
+          promptTokens: null,
+          completionTokens: null,
+          totalTokens: null,
+          estimated: false,
+        },
+      }),
+    }
+    renderConsole(<App chatClient={chat.client} agentClient={agentClient} />)
+
+    await user.type(screen.getByLabelText('输入消息'), '你好')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(chat.getRequestCount()).toBe(1))
+    chat.emitDelta('回答')
+    chat.finish()
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已完成'))
+
+    const conversationPanel = screen.getByLabelText('会话')
+    expect(conversationPanel).toHaveClass('conversationPanel')
+    expect(conversationPanel.querySelector('.messageList')).not.toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), '运行 Agent')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(screen.getByText('滚动容器回答')).toBeInTheDocument())
+
+    const tracePanel = screen.getByLabelText('Agent Trace')
+    expect(tracePanel).toHaveClass('tracePanel')
+    expect(tracePanel.querySelector('.traceContent')).not.toBeNull()
   })
 })

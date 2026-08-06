@@ -162,4 +162,9 @@ export type AgentRunInput = {
   timeoutSeconds?: number
   tokenBudget?: number
   maxSteps?: number
+  /**
+   * Restricted preset that scopes this run. `rag` requires knowledge_search
+   * before answering; only knowledge-base entry points set it.
+   */
+  preset?: 'rag'
 }

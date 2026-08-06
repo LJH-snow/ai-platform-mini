@@ -81,6 +81,9 @@ const createMessage = (role: ChatMessage['role'], content: string): ChatMessage 
   content,
 })
 
+const RAG_PRESET_QUESTION =
+  '请基于知识库内容回答：什么是智能体？必须先调用 knowledge_search；如果没有相关来源，请明确说明知识库没有相关内容，不要使用未检索到的知识进行回答。'
+
 const statusLabels: Record<RequestStatus, string> = {
   idle: '待发送',
   sending: '回答生成中',
@@ -198,7 +201,8 @@ const ragStatusTitles: Record<AgentRag['status'], string> = {
 const ragStatusDescriptions: Record<AgentRag['status'], string> = {
   loading: 'RAG 正在加载来源，完成后将显示检索结果。',
   success_with_sources: '后端未提供可展示的来源内容。',
-  no_relevant_sources: '后端未返回与当前查询匹配的来源。',
+  no_relevant_sources:
+    '当前知识库没有关于该问题的相关内容（来源数量：0）。如果模型仍然给出回答，那是模型的一般回答，不是基于知识库内容。',
   knowledge_base_empty: '当前知识库没有可检索的内容。',
   rag_unavailable: 'RAG 服务当前不可用，未生成来源。',
   embedding_failed: '查询向量生成失败，未生成来源。',
@@ -219,6 +223,8 @@ const getRagAnnouncement = (run: AgentRun): string | null => {
   if (rag.status === 'rag_unavailable' || rag.status === 'failed') {
     return 'RAG 来源加载失败，当前响应没有可展示的来源。'
   }
+  if (rag.status === 'no_relevant_sources')
+    return '知识库未找到相关来源，当前响应没有可展示的来源。'
   return 'RAG 未找到相关来源。'
 }
 
@@ -352,6 +358,16 @@ function RagSection({ tool }: { tool: AgentToolCall }): JSX.Element | null {
               />
             ))}
           </ol>
+        ) : rag.status === 'no_relevant_sources' ? (
+          <div className="ragNoSourcesNotice">
+            <strong>当前知识库没有关于该问题的相关内容</strong>
+            <span>
+              knowledge_search 未找到相关来源（来源数量：0）；这不是数据库或 Embedding 故障。
+            </span>
+            <span>
+              如果模型仍然给出回答，那是模型的一般回答，不是基于知识库内容，请不要把它当作知识库答案。
+            </span>
+          </div>
         ) : (
           <span>{ragStatusDescriptions[rag.status]}</span>
         )}
@@ -556,6 +572,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const resolvedChatClient = chatClient ?? defaultChatClient
   const resolvedAgentClient = agentClient ?? defaultAgentClient
   const [mode, setMode] = useState<ConsoleMode>('chat')
+  const [ragPreset, setRagPreset] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [sessionCount, setSessionCount] = useState(0)
@@ -867,6 +884,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             role,
             content: messageContent,
           })),
+          ...(ragPreset ? { preset: 'rag' as const } : {}),
         },
         assistantMessage,
       )
@@ -970,10 +988,11 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   }
 
   const openRagChat = (): void => {
-    setMode('chat')
-    setDraft('请基于知识库内容回答，并展示检索到的来源。')
+    setMode('agent')
+    setRagPreset(true)
+    setDraft(RAG_PRESET_QUESTION)
     setPage('console')
-    setAnnouncement('知识库问答问题已准备好。')
+    setAnnouncement('已进入知识库问答（RAG Agent preset），问题已准备好。')
   }
 
   const renderPlatformShell = (content: JSX.Element): JSX.Element => {
@@ -1048,6 +1067,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         onNavigate={(nextPage, preset) => {
           if (preset === 'agent') {
             setMode('agent')
+            setRagPreset(false)
             setDraft('请分析这段代码，并说明 Agent 如何选择工具。')
             setAnnouncement('Agent 演示问题已准备好。')
           }
@@ -1168,7 +1188,10 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
                 className={mode === 'chat' ? 'modeActive' : 'secondaryButton'}
                 aria-pressed={mode === 'chat'}
                 disabled={isActive}
-                onClick={() => setMode('chat')}
+                onClick={() => {
+                  setMode('chat')
+                  setRagPreset(false)
+                }}
               >
                 普通 Chat SSE 模式
               </button>
@@ -1177,11 +1200,32 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
                 className={mode === 'agent' ? 'modeActive' : 'secondaryButton'}
                 aria-pressed={mode === 'agent'}
                 disabled={isActive}
-                onClick={() => setMode('agent')}
+                onClick={() => {
+                  setMode('agent')
+                  setRagPreset(false)
+                }}
               >
                 Agent Run 模式
               </button>
             </div>
+
+            <div className="modeStatus" role="group" aria-label="当前请求模式状态">
+              <span
+                className={mode === 'chat' ? 'modeBadge modeBadgeChat' : 'modeBadge modeBadgeAgent'}
+              >
+                {mode === 'chat' ? 'Chat SSE 模式' : 'Agent Run 模式'}
+              </span>
+              {ragPreset && mode === 'agent' ? (
+                <span className="modeBadge modeBadgeRag">RAG Agent preset</span>
+              ) : null}
+            </div>
+            <p className="modeHint">
+              {mode === 'chat'
+                ? '普通对话，不执行工具调用，不会产生 Agent Tool Trace 或 RAG 来源。'
+                : ragPreset
+                  ? '知识库问答：先调用 knowledge_search 检索知识库，再基于检索结果回答；实时展示 Trace / Tool Call / RAG。'
+                  : '实时 Agent SSE：展示步骤、Tool Call、RAG 状态和来源；终态、超时、取消、预算超限均使用真实后端状态。'}
+            </p>
 
             <div className="srOnlyStatus" role="status" aria-live="polite" aria-atomic="true">
               {statusLabels[requestStatus]}。{announcement}
@@ -1269,11 +1313,21 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
                 <span>{requestStatus === 'agent_running' ? '运行中' : traceStatus}</span>
               </div>
               <span className="traceDelivery">
-                {agentSseAvailable ? '实时 Agent SSE' : 'Agent Run 兼容路径'}
+                {mode === 'chat'
+                  ? 'Chat SSE'
+                  : agentSseAvailable
+                    ? '实时 Agent SSE'
+                    : 'Agent Run 兼容路径'}
               </span>
             </div>
 
-            {isActive && mode === 'agent' && !agentRun && resolvedAgentClient.streamAgent ? (
+            {mode === 'chat' ? (
+              <div className="traceNotice traceChatMode">
+                <h3>Chat SSE 模式</h3>
+                <p>普通对话，不执行工具调用；不会产生 Agent Tool Trace 或 RAG 来源。</p>
+                <p>切换到 Agent Run 模式后可运行真实 Agent 并查看步骤、Tool Call 与 RAG 状态。</p>
+              </div>
+            ) : isActive && mode === 'agent' && !agentRun && resolvedAgentClient.streamAgent ? (
               <div className="traceNotice">
                 <h3>{statusLabels[requestStatus]}</h3>
                 <p>正在接收后端真实 Agent SSE，Trace 将随事件实时更新。</p>
@@ -1361,6 +1415,9 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
                     ? '切换到 Agent Run 模式后发起真实 Agent SSE，Trace 将随事件实时更新。'
                     : '切换到 Agent Run 模式后等待 Agent Run 结果；当前客户端未提供实时 Agent SSE。'}
                 </p>
+                {ragPreset ? (
+                  <p>已启用 RAG Agent preset：运行前将调用 knowledge_search 检索知识库。</p>
+                ) : null}
                 {canRetry ? (
                   <button type="button" className="retryButton" onClick={handleRetry}>
                     重新运行

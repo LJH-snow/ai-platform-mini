@@ -112,6 +112,7 @@ const agentRequestBody = (input: AgentRunInput): AgentRunApiRequest => {
     token_budget: input.tokenBudget ?? DEFAULT_AGENT_TOKEN_BUDGET,
     max_steps: input.maxSteps ?? DEFAULT_AGENT_MAX_STEPS,
     timeout_seconds: input.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS,
+    ...(input.preset ? { preset: input.preset } : {}),
   }
 }
 

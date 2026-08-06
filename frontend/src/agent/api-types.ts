@@ -8,6 +8,7 @@ export type AgentRunApiRequest = {
   timeout_seconds: number
   token_budget: number
   max_steps: number
+  preset?: 'rag'
 }
 
 export type AgentRagApiStatus =

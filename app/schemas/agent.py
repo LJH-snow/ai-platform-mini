@@ -69,6 +69,15 @@ class AgentRunRequest(BaseModel):
         gt=0,
         le=MAX_AGENT_TOKEN_BUDGET,
     )
+    preset: Literal["rag"] | None = Field(
+        default=None,
+        description=(
+            "Restricted preset that scopes this Agent Run. `rag` requires the "
+            "model to call knowledge_search before producing a final answer and "
+            "to base the answer on retrieved sources only. It is only meaningful "
+            "when RAG is enabled; ordinary Agent Runs do not set it."
+        ),
+    )
 
 
 class AgentRAGReferenceSummary(BaseModel):

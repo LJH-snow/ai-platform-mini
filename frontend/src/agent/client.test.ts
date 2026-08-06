@@ -97,6 +97,45 @@ describe('createAgentClient', () => {
     )
   })
 
+  it('sends the rag preset only when explicitly requested', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(successPayload), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
+    const client = createAgentClient({ fetchImpl })
+
+    await client.runAgent(
+      { message: '什么是智能体？', history: [], preset: 'rag' },
+      new AbortController().signal,
+    )
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({
+          message: '什么是智能体？',
+          history: [],
+          token_budget: DEFAULT_AGENT_TOKEN_BUDGET,
+          max_steps: DEFAULT_AGENT_MAX_STEPS,
+          timeout_seconds: DEFAULT_AGENT_TIMEOUT_SECONDS,
+          preset: 'rag',
+        }),
+      }),
+    )
+
+    await client.runAgent({ message: 'plain', history: [] }, new AbortController().signal)
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: expect.not.stringContaining('"preset"'),
+      }),
+    )
+  })
+
   it.each([
     {
       label: 'token_budget below minimum',
