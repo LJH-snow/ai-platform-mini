@@ -63,6 +63,7 @@
 - MCP foundation：提供 stdio JSON-RPC Client、工具发现、allowlist、`MCPToolAdapter`、生命周期 health/readiness 查询，以及运行时调用失败/断线的确定性测试；不接入默认生产配置
 - Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
+- 可选 OpenTelemetry tracing：HTTP、LLM、Tool、RAG 和 Agent Run 边界 span，默认关闭
 
 ## Conversation memory
 
@@ -412,6 +413,7 @@ app/
 ├── exceptions/     # Provider-specific + domain exceptions
 ├── evals/          # Golden + RAG evaluation models, runner, JSONL, report
 ├── middleware/     # Context middleware (request_id)
+├── observability/  # Optional OpenTelemetry setup, tracer and HTTP middleware
 ├── providers/      # LLM Provider layer (Protocol + implementations)
 ├── quota/          # Token quota (reserve/settle, repository, service)
 ├── rag/            # Retrieval-Augmented Generation (embedder, vector store, chunker, service)
@@ -432,6 +434,7 @@ app/
 - **Logging** (`app/core/logging.py`) — dictConfig JSON logs with request ID, method, path, status, and latency
 - **Exception handlers** (`app/core/exceptions.py`) — global error handling, no try/except in Router
 - **Middleware** (`app/middleware/`) — full UUID4 request tracing, supports client-provided `X-Request-ID`
+- **Observability** (`app/observability/`) — optional OTel spans for HTTP, LLM, Tool, RAG and Agent Run boundaries
 - **Lifespan** (`app/main.py`) — initializes and closes Provider/PostgreSQL resources with startup rollback
 - **MCP health boundary** — reports configured Server lifecycle/discovery state only; no active ping, reconnect or HTTP/SSE transport is implied
 
@@ -492,6 +495,12 @@ RAG_EMBEDDING_TIMEOUT_SECONDS=60
 # MCP (disabled by default; JSON array of explicitly allowlisted servers)
 MCP_ENABLED=false
 MCP_SERVERS_JSON=
+
+# OpenTelemetry (disabled by default; no collector dependency when off)
+TELEMETRY_ENABLED=false
+TELEMETRY_SERVICE_NAME=ai-platform-mini
+TELEMETRY_EXPORTER=otlp
+TELEMETRY_OTLP_ENDPOINT=http://localhost:4318/v1/traces
 ```
 
 ### Key configuration notes
@@ -524,6 +533,21 @@ MCP_SERVERS_JSON=
 - MCP tools are discovered during application startup and closed during shutdown; an unavailable server is isolated and does not block other configured servers
 - Discovered tools require the `mcp:server:<server_name>` permission; the application grants it only to the Agent runtime for successfully discovered, explicitly configured servers, never from model output or user input
 - Real stdio tools must provide explicit read-only/destructive annotations; unknown risk metadata is rejected (fail-closed), and duplicate tool names isolate the affected Server
+
+### OpenTelemetry tracing notes
+
+- `TELEMETRY_ENABLED=true` 启用 OpenTelemetry；默认关闭时 `setup_telemetry()` 是 no-op，不依赖外部 Collector
+- `TELEMETRY_EXPORTER=otlp` 使用 OTLP/HTTP exporter（默认 `http://localhost:4318/v1/traces`），`console` 则把 span 输出到 stdout，便于本地查看
+- 覆盖的边界 span：HTTP 根 span（`request_id`、脱敏后的 `api_key_hash` 前缀、endpoint、状态码、耗时）、LLM `chat`/`chat_stream`（模型、耗时、`llm.usage.prompt_tokens`/`llm.usage.completion_tokens`）、Tool 执行（工具名、风险等级、状态、耗时）、RAG 检索（`top_k`、向量库原始返回数、进入上下文的引用数、耗时）、Agent Run（`run_id`、`stop_reason`、总 token）
+- span 属性不会写入原始 prompt、API Key、完整文档或堆栈；`api_key_hash` 只暴露前 8 个字符；客户端取消会记录 `*_cancelled` 属性且不标记为错误
+- SSE/Streaming 响应的 HTTP 根 span 会覆盖整个响应体生命周期，而不是在响应头返回时提前结束
+- 本地快速查看：
+
+```bash
+TELEMETRY_ENABLED=true TELEMETRY_EXPORTER=console .venv/bin/uvicorn app.main:app --reload
+```
+
+在 Jaeger/OTLP Collector 端查看时，配置 `TELEMETRY_OTLP_ENDPOINT` 指向 Collector 的 HTTP trace endpoint。
 
 > [完整路线图](docs/roadmap/2026-08-04-agent-runtime-development-roadmap.md)
 > [Sprint 8 设计说明](docs/superpowers/specs/2026-08-04-agent-runtime-design.md)

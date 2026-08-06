@@ -1,9 +1,18 @@
+import asyncio
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 
+from opentelemetry import trace
+
 from app.exceptions.base import KnowledgeBaseEmptyError, NoRelevantContextError
+from app.observability.tracing import (
+    get_tracer,
+    set_span_duration_ms,
+    set_span_error,
+)
 from app.rag.embedder import Embedder
 from app.rag.vector_store import VectorStore, validate_owner_key_hash
 from app.schemas.chat import ChatRequest, ChatResponse
@@ -104,6 +113,14 @@ class PreparedRAGRequest:
     references: tuple[RAGReference, ...] = ()
 
 
+@dataclass
+class _RetrievalCounts:
+    """Mutable counters populated while the RAG span is active."""
+
+    retrieved: int = 0
+    used: int = 0
+
+
 class RAGService:
     def __init__(
         self,
@@ -127,15 +144,53 @@ class RAGService:
         *,
         owner_key_hash: str,
     ) -> PreparedRAGRequest:
-        """Retrieve relevant context and build the enhanced prompt.
+        """Retrieve context and expose a privacy-safe RAG span."""
+
+        tracer = get_tracer()
+        start = time.monotonic()
+        span = tracer.start_span(
+            "rag.retrieve",
+            attributes={"rag.top_k": self._top_k},
+        )
+        counts = _RetrievalCounts()
+        try:
+            with trace.use_span(span, end_on_exit=False):
+                prepared = await self._prepare(
+                    request,
+                    owner_key_hash=owner_key_hash,
+                    counts=counts,
+                )
+        except asyncio.CancelledError:
+            span.set_attribute("rag.cancelled", True)
+            raise
+        except BaseException:
+            set_span_error(span)
+            raise
+        finally:
+            span.set_attribute("rag.retrieved_count", counts.retrieved)
+            span.set_attribute("rag.used_count", counts.used)
+            set_span_duration_ms(span, start, "rag.duration_ms")
+            span.end()
+        return prepared
+
+    async def _prepare(
+        self,
+        request: ChatRequest,
+        *,
+        owner_key_hash: str,
+        counts: _RetrievalCounts,
+    ) -> PreparedRAGRequest:
+        """Internal prepare implementation that reports retrieval counts.
 
         This is the first phase of RAG. It embeds the user question,
         searches the vector store, and constructs the final system prompt
         with injected context — **without** calling the LLM.
 
-        Returns a ``PreparedRAGRequest`` whose ``messages`` field contains
-        the complete message list (including context) for accurate quota
-        estimation.
+        ``counts`` is updated before relevance filtering so even a failed
+        prepare keeps the raw vector-store count on the span.
+
+        Returns a ``PreparedRAGRequest`` whose ``messages`` field contains the
+        complete message list (including context) for quota estimation.
 
         Raises:
             KnowledgeBaseEmptyError: When the vector store returns no
@@ -155,6 +210,7 @@ class RAGService:
                 "No relevant documents found in the knowledge base"
             )
 
+        counts.retrieved = len(results)
         results = [
             result for result in results if result.distance <= self._max_distance
         ]
@@ -241,6 +297,7 @@ class RAGService:
         messages.extend((msg.role, msg.content) for msg in enhanced_request.history)
         messages.append(("user", enhanced_request.message))
 
+        counts.used = len(references)
         return PreparedRAGRequest(
             enhanced_request=enhanced_request,
             chunk_ids=tuple(chunk_ids),

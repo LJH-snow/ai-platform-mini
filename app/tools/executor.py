@@ -3,9 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from collections.abc import Mapping, Sequence
 from typing import cast
 
+from app.observability.tracing import (
+    get_tracer,
+    set_span_duration_ms,
+    set_span_error,
+)
 from app.tools.models import (
     JSONValue,
     RiskLevel,
@@ -70,6 +76,43 @@ class ToolExecutor:
     ) -> ToolExecutionResult:
         """Execute one tool call without exposing implementation exceptions."""
 
+        descriptor = self._registry.get_descriptor(tool_name)
+        tracer = get_tracer()
+        start = time.monotonic()
+        with tracer.start_as_current_span(
+            "tool.execute",
+            attributes={
+                "tool.name": tool_name,
+                "tool.risk_level": (
+                    descriptor.risk_level.value if descriptor is not None else "unknown"
+                ),
+            },
+        ) as span:
+            try:
+                result = await self._execute(
+                    tool_name,
+                    arguments,
+                    context,
+                    timeout_seconds=timeout_seconds,
+                )
+            except asyncio.CancelledError:
+                span.set_attribute("tool.cancelled", True)
+                raise
+            except BaseException:
+                set_span_error(span)
+                raise
+            span.set_attribute("tool.status", result.status.value)
+            set_span_duration_ms(span, start, "tool.duration_ms")
+            return result
+
+    async def _execute(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, object] | object,
+        context: ToolContext,
+        *,
+        timeout_seconds: float | None,
+    ) -> ToolExecutionResult:
         timeout = self._resolve_timeout(timeout_seconds)
         tool = self._registry.get(tool_name)
         descriptor = self._registry.get_descriptor(tool_name)

@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     mcp_enabled: bool = False
     mcp_servers_json: str = ""
 
+    telemetry_enabled: bool = False
+    telemetry_service_name: str = "ai-platform-mini"
+    telemetry_exporter: Literal["otlp", "console"] = "otlp"
+    telemetry_otlp_endpoint: str = "http://localhost:4318/v1/traces"
+
     @field_validator("rag_embedding_dimensions")
     @classmethod
     def validate_embedding_dimensions(cls, v: int) -> int:

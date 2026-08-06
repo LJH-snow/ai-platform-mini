@@ -8,6 +8,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from dataclasses import dataclass
 from typing import Protocol, cast
 
+from opentelemetry import trace
+
 from app.agents import (
     AgentAnswerChunk,
     AgentDecision,
@@ -27,6 +29,11 @@ from app.exceptions.base import (
     QuotaExceededError,
     RAGUnavailableError,
 )
+from app.observability.tracing import (
+    get_tracer,
+    set_span_duration_ms,
+    set_span_error,
+)
 from app.providers.results import ProviderChatResult
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.service import QuotaService
@@ -39,6 +46,15 @@ from app.tools import CalculatorTool, ToolExecutor, ToolRegistry
 from app.usage.collector import UsageCollector
 
 logger = logging.getLogger(__name__)
+
+
+def _total_tokens(outcome: AgentRunOutcome) -> int | None:
+    """Return the sum of reported tokens when both counts are known."""
+
+    if outcome.prompt_tokens is None or outcome.completion_tokens is None:
+        return None
+    return outcome.prompt_tokens + outcome.completion_tokens
+
 
 _AGENT_PROTOCOL_PROMPT = """
 You are the decision model for a bounded agent runtime. Return JSON only.
@@ -400,6 +416,57 @@ class AgentService:
         )
 
     async def run(
+        self,
+        request: AgentRunRequest,
+        *,
+        context: RequestContext,
+        api_key: APIKey,
+        observer: AgentEventObserver | None = None,
+        cancel_event: asyncio.Event | None = None,
+        streaming: bool = False,
+    ) -> AgentRunOutcome:
+        """Run one Agent request inside an OpenTelemetry span."""
+
+        tracer = get_tracer()
+        start = time.monotonic()
+        span = tracer.start_span(
+            "agent.run",
+            attributes={"agent.request_id": context.request_id},
+        )
+        outcome: AgentRunOutcome | None = None
+        try:
+            with trace.use_span(span, end_on_exit=False):
+                outcome = await self._run(
+                    request,
+                    context=context,
+                    api_key=api_key,
+                    observer=observer,
+                    cancel_event=cancel_event,
+                    streaming=streaming,
+                )
+        except asyncio.CancelledError:
+            span.set_attribute("agent.cancelled", True)
+            raise
+        except BaseException:
+            set_span_error(span)
+            raise
+        finally:
+            set_span_duration_ms(span, start, "agent.duration_ms")
+            if outcome is not None:
+                span.set_attribute("agent.run_id", outcome.result.run_id)
+                span.set_attribute(
+                    "agent.stop_reason", outcome.result.stop_reason.value
+                )
+                total_tokens = _total_tokens(outcome)
+                if total_tokens is not None:
+                    span.set_attribute("agent.total_tokens", total_tokens)
+                span.set_attribute("agent.model", outcome.model)
+            span.end()
+        if outcome is None:
+            raise RuntimeError("Agent run completed without an outcome")
+        return outcome
+
+    async def _run(
         self,
         request: AgentRunRequest,
         *,

@@ -24,6 +24,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, setup_logging
 from app.core.settings import Settings, get_settings
 from app.middleware.context import ContextMiddleware
+from app.observability import TelemetryMiddleware, setup_telemetry, shutdown_telemetry
 
 if TYPE_CHECKING:
     from app.providers.base import LLMProvider
@@ -144,6 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     logger.exception("Failed to close MCP manager.")
         finally:
             clear_container_cache()
+        shutdown_telemetry()
         if cancellation is not None:
             raise cancellation
 
@@ -170,6 +172,7 @@ def _parse_admin_keys(raw: str) -> list[str]:
 def create_app() -> FastAPI:
     settings = get_settings()
     setup_logging(settings.log_level, log_format=settings.log_format)
+    setup_telemetry(settings)
 
     app = FastAPI(
         title=settings.app_name,
@@ -179,6 +182,8 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(ContextMiddleware)
+    if settings.telemetry_enabled:
+        app.add_middleware(TelemetryMiddleware)
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(models_router)

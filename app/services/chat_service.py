@@ -1,8 +1,17 @@
+import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import cast
 
+from opentelemetry.trace import Span
+
 from app.exceptions.ollama import OllamaServiceError
+from app.observability.tracing import (
+    get_tracer,
+    set_span_duration_ms,
+    set_span_error,
+)
 from app.providers.base import LLMProvider
 from app.providers.results import ProviderChatResult
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse, ChatRole
@@ -22,42 +31,112 @@ class ChatService:
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         messages = self._build_messages(request)
+        model = request.model or self._provider.default_model
         payload: dict[str, object] = {
-            "model": request.model or self._provider.default_model,
+            "model": model,
             "messages": messages,
             "stream": False,
         }
         options = self._build_options(request)
         if options:
             payload["options"] = options
-        data = await self._provider.chat(payload)
-        result = self._parse_chat_response(data)
-        return ChatResponse(
-            model=result.model,
-            thread_id=request.thread_id,
-            created_at=result.created_at,
-            message=ChatMessage(role=result.role, content=result.content),
-            done=result.done,
-            done_reason=result.done_reason,
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
-        )
+        tracer = get_tracer()
+        start = time.monotonic()
+        with tracer.start_as_current_span(
+            "llm.chat",
+            attributes={
+                "llm.model": model,
+                "llm.stream": False,
+            },
+        ) as span:
+            try:
+                data = await self._provider.chat(payload)
+                result = self._parse_chat_response(data)
+            except asyncio.CancelledError:
+                span.set_attribute("llm.cancelled", True)
+                raise
+            except BaseException:
+                set_span_error(span)
+                raise
+            finally:
+                set_span_duration_ms(span, start, "llm.duration_ms")
+            span.set_attribute("llm.model", result.model)
+            self._record_llm_usage(
+                span,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+            )
+            return ChatResponse(
+                model=result.model,
+                thread_id=request.thread_id,
+                created_at=result.created_at,
+                message=ChatMessage(role=result.role, content=result.content),
+                done=result.done,
+                done_reason=result.done_reason,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+            )
 
     async def chat_stream(
         self, request: ChatRequest
     ) -> AsyncIterator[ProviderChatResult]:
         messages = self._build_messages(request)
+        model = request.model or self._provider.default_model
         payload: dict[str, object] = {
-            "model": request.model or self._provider.default_model,
+            "model": model,
             "messages": messages,
         }
         options = self._build_options(request)
         if options:
             payload["options"] = options
-        async for chunk in self._provider.chat_stream(payload):
-            result = self._parse_stream_chunk(chunk)
-            if result is not None:
-                yield result
+        prompt_tokens: int | None = None
+        completion_tokens: int | None = None
+        tracer = get_tracer()
+        start = time.monotonic()
+        with tracer.start_as_current_span(
+            "llm.chat_stream",
+            attributes={
+                "llm.model": model,
+                "llm.stream": True,
+            },
+        ) as span:
+            try:
+                async for chunk in self._provider.chat_stream(payload):
+                    result = self._parse_stream_chunk(chunk)
+                    if result is None:
+                        continue
+                    if result.model:
+                        span.set_attribute("llm.model", result.model)
+                    if result.prompt_tokens is not None:
+                        prompt_tokens = result.prompt_tokens
+                    if result.completion_tokens is not None:
+                        completion_tokens = result.completion_tokens
+                    yield result
+            except asyncio.CancelledError:
+                span.set_attribute("llm.cancelled", True)
+                raise
+            except Exception:
+                set_span_error(span)
+                raise
+            finally:
+                self._record_llm_usage(
+                    span,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+                set_span_duration_ms(span, start, "llm.duration_ms")
+
+    @staticmethod
+    def _record_llm_usage(
+        span: Span,
+        *,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
+    ) -> None:
+        if prompt_tokens is not None:
+            span.set_attribute("llm.usage.prompt_tokens", prompt_tokens)
+        if completion_tokens is not None:
+            span.set_attribute("llm.usage.completion_tokens", completion_tokens)
 
     def _build_messages(self, request: ChatRequest) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
