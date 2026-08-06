@@ -15,12 +15,16 @@ const e = (event: AgentStreamEvent['event'], sequence: number, extra = {}): Agen
 
 describe('Agent stream reducer', () => {
   it('uses a human-readable pending-analysis fallback before step_planned arrives', () => {
-    const state = apply([e('run_started', 0), e('step_started', 1, { step_index: 1 })])
+    const state = apply([
+      e('run_started', 0, { thread_id: 'thread-1' }),
+      e('step_started', 1, { step_index: 1 }),
+    ])
 
     expect(state.run?.steps[0]).toMatchObject({
       decisionKind: 'unknown',
       summary: '模型正在分析任务，判断是否需要调用工具。',
     })
+    expect(state.run?.threadId).toBe('thread-1')
   })
 
   it('marks MCP tools as known during SSE tool lifecycle events', () => {
@@ -376,6 +380,22 @@ describe('Agent stream reducer', () => {
       e('answer_delta', 3, { delta: '回答' }),
     ])
     expect(state.run?.answer).toBe('新回答')
+  })
+
+  it('uses a terminal answer only when no answer event was seen', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('run_completed', 1, { status: 'completed', answer: '25' }),
+    ])
+    expect(state.run?.answer).toBe('25')
+
+    const deltaState = apply([
+      e('run_started', 0),
+      e('answer_delta', 1, { delta: '2' }),
+      e('answer_delta', 2, { delta: '5' }),
+      e('run_completed', 3, { status: 'completed', answer: '不应覆盖' }),
+    ])
+    expect(deltaState.run?.answer).toBe('25')
   })
 
   it('preserves loading and safely downgrades unknown RAG statuses', () => {

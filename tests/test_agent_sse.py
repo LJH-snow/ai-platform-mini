@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
@@ -10,6 +11,8 @@ from app.agents.models import (
     AgentDecision,
     AgentEvent,
     AgentEventKind,
+    AgentRunResult,
+    AgentState,
     RunStatus,
     StopReason,
     ToolCall,
@@ -23,10 +26,15 @@ from app.api.agent import (
     _to_stream_event,
     stream_agent_run,
 )
+from app.auth.hash import hash_api_key
 from app.auth.models import APIKey
+from app.conversations.memory_repository import InMemoryConversationRepository
+from app.conversations.service import ConversationService
 from app.core.context import RequestContext
 from app.schemas.agent import AgentRunRequest
-from app.services.agent_service import AgentService
+from app.services.agent_service import AgentRunOutcome, AgentService
+
+_TEST_OWNER = hash_api_key("sk-test-integration")
 
 
 def _event(
@@ -485,6 +493,46 @@ class _SetupFailureAgentService:
         raise RuntimeError("setup failure")
 
 
+class _MemoryStreamingAgentService:
+    async def run(
+        self,
+        request: object,
+        *,
+        context: object,
+        api_key: object,
+        observer: AgentEventStream,
+        cancel_event: asyncio.Event,
+        streaming: bool,
+    ) -> AgentRunOutcome:
+        del request, context, api_key, cancel_event, streaming
+        observer.observe(_event(AgentEventKind.RUN_STARTED, 1))
+        observer.observe(
+            _event(
+                AgentEventKind.RUN_STOPPED,
+                2,
+                status=RunStatus.COMPLETED,
+                stop_reason=StopReason.DIRECT_ANSWER,
+            )
+        )
+        run_id = "run-memory-1"
+        state = AgentState(run_id=run_id, user_input="hello")
+        return AgentRunOutcome(
+            result=AgentRunResult(
+                run_id=run_id,
+                status=RunStatus.COMPLETED,
+                stop_reason=StopReason.DIRECT_ANSWER,
+                answer="final answer",
+                state=state,
+                events=(),
+                token_usage=0,
+            ),
+            model="test-model",
+            prompt_tokens=1,
+            completion_tokens=1,
+            estimated_usage=False,
+        )
+
+
 @pytest.mark.asyncio
 async def test_started_run_unexpected_producer_error_emits_one_run_failed() -> None:
     response = await stream_agent_run(
@@ -517,6 +565,55 @@ async def test_pre_start_producer_error_remains_setup_failure() -> None:
     assert len(frames) == 1
     assert frames[0].startswith("event: stream_error\n")
     assert '"error_code":"stream_setup_failed"' in frames[0]
+
+
+@pytest.mark.asyncio
+async def test_pre_start_producer_error_carries_resolved_thread_id() -> None:
+    conversation_service = ConversationService(
+        repository=InMemoryConversationRepository()
+    )
+    response = await stream_agent_run(
+        AgentRunRequest(message="hello"),
+        cast(Request, _RateLimitedRequest()),
+        Response(),
+        cast(AgentService, _SetupFailureAgentService()),
+        APIKey(key=_TEST_OWNER, name="test"),
+        conversation_service=conversation_service,
+    )
+
+    frames = [cast(str, frame) async for frame in response.body_iterator]
+
+    assert len(frames) == 1
+    assert frames[0].startswith("event: stream_error\n")
+    assert '"error_code":"stream_setup_failed"' in frames[0]
+    assert '"thread_id":"' in frames[0]
+
+
+@pytest.mark.asyncio
+async def test_stream_persists_final_answer_and_carries_thread_id() -> None:
+    conversation_service = ConversationService(
+        repository=InMemoryConversationRepository()
+    )
+    response = await stream_agent_run(
+        AgentRunRequest(message="hello"),
+        cast(Request, _RateLimitedRequest()),
+        Response(),
+        cast(AgentService, _MemoryStreamingAgentService()),
+        APIKey(key=_TEST_OWNER, name="test"),
+        conversation_service=conversation_service,
+    )
+
+    frames = [cast(str, frame) async for frame in response.body_iterator]
+
+    assert len(frames) == 2
+    first_data = json.loads(frames[0].split("data: ", 1)[1])
+    assert first_data["thread_id"]
+    thread_id = first_data["thread_id"]
+    history = await conversation_service.load_history(_TEST_OWNER, thread_id)
+    assert [(message.role, message.content) for message in history] == [
+        ("user", "hello"),
+        ("assistant", "final answer"),
+    ]
 
 
 class _RateLimitedRequest:

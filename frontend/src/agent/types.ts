@@ -143,6 +143,7 @@ export type AgentUsage = {
 
 export type AgentRun = {
   runId: string | null
+  threadId?: string | null
   status: AgentRunStatus
   answer: string | null
   stopReason: string | null
@@ -159,6 +160,7 @@ export type AgentRun = {
 export type AgentRunInput = {
   message: string
   history: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
+  threadId?: string | null
   timeoutSeconds?: number
   tokenBudget?: number
   maxSteps?: number

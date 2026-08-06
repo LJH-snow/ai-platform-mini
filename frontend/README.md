@@ -8,7 +8,9 @@
 - **Agent Run**：真实模型决策、工具调用、RAG 状态、回答增量和终态均来自后端事件。
 - **知识库问答**：从知识库页面进入时自动切换到 Agent Run，并启用受限 `RAG Agent preset`，先检索再回答。
 - **真实失败语义**：无相关来源、预算超限、超时、取消、鉴权失败和健康检查失败分别展示，不把失败状态改写成成功。
-- **长内容布局**：桌面端导航、会话区和 Trace 区独立滚动；移动端恢复单列自然滚动。
+- **长内容布局**：桌面端保留左侧平台导航与会话管理区，会话与 Trace 随内容自然增长，页面整体滚动；移动端保持单列自然滚动。
+- **会话管理入口**：用户 API Key 与新建会话位于左侧导航下方，右侧仅保留对话工作台、会话与 Agent Trace。
+- **服务端会话记忆**：Chat/Agent 客户端发送 `thread_id`，从响应或 SSE 事件回填当前线程；线程 id 存入 `sessionStorage`，刷新后继续，新建会话时清空。
 
 ## 阶段 3 已完成
 
@@ -16,7 +18,7 @@
 
 - **普通 Chat SSE 模式**：继续调用 `POST /v1/chat/completions?stream=true`，解析 `choices[0].delta.content` 并按增量显示回答。
 - **Agent Run 模式**：调用 `POST /api/v1/agent/runs/stream`，按真实 SSE 事件增量更新左侧回答与右侧 Trace；同步 `POST /api/v1/agent/runs` 客户端仍保留兼容。
-- Agent final answer 支持真实文本 `answer_delta`：每个 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunk，前端按真实事件增量显示；普通 Chat SSE 行为保持不变。`assistant_message` 仅作为 legacy/非 streaming 兼容事件保留，不由前端拆分或伪造。
+- Agent final answer 支持真实文本 `answer_delta`：每个 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunk，前端按真实事件增量显示；普通 Chat SSE 行为保持不变。`assistant_message` 作为 legacy/非 streaming 兼容事件保留，也用于 Runtime 直接以工具结果完成（例如 calculator 捷径）时传递完整真实回答，不由前端拆分或伪造。
 
 ### Agent Trace 与状态
 
@@ -79,7 +81,7 @@
 
 ## 阶段 6 实时 Agent Run
 
-- 事件顺序为 `run_started`、每个 Step 的 `step_started`/Tool/RAG/`step_completed`、按 `sequence` 排序的 `answer_delta`（或 legacy `assistant_message`）、最后一个终止事件；公开事件带真实 `run_id`、`request_id` 和 `sequence`，Tool 事件带 `step_index`、`call_id`、`tool_name`。`answer_delta.delta` 只来自真实 provider chunk，Runtime 同时累计完整答案。
+- 事件顺序为 `run_started`、每个 Step 的 `step_started`/Tool/RAG/`step_completed`、按 `sequence` 排序的 `answer_delta`（或完整 `assistant_message`）、最后一个终止事件；公开事件带真实 `run_id`、`request_id` 和 `sequence`，Tool 事件带 `step_index`、`call_id`、`tool_name`。`answer_delta.delta` 只来自真实 provider chunk，Runtime 同时累计完整答案。
 - 支持 `run_completed`、`run_failed`、`run_timed_out`、`run_cancelled` 和 `run_stopped`；同一 Run 只接受一个终止状态。未知、重复、乱序或缺失字段事件安全降级。
 - 前端状态覆盖 connecting、running、waiting、tool running/completed/failed、RAG loading/completed、completed、failed、timeout、cancelled、connection lost 和 response format error；状态不只依赖颜色。
 - 前端 Abort/停止等待不等于后端取消，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和 `stream_error` 分别表示连接/启动边界，不伪造 Run 终态。
@@ -168,4 +170,4 @@ npm run dev
 - 前端启动时读取 `/api/v1/ready` 的真实 `rag` 状态，区分 RAG 未启用、数据库不可用、Embedding 不可用、健康检查失败和知识库为空。
 - Chat SSE 只负责普通对话；Agent Run 才展示 Tool Call、RAG 状态和 Trace。知识库入口不会误用普通 Chat SSE。
 - `RAG Agent preset` 由服务端约束先检索再回答；`no_relevant_sources` 显示真实 0 来源，不把模型一般知识包装成知识库答案。
-- 桌面端使用固定视口和独立滚动容器，会话区与 Trace 区不会被长消息互相撑开；移动端恢复单列自然滚动。
+- 桌面端使用内容驱动高度，会话区与 Trace 区随内容自然增长，由页面整体滚动；移动端恢复单列自然滚动。

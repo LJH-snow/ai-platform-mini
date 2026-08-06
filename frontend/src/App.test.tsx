@@ -14,6 +14,7 @@ import type { ChatApiMessage, ChatStreamHandlers, ChatStreamResult } from './cha
 type ControlledRequest = {
   handlers: ChatStreamHandlers
   messages: ChatApiMessage[]
+  threadId: string | null
   signal: AbortSignal
   resolve: (result: ChatStreamResult) => void
   reject: (error: Error) => void
@@ -23,7 +24,8 @@ const createControlledClient = (): {
   client: ChatClient
   emitDelta: (content: string, index?: number) => void
   emitRequestId: (requestId: string, index?: number) => void
-  finish: (index?: number) => void
+  emitThreadId: (threadId: string, index?: number) => void
+  finish: (index?: number, threadId?: string | null) => void
   fail: (error: Error, index?: number) => void
   getRequest: (index?: number) => ControlledRequest
   getRequestCount: () => number
@@ -35,9 +37,10 @@ const createControlledClient = (): {
         messages: ChatApiMessage[],
         handlers: ChatStreamHandlers,
         signal: AbortSignal,
+        threadId: string | null = null,
       ): Promise<ChatStreamResult> => {
         return new Promise((resolve, reject) => {
-          requests.push({ handlers, messages, signal, resolve, reject })
+          requests.push({ handlers, messages, threadId, signal, resolve, reject })
         })
       },
     ),
@@ -55,10 +58,11 @@ const createControlledClient = (): {
     client,
     emitDelta: (content, index) => getRequest(index).handlers.onDelta(content),
     emitRequestId: (requestId, index) => getRequest(index).handlers.onRequestId(requestId),
-    finish: (index) => {
+    emitThreadId: (threadId, index) => getRequest(index).handlers.onThreadId?.(threadId),
+    finish: (index, threadId = null) => {
       const request = getRequest(index)
       request.handlers.onRequestId('req-test-123')
-      request.resolve({ requestId: 'req-test-123' })
+      request.resolve({ requestId: 'req-test-123', threadId })
     },
     fail: (error, index) => getRequest(index).reject(error),
     getRequest,
@@ -140,6 +144,7 @@ const agentEvent = (
 
 afterEach(() => {
   cleanup()
+  sessionStorage.clear()
   vi.restoreAllMocks()
 })
 
@@ -831,5 +836,113 @@ describe('App', () => {
     const tracePanel = screen.getByLabelText('Agent Trace')
     expect(tracePanel).toHaveClass('tracePanel')
     expect(tracePanel.querySelector('.traceContent')).not.toBeNull()
+  })
+
+  it('restores, updates, and clears the Chat thread id with new sessions', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-restored')
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await user.type(screen.getByLabelText('输入消息'), '第一轮')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).threadId).toBe('thread-restored')
+
+    controlled.emitThreadId('thread-live', 0)
+    controlled.finish(0, 'thread-live')
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已完成'))
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBe('thread-live')
+
+    await user.type(screen.getByLabelText('输入消息'), '第二轮')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(2))
+    expect(controlled.getRequest(1).threadId).toBe('thread-live')
+    controlled.finish(1, 'thread-live')
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已完成'))
+
+    await user.click(screen.getByRole('button', { name: '新建会话' }))
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBeNull()
+
+    await user.type(screen.getByLabelText('输入消息'), '第三轮')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(3))
+    expect(controlled.getRequest(2).threadId).toBeNull()
+    controlled.finish(2)
+  })
+
+  it('passes the current thread id to Agent runs and stores stream thread ids', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'agent-thread-1')
+    const user = userEvent.setup()
+    const controlled = createControlledAgentClient()
+    renderConsole(<App agentClient={controlled.client} />)
+
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), 'Agent 问题')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).input.threadId).toBe('agent-thread-1')
+
+    controlled.emit(agentEvent('run-1', 'run_started', 0, { thread_id: 'agent-thread-2' }), 0)
+    controlled.emit(
+      agentEvent('run-1', 'run_completed', 1, {
+        status: 'completed',
+        thread_id: 'agent-thread-2',
+      }),
+      0,
+    )
+    controlled.finish(0)
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已完成'))
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBe('agent-thread-2')
+  })
+
+  it('clears the thread id when clearing the current session', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-clear')
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await user.type(screen.getByLabelText('输入消息'), '清空线程')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).threadId).toBe('thread-clear')
+
+    await user.click(screen.getByRole('button', { name: '清空当前会话' }))
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBeNull()
+
+    await user.type(screen.getByLabelText('输入消息'), '新线程')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(2))
+    expect(controlled.getRequest(1).threadId).toBeNull()
+  })
+
+  it('keeps the backend-provided thread id after a Chat failure', async () => {
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await user.type(screen.getByLabelText('输入消息'), '失败线程')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    controlled.fail(
+      new ChatBackendError('后端失败', 502, 'PROVIDER_ERROR', 'req-error', 'thread-chat-error'),
+    )
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/失败/))
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBe('thread-chat-error')
+  })
+
+  it('keeps the backend-provided thread id after an Agent failure', async () => {
+    const user = userEvent.setup()
+    const controlled = createControlledAgentClient()
+    renderConsole(<App agentClient={controlled.client} />)
+    await user.click(screen.getByRole('button', { name: 'Agent Run 模式' }))
+    await user.type(screen.getByLabelText('输入消息'), 'Agent 失败线程')
+    await user.click(screen.getByRole('button', { name: '运行 Agent' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+
+    controlled.getRequest().reject(new AgentNetworkError(undefined, 'thread-agent-error'))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/失败/))
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBe('thread-agent-error')
   })
 })

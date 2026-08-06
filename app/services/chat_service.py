@@ -34,6 +34,7 @@ class ChatService:
         result = self._parse_chat_response(data)
         return ChatResponse(
             model=result.model,
+            thread_id=request.thread_id,
             created_at=result.created_at,
             message=ChatMessage(role=result.role, content=result.content),
             done=result.done,

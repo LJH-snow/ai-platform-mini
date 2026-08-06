@@ -33,6 +33,21 @@ def _get_request_id(request: Request) -> str | None:
     return context.request_id if context else None
 
 
+def _get_thread_id(request: Request) -> str | None:
+    return getattr(request.state, "thread_id", None)
+
+
+def _error_payload(
+    request: Request, code: ErrorCode, message: str
+) -> dict[str, object]:
+    return ErrorResponse(
+        code=code,
+        message=message,
+        request_id=_get_request_id(request),
+        thread_id=_get_thread_id(request),
+    ).model_dump()
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AuthenticationError)
     async def handle_authentication_error(
@@ -42,11 +57,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s authentication_error %s", request_id, exc)
         return JSONResponse(
             status_code=401,
-            content=ErrorResponse(
-                code=ErrorCode.AUTHENTICATION_ERROR,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.AUTHENTICATION_ERROR, str(exc)),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -58,11 +69,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s authorization_error %s", request_id, exc)
         return JSONResponse(
             status_code=403,
-            content=ErrorResponse(
-                code=ErrorCode.AUTHORIZATION_ERROR,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.AUTHORIZATION_ERROR, str(exc)),
         )
 
     @app.exception_handler(ValidationError)
@@ -73,11 +80,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s validation_error %s", request_id, exc)
         return JSONResponse(
             status_code=422,
-            content=ErrorResponse(
-                code=ErrorCode.VALIDATION_ERROR,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.VALIDATION_ERROR, str(exc)),
         )
 
     @app.exception_handler(ConflictError)
@@ -88,11 +91,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s conflict_error %s", request_id, exc)
         return JSONResponse(
             status_code=409,
-            content=ErrorResponse(
-                code=ErrorCode.CONFLICT_ERROR,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.CONFLICT_ERROR, str(exc)),
         )
 
     @app.exception_handler(RateLimitError)
@@ -104,11 +103,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         retry_after = getattr(request.state, "rate_limit_reset_after", 60)
         return JSONResponse(
             status_code=429,
-            content=ErrorResponse(
-                code=ErrorCode.RATE_LIMIT_ERROR,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.RATE_LIMIT_ERROR, str(exc)),
             headers={"Retry-After": str(retry_after)},
         )
 
@@ -120,11 +115,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s quota_exceeded %s", request_id, exc)
         return JSONResponse(
             status_code=429,
-            content=ErrorResponse(
-                code=ErrorCode.QUOTA_EXCEEDED,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.QUOTA_EXCEEDED, str(exc)),
             headers={"Retry-After": str(exc.retry_after)},
         )
 
@@ -136,11 +127,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.error("request_id=%s quota_unavailable %s", request_id, exc)
         return JSONResponse(
             status_code=503,
-            content=ErrorResponse(
-                code=ErrorCode.QUOTA_UNAVAILABLE,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.QUOTA_UNAVAILABLE, str(exc)),
         )
 
     @app.exception_handler(ModelNotFoundError)
@@ -151,11 +138,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s model_not_found %s", request_id, exc)
         return JSONResponse(
             status_code=404,
-            content=ErrorResponse(
-                code=ErrorCode.MODEL_NOT_FOUND,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.MODEL_NOT_FOUND, str(exc)),
         )
 
     @app.exception_handler(APIKeyNotFoundError)
@@ -166,11 +149,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s api_key_not_found %s", request_id, exc)
         return JSONResponse(
             status_code=404,
-            content=ErrorResponse(
-                code=ErrorCode.API_KEY_NOT_FOUND,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.API_KEY_NOT_FOUND, str(exc)),
         )
 
     @app.exception_handler(ConversationNotFoundError)
@@ -181,11 +160,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s conversation_not_found %s", request_id, exc)
         return JSONResponse(
             status_code=404,
-            content=ErrorResponse(
-                code=ErrorCode.CONVERSATION_NOT_FOUND,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.CONVERSATION_NOT_FOUND, str(exc)),
         )
 
     @app.exception_handler(ProviderUnavailableError)
@@ -196,11 +171,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.error("request_id=%s provider_unavailable %s", request_id, exc)
         return JSONResponse(
             status_code=502,
-            content=ErrorResponse(
-                code=ErrorCode.PROVIDER_UNAVAILABLE,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.PROVIDER_UNAVAILABLE, str(exc)),
         )
 
     @app.exception_handler(ProviderError)
@@ -211,11 +182,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.error("request_id=%s provider_error %s", request_id, exc)
         return JSONResponse(
             status_code=502,
-            content=ErrorResponse(
-                code=ErrorCode.PROVIDER_ERROR,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.PROVIDER_ERROR, str(exc)),
         )
 
     @app.exception_handler(RAGUnavailableError)
@@ -226,11 +193,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.error("request_id=%s rag_unavailable %s", request_id, exc)
         return JSONResponse(
             status_code=503,
-            content=ErrorResponse(
-                code=ErrorCode.RAG_UNAVAILABLE,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.RAG_UNAVAILABLE, str(exc)),
         )
 
     @app.exception_handler(KnowledgeBaseEmptyError)
@@ -241,11 +204,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s knowledge_base_empty %s", request_id, exc)
         return JSONResponse(
             status_code=404,
-            content=ErrorResponse(
-                code=ErrorCode.KNOWLEDGE_BASE_EMPTY,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.KNOWLEDGE_BASE_EMPTY, str(exc)),
         )
 
     @app.exception_handler(NoRelevantContextError)
@@ -256,11 +215,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s no_relevant_context %s", request_id, exc)
         return JSONResponse(
             status_code=404,
-            content=ErrorResponse(
-                code=ErrorCode.NO_RELEVANT_CONTEXT,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.NO_RELEVANT_CONTEXT, str(exc)),
         )
 
     @app.exception_handler(RAGDocumentValidationError)
@@ -271,11 +226,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s rag_document_invalid %s", request_id, exc)
         return JSONResponse(
             status_code=400,
-            content=ErrorResponse(
-                code=ErrorCode.RAG_DOCUMENT_INVALID,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.RAG_DOCUMENT_INVALID, str(exc)),
         )
 
     @app.exception_handler(RAGDocumentTooLargeError)
@@ -286,11 +237,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("request_id=%s rag_document_too_large %s", request_id, exc)
         return JSONResponse(
             status_code=413,
-            content=ErrorResponse(
-                code=ErrorCode.RAG_DOCUMENT_TOO_LARGE,
-                message=str(exc),
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(request, ErrorCode.RAG_DOCUMENT_TOO_LARGE, str(exc)),
         )
 
     @app.exception_handler(RAGStorageUnavailableError)
@@ -301,11 +248,11 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.error("request_id=%s rag_storage_unavailable %s", request_id, exc)
         return JSONResponse(
             status_code=503,
-            content=ErrorResponse(
-                code=ErrorCode.RAG_STORAGE_UNAVAILABLE,
-                message="RAG storage is temporarily unavailable",
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(
+                request,
+                ErrorCode.RAG_STORAGE_UNAVAILABLE,
+                "RAG storage is temporarily unavailable",
+            ),
         )
 
     @app.exception_handler(Exception)
@@ -314,9 +261,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.exception("request_id=%s unhandled_error %s", request_id, exc)
         return JSONResponse(
             status_code=500,
-            content=ErrorResponse(
-                code=ErrorCode.INTERNAL_ERROR,
-                message="An unexpected error occurred.",
-                request_id=request_id,
-            ).model_dump(),
+            content=_error_payload(
+                request,
+                ErrorCode.INTERNAL_ERROR,
+                "An unexpected error occurred.",
+            ),
         )

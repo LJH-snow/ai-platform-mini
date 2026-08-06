@@ -23,6 +23,18 @@ describe('Agent SSE parser', () => {
     expect(values[0]?.request_id).toBe('req-1')
   })
 
+  it('parses and validates the optional thread id', () => {
+    expect(parseAgentStreamEvent('run_started', event(0, { thread_id: 'thread-1' }))).toMatchObject(
+      { thread_id: 'thread-1' },
+    )
+    expect(parseAgentStreamEvent('run_started', event(1, { thread_id: null }))).toMatchObject({
+      thread_id: null,
+    })
+    expect(() => parseAgentStreamEvent('run_started', event(2, { thread_id: 1 }))).toThrow(
+      AgentStreamFormatError,
+    )
+  })
+
   it('rejects malformed JSON and missing stable fields', () => {
     expect(() => parseAgentStreamEvent('run_started', '{bad')).toThrow(AgentStreamFormatError)
     expect(() => parseAgentStreamEvent('run_started', JSON.stringify({ sequence: 1 }))).toThrow(
@@ -61,6 +73,19 @@ describe('Agent SSE parser', () => {
         JSON.stringify({ run_id: 'run-1', sequence: 2, error_code: 'stream_failed' }),
       ),
     ).toMatchObject({ event: 'stream_error', sequence: 2, error_code: 'stream_failed' })
+    expect(
+      parseAgentStreamEvent(
+        'stream_error',
+        JSON.stringify({
+          run_id: 'run-1',
+          thread_id: 'thread-1',
+          error_code: 'stream_failed',
+        }),
+      ),
+    ).toMatchObject({ event: 'stream_error', thread_id: 'thread-1' })
+    expect(() =>
+      parseAgentStreamEvent('stream_error', JSON.stringify({ error_code: 'failed', thread_id: 1 })),
+    ).toThrow(AgentStreamFormatError)
     expect(() =>
       parseAgentStreamEvent('run_started', JSON.stringify({ error_code: 'failed' })),
     ).toThrow(AgentStreamFormatError)

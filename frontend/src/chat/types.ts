@@ -11,8 +11,10 @@ export type ChatApiMessage = Pick<ChatMessage, 'role' | 'content'>
 export type ChatStreamHandlers = {
   onDelta: (content: string) => void
   onRequestId: (requestId: string) => void
+  onThreadId?: (threadId: string) => void
 }
 
 export type ChatStreamResult = {
   requestId: string | null
+  threadId: string | null
 }

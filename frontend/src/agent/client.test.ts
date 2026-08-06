@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AgentBackendError, AgentNetworkError, createAgentClient } from './client.ts'
+import type { AgentStreamEvent } from './stream.ts'
 import {
   DEFAULT_AGENT_MAX_STEPS,
   DEFAULT_AGENT_TIMEOUT_SECONDS,
@@ -97,6 +98,70 @@ describe('createAgentClient', () => {
     )
   })
 
+  it('sends the thread id and adapts it from the synchronous response', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ ...successPayload, thread_id: 'thread-1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const result = await createAgentClient({ fetchImpl }).runAgent(
+      { message: '2+2', history: [], threadId: 'thread-1' },
+      new AbortController().signal,
+    )
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({
+          message: '2+2',
+          history: [],
+          thread_id: 'thread-1',
+          token_budget: DEFAULT_AGENT_TOKEN_BUDGET,
+          max_steps: DEFAULT_AGENT_MAX_STEPS,
+          timeout_seconds: DEFAULT_AGENT_TIMEOUT_SECONDS,
+        }),
+      }),
+    )
+    expect(result.threadId).toBe('thread-1')
+  })
+
+  it('sends the thread id to stream runs and parses it from events', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        'event: run_started\ndata: {"run_id":"run-1","thread_id":"thread-2","sequence":0}\n\nevent: run_completed\ndata: {"run_id":"run-1","thread_id":"thread-2","sequence":1,"status":"completed","stop_reason":"direct_answer"}\n\n',
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      ),
+    )
+    const events: AgentStreamEvent[] = []
+
+    await createAgentClient({ fetchImpl }).streamAgent?.(
+      { message: 'stream', history: [], threadId: 'thread-1' },
+      { onEvent: (event) => events.push(event) },
+      new AbortController().signal,
+    )
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/v1/agent/runs/stream',
+      expect.objectContaining({
+        body: JSON.stringify({
+          message: 'stream',
+          history: [],
+          thread_id: 'thread-1',
+          token_budget: DEFAULT_AGENT_TOKEN_BUDGET,
+          max_steps: DEFAULT_AGENT_MAX_STEPS,
+          timeout_seconds: DEFAULT_AGENT_TIMEOUT_SECONDS,
+        }),
+      }),
+    )
+    expect(events[0]?.thread_id).toBe('thread-2')
+    expect(events[1]?.thread_id).toBe('thread-2')
+  })
+
   it('sends the rag preset only when explicitly requested', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockImplementation(() =>
       Promise.resolve(
@@ -188,6 +253,7 @@ describe('createAgentClient', () => {
         JSON.stringify({
           code: 'PROVIDER_ERROR',
           message: 'Traceback /Users/admin/app.py api_key=secret provider raw body',
+          thread_id: 'thread-http-error',
         }),
         { status: 502, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -203,6 +269,7 @@ describe('createAgentClient', () => {
         name: 'AgentBackendError',
         status: 502,
         code: 'PROVIDER_ERROR',
+        threadId: 'thread-http-error',
         message: 'Agent 服务暂时不可用，请稍后重试。',
       }),
     )
@@ -218,10 +285,13 @@ describe('createAgentClient', () => {
 
   it('turns a startup stream_error without run metadata into a network error', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('event: stream_error\ndata: {"error_code":"provider_unavailable"}\n\n', {
-        status: 200,
-        headers: { 'Content-Type': 'text/event-stream' },
-      }),
+      new Response(
+        'event: stream_error\ndata: {"error_code":"provider_unavailable","thread_id":"thread-stream-error"}\n\n',
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        },
+      ),
     )
     const client = createAgentClient({ fetchImpl })
 
@@ -231,7 +301,10 @@ describe('createAgentClient', () => {
         { onEvent: vi.fn() },
         new AbortController().signal,
       ),
-    ).rejects.toBeInstanceOf(AgentNetworkError)
+    ).rejects.toMatchObject({
+      name: 'AgentNetworkError',
+      threadId: 'thread-stream-error',
+    })
     expect(fetchImpl).toHaveBeenCalledWith(
       '/api/v1/agent/runs/stream',
       expect.objectContaining({

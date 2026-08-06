@@ -82,6 +82,8 @@ const createMessage = (role: ChatMessage['role'], content: string): ChatMessage 
   content,
 })
 
+const THREAD_ID_STORAGE = 'ai-platform-thread-id'
+
 const RAG_PRESET_QUESTION =
   '请基于知识库内容回答：什么是智能体？必须先调用 knowledge_search；如果没有相关来源，请明确说明知识库没有相关内容，不要使用未检索到的知识进行回答。'
 
@@ -579,6 +581,9 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const [draft, setDraft] = useState('')
   const [sessionCount, setSessionCount] = useState(0)
   const [clearedCount, setClearedCount] = useState(0)
+  const [threadId, setThreadId] = useState<string | null>(() =>
+    sessionStorage.getItem(THREAD_ID_STORAGE),
+  )
   const [requestStatus, setRequestStatus] = useState<RequestStatus>('idle')
   const [agentSseActive, setAgentSseActive] = useState(false)
   const [requestId, setRequestId] = useState<string | null>(null)
@@ -611,6 +616,11 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     )
   }
 
+  const storeThreadId = (nextThreadId: string): void => {
+    setThreadId(nextThreadId)
+    sessionStorage.setItem(THREAD_ID_STORAGE, nextThreadId)
+  }
+
   const resetConversation = (action: 'new' | 'clear'): void => {
     if (activeRequest.current) {
       activeRequest.current.stopped = true
@@ -633,6 +643,9 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setAnnouncement(action === 'new' ? '已新建会话。' : '已清空当前会话。')
     setRequestStatus('idle')
     setAgentSseActive(false)
+
+    setThreadId(null)
+    sessionStorage.removeItem(THREAD_ID_STORAGE)
 
     if (action === 'new') {
       setSessionCount((count) => count + 1)
@@ -682,7 +695,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setAnnouncement('Chat 请求已开始。')
 
     try {
-      await resolvedChatClient.streamChat(
+      const result = await resolvedChatClient.streamChat(
         nextMessages.map(({ role, content }) => ({ role, content })),
         {
           onDelta: (delta) => {
@@ -698,10 +711,15 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
           onRequestId: (id) => {
             if (activeRequest.current === request && !request.stopped) setRequestId(id)
           },
+          onThreadId: (id) => {
+            if (activeRequest.current === request && !request.stopped) storeThreadId(id)
+          },
         },
         request.controller.signal,
+        threadId,
       )
       if (!request.stopped) {
+        if (result.threadId) storeThreadId(result.threadId)
         setRequestStatus('completed')
         setAnnouncement('Chat 请求已完成。')
       }
@@ -719,6 +737,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         setRequestStatus('chat_failed')
         setAnnouncement('Chat 后端请求失败，可重试。')
         if (error.requestId) setRequestId(error.requestId)
+        if (error.threadId) storeThreadId(error.threadId)
       } else if (error instanceof Error && error.name === 'ChatNetworkError') {
         setErrorMessage('无法连接 Chat 服务，请稍后重试。')
         setRequestStatus('network')
@@ -764,6 +783,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
           {
             onEvent: (event) => {
               if (activeRequest.current !== request || request.stopped) return
+              if (event.thread_id) storeThreadId(event.thread_id)
               const next = reduceAgentStream(agentStreamState.current, event)
               if (next === agentStreamState.current) return
               agentStreamState.current = next
@@ -806,6 +826,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       }
       if (activeRequest.current !== request || request.stopped) return
       setAgentRun(run)
+      if (run.threadId) storeThreadId(run.threadId)
       replaceAssistantContent(assistantMessage.id, fallbackAnswerForRun(run))
       setRequestStatus(requestStatusForRun(run.status))
       const runAnnouncement =
@@ -830,6 +851,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         setAnnouncement('已停止等待 Agent 响应；后端终态未知。')
       } else if (error instanceof AgentNetworkError) {
         const message = getSafeAgentErrorMessage(error)
+        if (error.threadId) storeThreadId(error.threadId)
         replaceAssistantContent(assistantMessage.id, message)
         setTraceUnavailableMessage('本次 Agent 请求未收到可展示的 Trace。')
         setErrorMessage(message)
@@ -844,6 +866,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         setAnnouncement('Agent 响应格式错误，可重试。')
       } else if (error instanceof AgentBackendError || error instanceof AgentResponseError) {
         const message = getSafeAgentErrorMessage(error)
+        if (error instanceof AgentBackendError && error.threadId) storeThreadId(error.threadId)
         replaceAssistantContent(assistantMessage.id, message)
         setTraceUnavailableMessage('本次 Agent 请求未收到可展示的 Trace。')
         setErrorMessage(message)
@@ -886,6 +909,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             role,
             content: messageContent,
           })),
+          threadId,
           ...(ragPreset ? { preset: 'rag' as const } : {}),
         },
         assistantMessage,
@@ -997,6 +1021,11 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     setAnnouncement('已进入知识库问答（RAG Agent preset），问题已准备好。')
   }
 
+  const handleNewSession = (): void => {
+    resetConversation('new')
+    setPage('console')
+  }
+
   const renderPlatformShell = (content: JSX.Element): JSX.Element => {
     const navigation: Array<{ id: AppPage; label: string; shortLabel: string }> = [
       { id: 'dashboard', label: '平台概览', shortLabel: '概览' },
@@ -1044,6 +1073,44 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               <span>管理员后台</span>
             </button>
           </nav>
+          <div className="sidebarSession">
+            <span className="navSectionLabel">SESSION</span>
+            <form className="sidebarKeyForm" onSubmit={applyUserApiKey}>
+              <label htmlFor="user-api-key">用户 API Key</label>
+              <p className="sidebarKeyHint">
+                管理员创建普通 Key 后粘贴到这里；管理员 Key 不要填入。
+              </p>
+              <input
+                id="user-api-key"
+                type="password"
+                value={userApiKeyInput}
+                onChange={(event) => setUserApiKeyInput(event.target.value)}
+                placeholder="sk-…"
+                autoComplete="off"
+              />
+              <div className="sidebarKeyActions">
+                <button type="submit">保存并使用</button>
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  onClick={() => {
+                    setUserApiKeyInput('')
+                    setUserApiKey('')
+                    sessionStorage.removeItem(USER_KEY_STORAGE)
+                    setAnnouncement('已清除用户 Key。')
+                  }}
+                >
+                  清除
+                </button>
+              </div>
+              <span className="keyEntryStatus">
+                {userApiKey ? '已配置用户 Key' : '未配置用户 Key'}
+              </span>
+            </form>
+            <button type="button" className="newSessionButton" onClick={handleNewSession}>
+              新建会话
+            </button>
+          </div>
           <div className="sidebarFooter">
             <span
               className={effectiveApiKey ? 'sidebarStatus sidebarStatusOnline' : 'sidebarStatus'}
@@ -1120,39 +1187,6 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               管理员后台
             </button>
           </div>
-        </section>
-
-        <section className="keyEntryPanel panel" aria-label="用户 API Key">
-          <form className="keyEntryForm" onSubmit={applyUserApiKey}>
-            <div>
-              <label htmlFor="user-api-key">用户 API Key</label>
-              <p className="formHint">管理员创建普通 Key 后粘贴到这里；管理员 Key 不要填入。</p>
-            </div>
-            <input
-              id="user-api-key"
-              type="password"
-              value={userApiKeyInput}
-              onChange={(event) => setUserApiKeyInput(event.target.value)}
-              placeholder="sk-…"
-              autoComplete="off"
-            />
-            <button type="submit">保存并使用</button>
-            <button
-              type="button"
-              className="secondaryButton"
-              onClick={() => {
-                setUserApiKeyInput('')
-                setUserApiKey('')
-                sessionStorage.removeItem(USER_KEY_STORAGE)
-                setAnnouncement('已清除用户 Key。')
-              }}
-            >
-              清除
-            </button>
-            <span className="keyEntryStatus">
-              {userApiKey ? '已配置用户 Key' : '未配置用户 Key'}
-            </span>
-          </form>
         </section>
 
         <section className="consoleGrid" aria-label="Agent Console">
@@ -1444,9 +1478,6 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             <strong>{statusLabels[requestStatus]}</strong>
           </div>
           <div className="actions">
-            <button type="button" onClick={() => resetConversation('new')}>
-              新建会话
-            </button>
             <button
               type="button"
               className="secondaryButton"

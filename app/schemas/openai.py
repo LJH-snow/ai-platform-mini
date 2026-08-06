@@ -10,6 +10,14 @@ class OpenAIChatMessage(BaseModel):
 
 class OpenAIChatRequest(BaseModel):
     model: str | None = None
+    thread_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Optional server-side conversation thread id. When omitted a new "
+            "thread is created and returned in the response."
+        ),
+    )
     messages: list[OpenAIChatMessage] = Field(min_length=1)
     stream: bool = False
     temperature: float | None = Field(default=None, ge=0, le=2)
@@ -30,6 +38,7 @@ class OpenAIUsage(BaseModel):
 
 class OpenAIChatResponse(BaseModel):
     id: str
+    thread_id: str | None = None
     object: str = "chat.completion"
     created: int
     model: str
@@ -50,6 +59,7 @@ class OpenAIStreamChoice(BaseModel):
 
 class OpenAIStreamChunk(BaseModel):
     id: str
+    thread_id: str | None = None
     object: str = "chat.completion.chunk"
     created: int
     model: str

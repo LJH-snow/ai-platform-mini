@@ -29,6 +29,7 @@ const isAgentStreamEventName = (value: string): value is AgentStreamEventName =>
 export type AgentStreamEvent = {
   event: AgentStreamEventName
   run_id: string
+  thread_id?: string | null
   request_id?: string | null
   sequence: number
   occurred_at?: string | null
@@ -128,6 +129,7 @@ export function parseAgentStreamEvent(eventName: string, data: string): AgentStr
     if (
       (record.run_id !== undefined && typeof record.run_id !== 'string') ||
       (record.sequence !== undefined && !isSequence(record.sequence)) ||
+      (record.thread_id !== undefined && !isNullableString(record.thread_id)) ||
       typeof record.error_code !== 'string' ||
       !record.error_code
     ) {
@@ -138,6 +140,9 @@ export function parseAgentStreamEvent(eventName: string, data: string): AgentStr
       run_id: record.run_id ?? '',
       sequence: record.sequence ?? -1,
       error_code: record.error_code,
+      ...(typeof record.thread_id === 'string' || record.thread_id === null
+        ? { thread_id: record.thread_id }
+        : {}),
     }
   }
   if (typeof record.run_id !== 'string' || !record.run_id) {
@@ -159,6 +164,7 @@ export function parseAgentStreamEvent(eventName: string, data: string): AgentStr
     throw new AgentStreamFormatError()
   }
   if (
+    (record.thread_id !== undefined && !isNullableString(record.thread_id)) ||
     (record.request_id !== undefined && !isNullableString(record.request_id)) ||
     (record.call_id !== undefined && !isNullableString(record.call_id)) ||
     (record.tool_name !== undefined && !isNullableString(record.tool_name)) ||
@@ -191,6 +197,9 @@ export function parseAgentStreamEvent(eventName: string, data: string): AgentStr
     event: eventName,
     run_id: record.run_id,
     sequence: record.sequence,
+    ...(typeof record.thread_id === 'string' || record.thread_id === null
+      ? { thread_id: record.thread_id }
+      : {}),
     ...(typeof record.request_id === 'string' || record.request_id === null
       ? { request_id: record.request_id }
       : {}),

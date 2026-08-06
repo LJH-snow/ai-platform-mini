@@ -24,6 +24,7 @@ class OpenAIAdapter:
 
         return ChatRequest(
             message=last_message.content,
+            thread_id=request.thread_id,
             model=request.model,
             system_prompt=system_prompt,
             history=history,
@@ -53,6 +54,7 @@ class OpenAIAdapter:
             )
         return OpenAIChatResponse(
             id=completion_id,
+            thread_id=response.thread_id,
             created=created,
             model=response.model,
             choices=[

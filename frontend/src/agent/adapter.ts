@@ -399,6 +399,7 @@ export function adaptAgentRunResponse(response: AgentRunApiResponse): AgentRun {
 
   return {
     runId: response.run_id || null,
+    threadId: response.thread_id ?? null,
     status,
     answer: response.answer,
     stopReason: normalizeStopReason(response.stop_reason),

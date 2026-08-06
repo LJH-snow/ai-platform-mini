@@ -38,19 +38,29 @@ export type AgentClient = {
 export class AgentBackendError extends Error {
   readonly status: number
   readonly code: string | null
+  readonly threadId: string | null
 
-  constructor(message: string, status: number, code: string | null) {
+  constructor(
+    message: string,
+    status: number,
+    code: string | null,
+    threadId: string | null = null,
+  ) {
     super(message)
     this.name = 'AgentBackendError'
     this.status = status
     this.code = code
+    this.threadId = threadId
   }
 }
 
 export class AgentNetworkError extends Error {
-  constructor(message = '无法连接 Agent 服务，请检查网络后重试。') {
+  readonly threadId: string | null
+
+  constructor(message = '无法连接 Agent 服务，请检查网络后重试。', threadId: string | null = null) {
     super(message)
     this.name = 'AgentNetworkError'
+    this.threadId = threadId
   }
 }
 
@@ -61,7 +71,7 @@ export class AgentResponseError extends Error {
   }
 }
 
-type ErrorPayload = { code?: unknown }
+type ErrorPayload = { code?: unknown; thread_id?: unknown }
 
 const joinUrl = (baseUrl: string | undefined, path: string): string => {
   if (!baseUrl) {
@@ -109,6 +119,7 @@ const agentRequestBody = (input: AgentRunInput): AgentRunApiRequest => {
   return {
     message: input.message,
     history: input.history,
+    ...(input.threadId ? { thread_id: input.threadId } : {}),
     token_budget: input.tokenBudget ?? DEFAULT_AGENT_TOKEN_BUDGET,
     max_steps: input.maxSteps ?? DEFAULT_AGENT_MAX_STEPS,
     timeout_seconds: input.timeoutSeconds ?? DEFAULT_AGENT_TIMEOUT_SECONDS,
@@ -132,12 +143,12 @@ const safeBackendMessage = (status: number): string => {
   return `Agent 请求失败（HTTP ${status}）。`
 }
 
-const getErrorCode = async (response: Response): Promise<string | null> => {
+const getErrorPayload = async (response: Response): Promise<ErrorPayload> => {
   try {
     const value = (await response.json()) as ErrorPayload
-    return typeof value.code === 'string' ? value.code : null
+    return value
   } catch {
-    return null
+    return {}
   }
 }
 
@@ -291,6 +302,7 @@ const isApiResponse = (value: unknown): value is AgentRunApiResponse => {
   const usageRecord = usage as Record<string, unknown>
   return (
     typeof response.run_id === 'string' &&
+    isOptionalNullableString(response.thread_id) &&
     isApiStatus(response.status) &&
     isNullableString(response.answer) &&
     typeof response.stop_reason === 'string' &&
@@ -332,10 +344,12 @@ export function createAgentClient(options: AgentClientOptions = {}): AgentClient
       }
 
       if (!response.ok) {
+        const payload = await getErrorPayload(response)
         throw new AgentBackendError(
           safeBackendMessage(response.status),
           response.status,
-          await getErrorCode(response),
+          typeof payload.code === 'string' ? payload.code : null,
+          typeof payload.thread_id === 'string' ? payload.thread_id : null,
         )
       }
 
@@ -369,21 +383,26 @@ export function createAgentClient(options: AgentClientOptions = {}): AgentClient
         throw new AgentNetworkError()
       }
       if (!response.ok) {
+        const payload = await getErrorPayload(response)
         throw new AgentBackendError(
           safeBackendMessage(response.status),
           response.status,
-          await getErrorCode(response),
+          typeof payload.code === 'string' ? payload.code : null,
+          typeof payload.thread_id === 'string' ? payload.thread_id : null,
         )
       }
       if (!response.body) throw new AgentStreamFormatError()
       try {
         for await (const event of readAgentSse(response)) {
-          if (event.event === 'stream_error') throw new AgentNetworkError()
+          if (event.event === 'stream_error') {
+            throw new AgentNetworkError(undefined, event.thread_id ?? null)
+          }
           handlers.onEvent(event)
         }
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') throw error
         if (error instanceof AgentStreamFormatError) throw error
+        if (error instanceof AgentNetworkError) throw error
         throw new AgentNetworkError()
       }
     },

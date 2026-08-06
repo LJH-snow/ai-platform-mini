@@ -4,7 +4,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response
 
 from app.auth.models import APIKey
+from app.conversations.memory import (
+    conversation_owner,
+    persist_turn,
+    prepare_thread,
+)
+from app.conversations.service import ConversationService
 from app.core.container import (
+    provide_conversation_service,
     provide_quota_service,
     provide_usage_collector,
 )
@@ -37,10 +44,26 @@ async def create_chat_completion(
     response: Response,
     service: Annotated[ChatService, Depends(get_chat_service)],
     _api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    conversation_service: Annotated[
+        ConversationService, Depends(provide_conversation_service)
+    ],
     collector: Annotated[UsageCollector, Depends(provide_usage_collector)],
     quota_service: Annotated[QuotaService, Depends(provide_quota_service)],
 ) -> ChatResponse:
     context: RequestContext = http_request.state.context
+    owner_key_hash = conversation_owner(_api_key)
+    thread_id, merged_history = await prepare_thread(
+        conversation_service,
+        owner_key_hash=owner_key_hash,
+        thread_id=request.thread_id,
+        title=request.message,
+        client_history=request.history,
+        user_content=request.message,
+    )
+    http_request.state.thread_id = thread_id
+    request = request.model_copy(
+        update={"thread_id": thread_id, "history": merged_history}
+    )
     messages: list[tuple[str, str]] = []
     if request.system_prompt:
         messages.append(("system", request.system_prompt))
@@ -60,6 +83,15 @@ async def create_chat_completion(
             context=context, response=chat_response, latency_ms=latency_ms
         )
         await lifecycle.settle()
+
+    chat_response = chat_response.model_copy(update={"thread_id": thread_id})
+    await persist_turn(
+        conversation_service,
+        owner_key_hash=owner_key_hash,
+        thread_id=thread_id,
+        user_content=request.message,
+        assistant_content=chat_response.message.content,
+    )
 
     remaining = getattr(http_request.state, "rate_limit_remaining", None)
     limit = getattr(http_request.state, "rate_limit_limit", None)
