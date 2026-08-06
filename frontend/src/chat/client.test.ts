@@ -73,7 +73,39 @@ describe('createChatClient', () => {
     )
     expect(deltas).toEqual(['你好', '，世界'])
     expect(requestIds).toEqual(['req-sse-123'])
-    expect(result).toEqual({ requestId: 'req-sse-123' })
+    expect(result).toEqual({ requestId: 'req-sse-123', threadId: null })
+  })
+
+  it('sends the thread id and exposes it from SSE chunks', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        createSseResponse([
+          'data: {"thread_id":"thread-1","choices":[{"delta":{"content":"你好"}}]}\n\ndata: [DONE]\n\n',
+        ]),
+      )
+    const threadIds: string[] = []
+    const messages: ChatApiMessage[] = [{ role: 'user', content: '你好' }]
+
+    const result = await createChatClient({ fetchImpl }).streamChat(
+      messages,
+      {
+        onDelta: vi.fn(),
+        onRequestId: vi.fn(),
+        onThreadId: (threadId) => threadIds.push(threadId),
+      },
+      new AbortController().signal,
+      'thread-1',
+    )
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({ messages, stream: true, thread_id: 'thread-1' }),
+      }),
+    )
+    expect(threadIds).toEqual(['thread-1'])
+    expect(result.threadId).toBe('thread-1')
   })
 
   it('maps backend JSON errors and preserves the request id', async () => {
@@ -83,6 +115,7 @@ describe('createChatClient', () => {
           code: 'AUTHENTICATION_ERROR',
           message: 'Chat 请求未通过鉴权，请检查运行时凭据。',
           request_id: 'req-auth-123',
+          thread_id: 'thread-auth-123',
         }),
         {
           status: 401,
@@ -104,6 +137,7 @@ describe('createChatClient', () => {
         status: 401,
         code: 'AUTHENTICATION_ERROR',
         requestId: 'req-auth-123',
+        threadId: 'thread-auth-123',
         message: 'Chat 请求未通过鉴权，请检查运行时凭据。',
       }),
     )

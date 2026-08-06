@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
 
@@ -23,8 +24,14 @@ from app.agents.models import (
     ToolResult,
 )
 from app.api.agent import _to_response, _to_stream_event, get_agent_service
+from app.auth.hash import hash_api_key
 from app.auth.models import APIKey
-from app.core.container import provide_agent_run_record_service
+from app.conversations.memory_repository import InMemoryConversationRepository
+from app.conversations.service import ConversationService
+from app.core.container import (
+    provide_agent_run_record_service,
+    provide_conversation_service,
+)
 from app.core.context import RequestContext
 from app.exceptions.base import ProviderError, QuotaExceededError, RAGUnavailableError
 from app.main import app
@@ -49,13 +56,14 @@ from app.tools.registry import ToolRegistry
 
 client = TestClient(app)
 _AUTH_HEADERS = {"Authorization": "Bearer sk-test-integration"}
+_TEST_OWNER = hash_api_key("sk-test-integration")
 
 
 @dataclass
 class FakeAgentService:
     outcome: AgentRunOutcome | None = None
     error: Exception | None = None
-    requests: list[AgentRunRequest] | None = None
+    requests: list[AgentRunRequest] = field(default_factory=list)
 
     async def run(
         self,
@@ -65,8 +73,7 @@ class FakeAgentService:
         api_key: APIKey,
     ) -> AgentRunOutcome:
         del context, api_key
-        if self.requests is not None:
-            self.requests.append(request)
+        self.requests.append(request)
         if self.error is not None:
             raise self.error
         assert self.outcome is not None
@@ -294,6 +301,122 @@ def test_agent_endpoint_returns_direct_answer_and_usage() -> None:
     }
 
 
+def test_agent_endpoint_creates_thread_and_persists_turn() -> None:
+    service = FakeAgentService(outcome=_outcome(), requests=[])
+    conversation_service = ConversationService(
+        repository=InMemoryConversationRepository()
+    )
+    _override(service)
+    app.dependency_overrides[provide_conversation_service] = lambda: (
+        conversation_service
+    )
+    try:
+        response = client.post(
+            "/api/v1/agent/runs",
+            json={"message": "hello"},
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        _clear_overrides()
+        app.dependency_overrides.pop(provide_conversation_service, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["thread_id"]
+    history = asyncio.run(
+        conversation_service.load_history(_TEST_OWNER, body["thread_id"])
+    )
+    assert [(message.role, message.content) for message in history] == [
+        ("user", "hello"),
+        ("assistant", "done"),
+    ]
+
+
+def test_agent_endpoint_reuses_thread_and_merges_server_history() -> None:
+    service = FakeAgentService(outcome=_outcome(), requests=[])
+    conversation_service = ConversationService(
+        repository=InMemoryConversationRepository()
+    )
+    _override(service)
+    app.dependency_overrides[provide_conversation_service] = lambda: (
+        conversation_service
+    )
+    try:
+        first = client.post(
+            "/api/v1/agent/runs",
+            json={"message": "hello"},
+            headers=_AUTH_HEADERS,
+        )
+        thread_id = first.json()["thread_id"]
+        second = client.post(
+            "/api/v1/agent/runs",
+            json={
+                "message": "follow up",
+                "thread_id": thread_id,
+                "history": [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "done"},
+                    {"role": "user", "content": "client only"},
+                ],
+            },
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        _clear_overrides()
+        app.dependency_overrides.pop(provide_conversation_service, None)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["thread_id"] == thread_id
+    assert [
+        (message.role, message.content) for message in service.requests[1].history
+    ] == [
+        ("user", "hello"),
+        ("assistant", "done"),
+        ("user", "client only"),
+    ]
+
+
+def test_agent_endpoint_retry_does_not_duplicate_current_user() -> None:
+    service = FakeAgentService(outcome=_outcome(), requests=[])
+    conversation_service = ConversationService(
+        repository=InMemoryConversationRepository()
+    )
+    _override(service)
+    app.dependency_overrides[provide_conversation_service] = lambda: (
+        conversation_service
+    )
+    try:
+        first = client.post(
+            "/api/v1/agent/runs",
+            json={"message": "hello"},
+            headers=_AUTH_HEADERS,
+        )
+        thread_id = first.json()["thread_id"]
+        second = client.post(
+            "/api/v1/agent/runs",
+            json={
+                "message": "hello",
+                "thread_id": thread_id,
+                "history": [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "done"},
+                ],
+            },
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        _clear_overrides()
+        app.dependency_overrides.pop(provide_conversation_service, None)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert service.requests[1].message == "hello"
+    assert [
+        (message.role, message.content) for message in service.requests[1].history
+    ] == []
+
+
 def test_agent_endpoint_preserves_unknown_provider_usage() -> None:
     service = FakeAgentService(
         outcome=_outcome(
@@ -381,7 +504,13 @@ def test_agent_endpoint_maps_model_failure_without_leaking_internal_error() -> N
     service = FakeAgentService(
         error=ProviderError("internal provider payload must not be exposed")
     )
+    conversation_service = ConversationService(
+        repository=InMemoryConversationRepository()
+    )
     _override(service)
+    app.dependency_overrides[provide_conversation_service] = lambda: (
+        conversation_service
+    )
     try:
         response = client.post(
             "/api/v1/agent/runs",
@@ -390,12 +519,18 @@ def test_agent_endpoint_maps_model_failure_without_leaking_internal_error() -> N
         )
     finally:
         _clear_overrides()
+        app.dependency_overrides.pop(provide_conversation_service, None)
 
     assert response.status_code == 502
     body = response.json()
     assert body["code"] == "PROVIDER_ERROR"
     assert body["message"] == "internal provider payload must not be exposed"
     assert "request_id" in body
+    assert body["thread_id"]
+    history = asyncio.run(
+        conversation_service.load_history(_TEST_OWNER, body["thread_id"])
+    )
+    assert history == []
 
 
 def test_agent_endpoint_preserves_quota_error_mapping() -> None:

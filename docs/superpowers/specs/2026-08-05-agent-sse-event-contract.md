@@ -28,6 +28,7 @@ data: <one JSON object>
 | --- | --- |
 | `event` | 事件名称，由 SSE `event:` 行和 JSON 中的 `event` 同时表达 |
 | `run_id` | 当前 Run 的真实稳定标识 |
+| `thread_id` | 当前会话记忆线程 ID；未启用会话记忆或线程尚不可用时可能为 `null` |
 | `request_id` | Middleware 生成的 Request ID；可能为 `null` |
 | `sequence` | Runtime 事件序号；事件在 Observer 和 SSE 中按 FIFO 顺序发送 |
 | `step_index` | 1 起始的 Step 序号；仅 Step/Tool/Answer 相关事件提供 |
@@ -58,12 +59,14 @@ data: <one JSON object>
 `step_started`、`step_planned`、零个或多个 Tool 事件、`step_completed`，必要时在 Step 之间继续
 下一个 Step；final answer 流会按 Runtime `sequence` 发送零个或多个 `answer_delta`，并在
 Runtime 累计完整答案后结束；非 streaming/legacy 路径可以发送一次完整的
-`assistant_message`。最后发送且只发送一个终止事件。`sequence` 是稳定的 Runtime
-顺序，不代表时间、耗时或精确 Token 计数。
+`assistant_message`。如果 Runtime 直接以工具结果完成（例如 calculator 捷径或最大步数回退）
+且本次 Run 尚未发送任何 `answer_delta`，也会在终止事件前发送一次完整的
+`assistant_message`。最后发送且只发送一个终止事件。`sequence` 是稳定的 Runtime 顺序，
+不代表时间、耗时或精确 Token 计数。
 
 | 事件 | 真实来源与负载 |
 | --- | --- |
-| `run_started` | Runtime 开始；有 `run_id`、`request_id`、`sequence` |
+| `run_started` | Runtime 开始；有 `run_id`、`thread_id`、`request_id`、`sequence` |
 | `step_started` | Runtime 开始一个真实 Step；有 `step_index` |
 | `step_planned` | `MODEL_DECISION` 的安全投影；有 `step_index`、`decision_kind`、`tool_names`、`tool_count` 和有限 `summary`，不含模型原始决策或思维链 |
 | `tool_started` | Runtime 开始真实工具调用；有 `step_index`、`call_id`、`tool_name`、`argument_count` 和安全 `input_summary` |
@@ -89,10 +92,11 @@ Runtime 累计完整答案后结束；非 streaming/legacy 路径可以发送一
 当前实现的 `stream_error` 最小负载为：
 
 ```json
-{"event":"stream_error","error_code":"stream_setup_failed"}
+{"event":"stream_error","thread_id":"...","error_code":"stream_setup_failed"}
 ```
 
-它可能没有 `run_id` 或 `sequence`，因为 Runtime 可能尚未启动。前端解析器允许这种
+它可能没有 `run_id` 或 `sequence`，因为 Runtime 可能尚未启动；`thread_id` 在会话
+线程已解析时提供，未启用会话记忆时省略。前端解析器允许这种
 启动阶段帧，缺失字段会归一化为内部安全值，客户端随后将其归类为
 `AgentNetworkError`。普通 Run 事件仍要求真实的 `run_id` 和非负 `sequence`。
 `stream_error` 只表示流无法启动或连接边界出错，不代表 Agent Run 已产生任何终态，

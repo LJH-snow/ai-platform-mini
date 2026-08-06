@@ -1,5 +1,6 @@
 """PostgreSQL conversation repository with API-key-hash tenant isolation."""
 
+import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -10,6 +11,13 @@ from app.db.conversation_models import (
     ConversationMessageTable,
     ConversationThreadTable,
 )
+
+
+def _normalize_thread_id(thread_id: str) -> str | None:
+    try:
+        return str(uuid.UUID(thread_id))
+    except ValueError:
+        return None
 
 
 class PostgresConversationRepository:
@@ -32,10 +40,13 @@ class PostgresConversationRepository:
     async def get_thread(
         self, thread_id: str, owner_key_hash: str
     ) -> ConversationThread | None:
+        normalized_thread_id = _normalize_thread_id(thread_id)
+        if normalized_thread_id is None:
+            return None
         async with self._session_factory() as session:
             row = await session.scalar(
                 select(ConversationThreadTable).where(
-                    ConversationThreadTable.id == thread_id,
+                    ConversationThreadTable.id == normalized_thread_id,
                     ConversationThreadTable.owner_key_hash == owner_key_hash,
                 )
             )
@@ -49,10 +60,13 @@ class PostgresConversationRepository:
         content: str,
         token_count: int = 0,
     ) -> ConversationMessage | None:
+        normalized_thread_id = _normalize_thread_id(thread_id)
+        if normalized_thread_id is None:
+            return None
         async with self._session_factory() as session:
             thread_row = await session.scalar(
                 select(ConversationThreadTable).where(
-                    ConversationThreadTable.id == thread_id,
+                    ConversationThreadTable.id == normalized_thread_id,
                     ConversationThreadTable.owner_key_hash == owner_key_hash,
                 )
             )
@@ -61,7 +75,7 @@ class PostgresConversationRepository:
 
             now = datetime.now(UTC)
             message_row = ConversationMessageTable(
-                thread_id=thread_id,
+                thread_id=normalized_thread_id,
                 role=role,
                 content=content,
                 token_count=token_count,
@@ -76,6 +90,9 @@ class PostgresConversationRepository:
     async def list_messages(
         self, thread_id: str, owner_key_hash: str
     ) -> list[ConversationMessage]:
+        normalized_thread_id = _normalize_thread_id(thread_id)
+        if normalized_thread_id is None:
+            return []
         async with self._session_factory() as session:
             statement = (
                 select(ConversationMessageTable)
@@ -84,7 +101,7 @@ class PostgresConversationRepository:
                     ConversationThreadTable.id == ConversationMessageTable.thread_id,
                 )
                 .where(
-                    ConversationMessageTable.thread_id == thread_id,
+                    ConversationMessageTable.thread_id == normalized_thread_id,
                     ConversationThreadTable.owner_key_hash == owner_key_hash,
                 )
                 .order_by(

@@ -896,6 +896,25 @@ class AgentRuntime:
             events=events,
             run_id=state.run_id,
         )
+        if (
+            status is RunStatus.COMPLETED
+            and answer is not None
+            and not any(
+                event.kind
+                in {
+                    AgentEventKind.ANSWER,
+                    AgentEventKind.ANSWER_DELTA,
+                }
+                for event in events
+            )
+        ):
+            self._append_event(
+                events,
+                recorder=recorder,
+                kind=AgentEventKind.ANSWER,
+                run_id=state.run_id,
+                message=answer,
+            )
         self._append_event(
             events,
             recorder=recorder,

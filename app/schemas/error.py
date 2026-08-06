@@ -32,3 +32,4 @@ class ErrorResponse(BaseModel):
     code: ErrorCode
     message: str
     request_id: str | None = None
+    thread_id: str | None = None

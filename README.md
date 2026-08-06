@@ -11,7 +11,7 @@
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
 - OpenAIProvider: 已接入 ProviderRouter、DI 和应用生命周期
 - Storage: Memory 或 PostgreSQL
-- Conversation memory: 服务端会话记忆存储层（`conversation_thread` / `conversation_message`），支持 `CONVERSATION_STORAGE=memory|postgres`；当前仅提供存储层 Service，不改变 Chat/Agent 公开 API
+- Conversation memory: Chat/Agent/OpenAI 端点按 `thread_id` 维护服务端会话记忆（`conversation_thread` / `conversation_message`），支持 `CONVERSATION_STORAGE=memory|postgres`
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
@@ -66,8 +66,10 @@
 
 ## Conversation memory
 
-服务端会话记忆由 `app/conversations/` 存储层提供，不改变 Chat/Agent 公开 API 或
-SSE 契约。
+服务端会话记忆已接入原生 Chat、Agent Run（同步与 SSE）和 OpenAI-compatible
+Chat Completions 端点。请求可传可选 `thread_id`；未传时自动创建线程，传入时按
+API Key 校验归属并加载服务端历史。服务端历史排在客户端 `history` 之前，运行结束
+后持久化本轮 user 与 assistant 消息。
 
 - 配置：`CONVERSATION_STORAGE=memory|postgres`，默认 `memory`。
 - 表结构：`conversation_thread`（`id`、`owner_key_hash`、`title`、`created_at`、
@@ -76,6 +78,8 @@ SSE 契约。
 - 能力：`ConversationService` 支持创建/获取线程、追加消息、按时间顺序加载历史；
   所有查询按 `owner_key_hash` 隔离，跨租户线程统一返回 404
   `CONVERSATION_NOT_FOUND`。
+- 响应：Chat/Agent 同步响应与 Agent SSE 事件返回 `thread_id`；OpenAI 流式 chunk
+  同样携带 `thread_id`，客户端可用它延续同一线程。
 - 边界：`memory` 模式仅适合单进程本地开发，多 worker/多实例不会共享会话；
   生产环境请使用 `postgres` 模式。
 
@@ -182,7 +186,7 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - Agent SSE 解析真实的 `run_started`、Step、Tool、RAG、回答和终止事件；事件按 `run_id`/`sequence` 隔离，重复或乱序事件安全忽略；
 - 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（13 个测试文件、141 个测试全部通过）和生产构建。真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行；320px、375px、768px、1024px、1440px 五档均无横向溢出。`npm run a11y:smoke` 已使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG 路径通过：初始空态与真实 Agent/RAG 状态均为 axe `violations=0`；初始空态另有 1 个 `incomplete` 的 color-contrast（`.emptyIcon` 内容过短，axe 无法判断），不能表述为 axe 完全没有 incomplete。4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、键盘 Space 后焦点保持、live region 非逐字播报和 320px 无横向溢出均通过；完整 VoiceOver/NVDA/Orca 仍未验证。
 
-当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 仅是 legacy/非 streaming 兼容事件，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。SSE 通过真实 `cumulative_token_usage` 提供累计总 Token，同步 JSON 提供分项 usage；前端不补造缺失的分项或事件时间。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。开发期 Vite proxy 的 key 只由 Node proxy 注入，不进入浏览器 bundle；真实浏览器已验证空库 `RAG loading` → `knowledge_base_empty` → `run_completed`，并在真实 ingest 53 个 chunks 后验证 `success_with_sources` 和 5 条安全来源；该次 UI Run 后续因 `token_budget_exceeded` 停止。独立真实 SSE 请求收到多个 `answer_delta`，并以唯一 `run_timed_out`（`deadline_exceeded`）终止，不能写成 `run_completed`。当前默认 `RAG_ENABLED=false`，上述验证使用显式真实依赖；RAG 安全投影和状态仅由后端/组件测试及真实验证覆盖，不能伪造来源。完整屏幕阅读器仍未验证；事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
+当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 作为 legacy/非 streaming 兼容事件保留，也用于 Runtime 直接以工具结果完成（例如 calculator 捷径）时传递完整真实回答，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。SSE 通过真实 `cumulative_token_usage` 提供累计总 Token，同步 JSON 提供分项 usage；前端不补造缺失的分项或事件时间。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。开发期 Vite proxy 的 key 只由 Node proxy 注入，不进入浏览器 bundle；真实浏览器已验证空库 `RAG loading` → `knowledge_base_empty` → `run_completed`，并在真实 ingest 53 个 chunks 后验证 `success_with_sources` 和 5 条安全来源；该次 UI Run 后续因 `token_budget_exceeded` 停止。独立真实 SSE 请求收到多个 `answer_delta`，并以唯一 `run_timed_out`（`deadline_exceeded`）终止，不能写成 `run_completed`。当前默认 `RAG_ENABLED=false`，上述验证使用显式真实依赖；RAG 安全投影和状态仅由后端/组件测试及真实验证覆盖，不能伪造来源。完整屏幕阅读器仍未验证；事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
 
 > [Agent SSE 事件契约](docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md) 和 [阶段 6 开发记录](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md) 记录真实事件、字段、顺序、终止与取消边界。
 

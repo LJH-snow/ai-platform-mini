@@ -12,6 +12,14 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, description="Latest user message.")
+    thread_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Optional server-side conversation thread id. When omitted a new "
+            "thread is created and returned in the response."
+        ),
+    )
     model: str | None = Field(
         default=None,
         description=(
@@ -45,6 +53,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     model: str
+    thread_id: str | None = None
     created_at: str | None = None
     message: ChatMessage
     done: bool

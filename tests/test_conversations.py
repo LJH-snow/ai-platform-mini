@@ -13,6 +13,7 @@ from app.conversations.service import ConversationService
 from app.db.init import dispose_db, init_db
 from app.db.session import create_async_session_factory
 from app.exceptions.base import ConversationNotFoundError, ValidationError
+from app.schemas.chat import ChatMessage
 
 OWNER_1 = hash_api_key("sk-owner-1")
 OWNER_2 = hash_api_key("sk-owner-2")
@@ -36,6 +37,20 @@ async def test_memory_create_and_get_thread() -> None:
 
     fetched = await service.get_thread(OWNER_1, thread.id)
     assert fetched == thread
+
+
+@pytest.mark.asyncio
+async def test_memory_resolve_thread_creates_or_reuses() -> None:
+    service = _service()
+
+    created = await service.resolve_thread(OWNER_1, None, "New thread")
+
+    assert created.id
+    assert created.title == "New thread"
+    fetched = await service.resolve_thread(OWNER_1, created.id, "Ignored title")
+    assert fetched == created
+    with pytest.raises(ConversationNotFoundError):
+        await service.resolve_thread(OWNER_2, created.id, "Ignored title")
 
 
 @pytest.mark.asyncio
@@ -66,6 +81,104 @@ async def test_memory_append_messages_and_load_in_order() -> None:
 
     fetched = await service.get_thread(OWNER_1, thread.id)
     assert fetched.updated_at == history[-1].created_at
+
+
+@pytest.mark.asyncio
+async def test_memory_merge_history_serves_server_first_and_deduplicates() -> None:
+    service = _service()
+    thread = await service.create_thread(OWNER_1, "Merge thread")
+    await service.append_message(OWNER_1, thread.id, "user", "server user")
+    await service.append_message(OWNER_1, thread.id, "assistant", "server answer")
+    server_history = await service.load_history(OWNER_1, thread.id)
+
+    merged = service.merge_history(
+        server_history,
+        [
+            ChatMessage(role="user", content="server user"),
+            ChatMessage(role="user", content="client only"),
+        ],
+    )
+
+    assert [(message.role, message.content) for message in merged] == [
+        ("user", "server user"),
+        ("assistant", "server answer"),
+        ("user", "client only"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_memory_merge_history_drops_retried_current_user() -> None:
+    service = _service()
+    thread = await service.create_thread(OWNER_1, "Retry thread")
+    await service.append_message(OWNER_1, thread.id, "user", "earlier")
+    await service.append_message(OWNER_1, thread.id, "assistant", "ok")
+    await service.append_message(OWNER_1, thread.id, "user", "question")
+    await service.append_message(OWNER_1, thread.id, "assistant", "partial")
+    server_history = await service.load_history(OWNER_1, thread.id)
+
+    merged = service.merge_history(
+        server_history,
+        [
+            ChatMessage(role="user", content="earlier"),
+            ChatMessage(role="assistant", content="ok"),
+            ChatMessage(role="user", content="question"),
+        ],
+        current_user_content="question",
+    )
+
+    assert [(message.role, message.content) for message in merged] == [
+        ("user", "earlier"),
+        ("assistant", "ok"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_memory_merge_history_keeps_repeated_non_final_user() -> None:
+    service = _service()
+    thread = await service.create_thread(OWNER_1, "Repeat thread")
+    await service.append_message(OWNER_1, thread.id, "user", "repeat")
+    await service.append_message(OWNER_1, thread.id, "assistant", "ok")
+    await service.append_message(OWNER_1, thread.id, "user", "next")
+    server_history = await service.load_history(OWNER_1, thread.id)
+
+    merged = service.merge_history(
+        server_history,
+        [],
+        current_user_content="repeat",
+    )
+
+    assert [(message.role, message.content) for message in merged] == [
+        ("user", "repeat"),
+        ("assistant", "ok"),
+        ("user", "next"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_memory_persist_turn_appends_user_and_assistant() -> None:
+    service = _service()
+    thread = await service.create_thread(OWNER_1, "Turn thread")
+
+    user_message, assistant_message = await service.persist_turn(
+        OWNER_1, thread.id, "question", "answer"
+    )
+
+    assert user_message.role == "user"
+    assert user_message.content == "question"
+    assert assistant_message is not None
+    assert assistant_message.role == "assistant"
+    assert assistant_message.content == "answer"
+    history = await service.load_history(OWNER_1, thread.id)
+    assert [(message.role, message.content) for message in history] == [
+        ("user", "question"),
+        ("assistant", "answer"),
+    ]
+
+    user_only, no_assistant = await service.persist_turn(
+        OWNER_1, thread.id, "second question"
+    )
+    assert user_only.content == "second question"
+    assert no_assistant is None
 
 
 @pytest.mark.asyncio
@@ -140,6 +253,15 @@ async def test_service_validates_thread_title() -> None:
     assert thread.title == "title"
     long_ok = await service.create_thread(OWNER_1, "t" * 255)
     assert long_ok.title == "t" * 255
+
+
+@pytest.mark.asyncio
+async def test_service_resolve_thread_falls_back_for_blank_title() -> None:
+    service = _service()
+
+    thread = await service.resolve_thread(OWNER_1, None, "   ")
+
+    assert thread.title == "New conversation"
 
 
 class TestPostgresConversationRepository:
@@ -248,3 +370,45 @@ class TestPostgresConversationRepository:
         assert await pg_repo.add_message(thread.id, OWNER_2, "user", "sneak") is None
         assert await pg_repo.list_messages(thread.id, OWNER_2) == []
         assert await pg_repo.list_messages(thread.id, OWNER_1) == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_uuid_thread_is_treated_as_missing(
+        self,
+        pg_repo: PostgresConversationRepository,
+    ) -> None:
+        canonical = str(uuid.uuid4())
+        invalid_ids = [
+            "not-a-uuid",
+            f"{{{canonical}}}",
+            f"urn:uuid:{canonical}",
+        ]
+
+        for thread_id in invalid_ids:
+            assert await pg_repo.get_thread(thread_id, OWNER_1) is None
+            assert (
+                await pg_repo.add_message(thread_id, OWNER_1, "user", "hello") is None
+            )
+            assert await pg_repo.list_messages(thread_id, OWNER_1) == []
+
+    @pytest.mark.asyncio
+    async def test_non_canonical_uuid_forms_resolve_to_existing_thread(
+        self,
+        pg_repo: PostgresConversationRepository,
+    ) -> None:
+        thread = ConversationThread(
+            id=str(uuid.uuid4()),
+            owner_key_hash=OWNER_1,
+            title="Canonical",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        await pg_repo.create_thread(thread)
+        compact = thread.id.replace("-", "")
+
+        resolved = await pg_repo.get_thread(compact, OWNER_1)
+        assert resolved == thread
+        assert (
+            await pg_repo.add_message(compact, OWNER_1, "user", "hello")
+        ) is not None
+        history = await pg_repo.list_messages(compact, OWNER_1)
+        assert [message.content for message in history] == ["hello"]

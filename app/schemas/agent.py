@@ -53,6 +53,14 @@ class AgentRunRequest(BaseModel):
     """Validated input for one synchronous Agent Runtime execution."""
 
     message: str = Field(min_length=1, description="Latest user message.")
+    thread_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Optional server-side conversation thread id. When omitted a new "
+            "thread is created and returned in the response."
+        ),
+    )
     model: str | None = Field(default=None, min_length=1)
     system_prompt: str | None = Field(default=None)
     history: list[ChatMessage] = Field(default_factory=list)
@@ -163,6 +171,7 @@ class AgentRunResponse(BaseModel):
     """Public result for one synchronous Agent Runtime execution."""
 
     run_id: str
+    thread_id: str | None = None
     status: RunStatus
     answer: str | None = None
     stop_reason: StopReason
@@ -195,6 +204,7 @@ class AgentStreamEvent(BaseModel):
         "run_stopped",
     ]
     run_id: str
+    thread_id: str | None = None
     request_id: str | None = None
     sequence: int
     occurred_at: datetime

@@ -516,6 +516,70 @@ async def test_repeated_calculator_calls_are_cached_and_finalized() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_calculator_shortcut_publishes_complete_answer_event() -> None:
+    calculator = CalculatorTool()
+    model = ScriptedModel(
+        [
+            AgentDecision(
+                tool_calls=(ToolCall("call-1", "calculator", {"expression": "3*2"}),)
+            ),
+            AgentDecision(
+                tool_calls=(ToolCall("call-2", "calculator", {"expression": "3*2"}),)
+            ),
+        ]
+    )
+    observer = RecordingObserver()
+
+    result = await AgentRuntime(
+        model,
+        tools={"calculator": calculator},
+        observer=observer,
+    ).run("计算 3*2", max_steps=2, stream_answer=True)
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.answer == "6"
+    answer_events = [
+        event for event in observer.events if event.kind is AgentEventKind.ANSWER
+    ]
+    assert [event.message for event in answer_events] == ["6"]
+    assert answer_events[-1].sequence < next(
+        event.sequence
+        for event in observer.events
+        if event.kind is AgentEventKind.RUN_STOPPED
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_calculator_max_steps_fallback_publishes_answer_event() -> None:
+    model = ScriptedModel(
+        [
+            AgentDecision(
+                tool_calls=(ToolCall("call-1", "calculator", {"expression": "2 + 2"}),)
+            )
+        ]
+    )
+    observer = RecordingObserver()
+
+    result = await AgentRuntime(
+        model,
+        tools={"calculator": CalculatorTool()},
+        observer=observer,
+    ).run("计算 2+2", max_steps=1, stream_answer=True)
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.answer == "4"
+    answer_events = [
+        event for event in observer.events if event.kind is AgentEventKind.ANSWER
+    ]
+    assert [event.message for event in answer_events] == ["4"]
+    assert answer_events[-1].sequence < next(
+        event.sequence
+        for event in observer.events
+        if event.kind is AgentEventKind.RUN_STOPPED
+    )
+
+
+@pytest.mark.asyncio
 async def test_timeout_stops_a_slow_model() -> None:
     model = ScriptedModel([AgentDecision(answer="late")], delay=0.05)
     runtime = AgentRuntime(model)

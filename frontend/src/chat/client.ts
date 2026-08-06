@@ -10,13 +10,21 @@ export class ChatBackendError extends Error {
   readonly status: number
   readonly code: string | null
   readonly requestId: string | null
+  readonly threadId: string | null
 
-  constructor(message: string, status: number, code: string | null, requestId: string | null) {
+  constructor(
+    message: string,
+    status: number,
+    code: string | null,
+    requestId: string | null,
+    threadId: string | null = null,
+  ) {
     super(message)
     this.name = 'ChatBackendError'
     this.status = status
     this.code = code
     this.requestId = requestId
+    this.threadId = threadId
   }
 }
 
@@ -38,6 +46,7 @@ type ErrorPayload = {
   code?: unknown
   message?: unknown
   request_id?: unknown
+  thread_id?: unknown
 }
 
 export type ChatClient = {
@@ -45,6 +54,7 @@ export type ChatClient = {
     messages: ChatApiMessage[],
     handlers: ChatStreamHandlers,
     signal: AbortSignal,
+    threadId?: string | null,
   ) => Promise<ChatStreamResult>
 }
 
@@ -74,6 +84,7 @@ const parseErrorResponse = async (
 
   const errorRequestId = typeof payload.request_id === 'string' ? payload.request_id : requestId
   const code = typeof payload.code === 'string' ? payload.code : null
+  const threadId = typeof payload.thread_id === 'string' ? payload.thread_id : null
   const message =
     response.status === 401 || response.status === 403
       ? 'Chat 请求未通过鉴权，请检查运行时凭据。'
@@ -85,7 +96,7 @@ const parseErrorResponse = async (
             ? 'Chat 服务暂时不可用，请稍后重试。'
             : `Chat 请求失败（HTTP ${response.status}），请稍后重试。`
 
-  return new ChatBackendError(message, response.status, code, errorRequestId)
+  return new ChatBackendError(message, response.status, code, errorRequestId, threadId)
 }
 
 const parseSseEvent = (event: string): string | null => {
@@ -125,11 +136,19 @@ const getDeltaContent = (payload: unknown): string => {
   return typeof content === 'string' ? content : ''
 }
 
+const getThreadId = (payload: unknown): string | null => {
+  if (typeof payload !== 'object' || payload === null) {
+    return null
+  }
+  const threadId = (payload as { thread_id?: unknown }).thread_id
+  return typeof threadId === 'string' && threadId.length > 0 ? threadId : null
+}
+
 const readSseStream = async (
   response: Response,
   handlers: ChatStreamHandlers,
   signal: AbortSignal,
-): Promise<void> => {
+): Promise<string | null> => {
   if (!response.body) {
     throw new ChatStreamInterruptedError('SSE 响应没有可读取的响应体。')
   }
@@ -138,6 +157,7 @@ const readSseStream = async (
   const decoder = new TextDecoder()
   let buffer = ''
   let completed = false
+  let threadId: string | null = null
 
   const processEvent = (event: string): void => {
     const data = parseSseEvent(event)
@@ -160,6 +180,11 @@ const readSseStream = async (
     const content = getDeltaContent(payload)
     if (content) {
       handlers.onDelta(content)
+    }
+    const eventThreadId = getThreadId(payload)
+    if (eventThreadId !== null) {
+      threadId = eventThreadId
+      handlers.onThreadId?.(eventThreadId)
     }
   }
 
@@ -204,6 +229,7 @@ const readSseStream = async (
   if (!completed && !signal.aborted) {
     throw new ChatStreamInterruptedError()
   }
+  return threadId
 }
 
 export function createChatClient(options: ChatClientOptions = {}): ChatClient {
@@ -212,7 +238,7 @@ export function createChatClient(options: ChatClientOptions = {}): ChatClient {
   const endpoint = `${apiBaseUrl.replace(/\/$/, '')}/v1/chat/completions?stream=true`
 
   return {
-    async streamChat(messages, handlers, signal): Promise<ChatStreamResult> {
+    async streamChat(messages, handlers, signal, threadId): Promise<ChatStreamResult> {
       let response: Response
       try {
         response = await fetchImpl(endpoint, {
@@ -222,7 +248,11 @@ export function createChatClient(options: ChatClientOptions = {}): ChatClient {
             'Content-Type': 'application/json',
             ...(options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}),
           },
-          body: JSON.stringify({ messages, stream: true }),
+          body: JSON.stringify({
+            messages,
+            stream: true,
+            ...(threadId ? { thread_id: threadId } : {}),
+          }),
           signal,
         })
       } catch (error) {
@@ -241,8 +271,8 @@ export function createChatClient(options: ChatClientOptions = {}): ChatClient {
         throw await parseErrorResponse(response, requestId)
       }
 
-      await readSseStream(response, handlers, signal)
-      return { requestId }
+      const resolvedThreadId = await readSseStream(response, handlers, signal)
+      return { requestId, threadId: resolvedThreadId }
     },
   }
 }

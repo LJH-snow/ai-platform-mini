@@ -27,7 +27,16 @@ from app.agents.stream import (
     AgentStreamSetupError,
 )
 from app.auth.models import APIKey
-from app.core.container import provide_agent_run_record_service
+from app.conversations.memory import (
+    conversation_owner,
+    persist_turn,
+    prepare_thread,
+)
+from app.conversations.service import ConversationService
+from app.core.container import (
+    provide_agent_run_record_service,
+    provide_conversation_service,
+)
 from app.core.context import RequestContext
 from app.ratelimit.dependencies import require_rate_limit
 from app.schemas.agent import (
@@ -125,17 +134,48 @@ async def create_agent_run(
     response: Response,
     service: Annotated[AgentService, Depends(get_agent_service)],
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    conversation_service: Annotated[
+        ConversationService | None, Depends(provide_conversation_service)
+    ] = None,
     record_service: Annotated[
         AgentRunRecordService | None, Depends(provide_agent_run_record_service)
     ] = None,
 ) -> AgentRunResponse:
     """Execute one synchronous Agent Run through the application service."""
     context: RequestContext = http_request.state.context
+    thread_id: str | None = None
+    owner_key_hash: str | None = None
+    if conversation_service is not None:
+        owner_key_hash = conversation_owner(api_key)
+        thread_id, merged_history = await prepare_thread(
+            conversation_service,
+            owner_key_hash=owner_key_hash,
+            thread_id=request.thread_id,
+            title=request.message,
+            client_history=request.history,
+            user_content=request.message,
+        )
+        http_request.state.thread_id = thread_id
+        request = request.model_copy(
+            update={"thread_id": thread_id, "history": merged_history}
+        )
     outcome = await service.run(request, context=context, api_key=api_key)
-    public_response = _to_response(outcome)
+    public_response = _to_response(outcome, thread_id=thread_id)
     await _persist_agent_run(
         record_service, public_response, request, context, api_key, outcome.model
     )
+    if (
+        conversation_service is not None
+        and owner_key_hash is not None
+        and thread_id is not None
+    ):
+        await persist_turn(
+            conversation_service,
+            owner_key_hash=owner_key_hash,
+            thread_id=thread_id,
+            user_content=request.message,
+            assistant_content=public_response.answer,
+        )
     _set_rate_limit_headers(http_request, response)
     return public_response
 
@@ -151,12 +191,31 @@ async def stream_agent_run(
     response: Response,
     service: Annotated[AgentService, Depends(get_agent_service)],
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    conversation_service: Annotated[
+        ConversationService | None, Depends(provide_conversation_service)
+    ] = None,
     record_service: Annotated[
         AgentRunRecordService | None, Depends(provide_agent_run_record_service)
     ] = None,
 ) -> StreamingResponse:
     """Stream real Runtime lifecycle events and provider answer deltas."""
     context: RequestContext = http_request.state.context
+    thread_id: str | None = None
+    owner_key_hash: str | None = None
+    if conversation_service is not None:
+        owner_key_hash = conversation_owner(api_key)
+        thread_id, merged_history = await prepare_thread(
+            conversation_service,
+            owner_key_hash=owner_key_hash,
+            thread_id=request.thread_id,
+            title=request.message,
+            client_history=request.history,
+            user_content=request.message,
+        )
+        http_request.state.thread_id = thread_id
+        request = request.model_copy(
+            update={"thread_id": thread_id, "history": merged_history}
+        )
     stream = AgentEventStream()
     cancel_event = asyncio.Event()
 
@@ -170,7 +229,7 @@ async def stream_agent_run(
                 cancel_event=cancel_event,
                 streaming=True,
             )
-            public_response = _to_response(outcome)
+            public_response = _to_response(outcome, thread_id=thread_id)
             await _persist_agent_run(
                 record_service,
                 public_response,
@@ -179,6 +238,18 @@ async def stream_agent_run(
                 api_key,
                 outcome.model,
             )
+            if (
+                conversation_service is not None
+                and owner_key_hash is not None
+                and thread_id is not None
+            ):
+                await persist_turn(
+                    conversation_service,
+                    owner_key_hash=owner_key_hash,
+                    thread_id=thread_id,
+                    user_content=request.message,
+                    assistant_content=public_response.answer,
+                )
         except Exception:
             stream.fail_unexpected()
             return
@@ -205,6 +276,7 @@ async def stream_agent_run(
             context.request_id,
             task,
             cancel_event,
+            thread_id,
         ),
         media_type="text/event-stream",
         headers={
@@ -221,6 +293,7 @@ async def _stream_events(
     request_id: str,
     producer: asyncio.Task[None],
     cancel_event: asyncio.Event,
+    thread_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Consume real events and poll disconnect without blocking the queue.
 
@@ -254,12 +327,13 @@ async def _stream_events(
                     {
                         "event": "stream_error",
                         "error_code": item.error_code,
+                        **({"thread_id": thread_id} if thread_id is not None else {}),
                     },
                     separators=(",", ":"),
                 )
                 yield f"event: stream_error\ndata: {payload}\n\n"
                 break
-            yield _serialize_sse(_to_stream_event(item, request_id))
+            yield _serialize_sse(_to_stream_event(item, request_id, thread_id))
             if item.kind is AgentEventKind.RUN_STOPPED:
                 break
             receive_task = asyncio.create_task(stream.receive())
@@ -296,7 +370,9 @@ def _serialize_sse(event: AgentStreamEvent) -> str:
     return f"event: {event.event}\ndata: {payload}\n\n"
 
 
-def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
+def _to_stream_event(
+    event: AgentEvent, request_id: str, thread_id: str | None = None
+) -> AgentStreamEvent:
     if event.kind is AgentEventKind.RUN_STARTED:
         name = "run_started"
     elif event.kind is AgentEventKind.STEP_STARTED:
@@ -382,6 +458,7 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
             name,
         ),
         run_id=event.run_id,
+        thread_id=thread_id,
         request_id=request_id,
         sequence=event.sequence,
         occurred_at=event.occurred_at,
@@ -572,7 +649,9 @@ def _run_timing(
     return started_at, completed_at, _duration_ms(started_at, completed_at)
 
 
-def _to_response(outcome: AgentRunOutcome) -> AgentRunResponse:
+def _to_response(
+    outcome: AgentRunOutcome, *, thread_id: str | None = None
+) -> AgentRunResponse:
     result = outcome.result
     total_tokens: int | None = None
     if outcome.prompt_tokens is not None and outcome.completion_tokens is not None:
@@ -580,6 +659,7 @@ def _to_response(outcome: AgentRunOutcome) -> AgentRunResponse:
     started_at, completed_at, duration_ms = _run_timing(result.events)
     return AgentRunResponse(
         run_id=result.run_id,
+        thread_id=thread_id,
         status=result.status,
         answer=result.answer,
         stop_reason=result.stop_reason,

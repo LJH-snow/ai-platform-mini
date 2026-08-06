@@ -8,6 +8,7 @@ export type AgentRunApiRequest = {
   timeout_seconds: number
   token_budget: number
   max_steps: number
+  thread_id?: string | null
   preset?: 'rag'
 }
 
@@ -106,6 +107,7 @@ export type AgentUsageApiSummary = {
 
 export type AgentRunApiResponse = {
   run_id: string
+  thread_id?: string | null
   status: AgentRunApiStatus
   answer: string | null
   stop_reason: string

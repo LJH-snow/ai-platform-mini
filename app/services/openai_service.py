@@ -91,6 +91,7 @@ class OpenAIService:
                     if not first_chunk_sent:
                         role_chunk = OpenAIStreamChunk(
                             id=completion_id,
+                            thread_id=chat_request.thread_id,
                             created=created,
                             model=result.model,
                             choices=[
@@ -108,6 +109,7 @@ class OpenAIService:
 
                     chunk = OpenAIStreamChunk(
                         id=completion_id,
+                        thread_id=chat_request.thread_id,
                         created=created,
                         model=result.model,
                         choices=[
@@ -127,6 +129,7 @@ class OpenAIService:
         if not first_chunk_sent:
             fallback_chunk = OpenAIStreamChunk(
                 id=completion_id,
+                thread_id=chat_request.thread_id,
                 created=created,
                 model=self._chat_service.default_model,
                 choices=[

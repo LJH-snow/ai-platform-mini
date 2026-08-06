@@ -107,6 +107,7 @@ const makeStep = (index: number): AgentTraceStep => ({
 
 const makeRun = (event: AgentStreamEvent, requestId: string | null): AgentRun => ({
   runId: event.run_id,
+  threadId: event.thread_id ?? null,
   status: 'running',
   answer: null,
   stopReason: null,
@@ -206,6 +207,9 @@ export function reduceAgentStream(
   let run = state.run ?? makeRun(event, requestId)
   let terminal = false
   let answerDeltaSeen = state.answerDeltaSeen
+  if (event.thread_id !== undefined && event.thread_id !== null) {
+    run = { ...run, threadId: event.thread_id }
+  }
   if (event.event === 'run_started')
     run = { ...run, requestId, startedAt: safeTimestamp(event.occurred_at) ?? run.startedAt }
 
@@ -295,6 +299,15 @@ export function reduceAgentStream(
                   : 'stopped'),
       ),
       stopReason: event.stop_reason ?? null,
+    }
+    if (
+      event.event === 'run_completed' &&
+      run.answer === null &&
+      !answerDeltaSeen &&
+      typeof event.answer === 'string' &&
+      event.answer.length > 0
+    ) {
+      run = { ...run, answer: event.answer }
     }
   }
   const traceEvent = {
