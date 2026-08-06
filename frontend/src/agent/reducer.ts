@@ -1,5 +1,6 @@
 import type { AgentRag, AgentRun, AgentRunStatus, AgentToolCall, AgentTraceStep } from './types.ts'
 import { localizeStepSummary } from './adapter.ts'
+import { isKnownTool } from './tool-name.ts'
 import type { AgentStreamEvent } from './stream.ts'
 import type { AgentRagApiSummary, AgentRagReferenceApiSummary } from './api-types.ts'
 
@@ -149,9 +150,7 @@ const updateTool = (step: AgentTraceStep, event: AgentStreamEvent): AgentTraceSt
     id: current?.id ?? `${step.id}-${callId}`,
     name: event.tool_name ?? current?.name ?? 'unknown_tool',
     callId,
-    known:
-      (event.tool_name ?? current?.name) === 'calculator' ||
-      (event.tool_name ?? current?.name) === 'knowledge_search',
+    known: isKnownTool(event.tool_name ?? current?.name ?? ''),
     status: toolStatus(event),
     stepIndex: step.index,
     startedAt:
@@ -264,6 +263,12 @@ export function reduceAgentStream(
   }
   if (event.event === 'assistant_message' && !answerDeltaSeen)
     run = { ...run, answer: event.answer ?? run.answer }
+  if (event.cumulative_token_usage !== undefined && event.cumulative_token_usage !== null) {
+    run = {
+      ...run,
+      usage: { ...run.usage, totalTokens: event.cumulative_token_usage },
+    }
+  }
   if (
     event.event === 'run_completed' ||
     event.event === 'run_failed' ||

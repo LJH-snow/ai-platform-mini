@@ -398,6 +398,7 @@ def _to_stream_event(event: AgentEvent, request_id: str) -> AgentStreamEvent:
         result_chars=result_chars,
         status=event.status,
         stop_reason=event.stop_reason,
+        cumulative_token_usage=event.cumulative_token_usage,
         answer=(
             _sanitize_public_text(event.message)
             if event.kind is AgentEventKind.ANSWER and event.message is not None

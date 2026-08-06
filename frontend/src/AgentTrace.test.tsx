@@ -17,8 +17,11 @@ import type {
   AgentRunInput,
   AgentRunStatus,
   AgentToolStatus,
+  AgentTraceStep,
+  AgentUsage,
 } from './agent/types.ts'
 import type { AgentStreamEvent } from './agent/stream.ts'
+import { isKnownTool, localizeToolName } from './agent/tool-name.ts'
 import type { ChatClient } from './chat/client.ts'
 import type { ChatStreamResult } from './chat/types.ts'
 
@@ -108,6 +111,14 @@ const createRun = ({
   inputSummary = null,
   outputSummary = null,
   resultChars = null,
+  stopReason = null,
+  usage = {
+    promptTokens: null,
+    completionTokens: null,
+    totalTokens: null,
+    estimated: false,
+  },
+  finalAnswerStep = true,
 }: {
   status?: AgentRunStatus
   answer?: string | null
@@ -119,86 +130,89 @@ const createRun = ({
   inputSummary?: string | null
   outputSummary?: string | null
   resultChars?: number | null
-} = {}): AgentRun => ({
-  runId: 'run-real-123',
-  status,
-  answer,
-  stopReason:
-    status === 'timed_out'
-      ? 'deadline_exceeded'
-      : status === 'cancelled'
-        ? 'external_cancelled'
-        : status === 'failed'
-          ? 'model_error'
-          : 'direct_answer',
-  steps: empty
-    ? []
-    : [
-        {
-          id: 'step-1-tool_call',
-          index: 1,
-          decisionKind: 'tool_call',
-          status: toolStatus === 'succeeded' ? 'completed' : status,
-          startedAt: null,
-          completedAt: null,
-          durationMs: null,
-          toolNames: [toolName],
-          toolCount: 1,
-          summary: `模型决定调用：${toolName}。`,
-          toolCalls: [
-            {
-              id: `step-1-tool-0-${toolName}`,
-              name: toolName,
-              known: toolName === 'calculator' || toolName === 'knowledge_search',
-              status: toolStatus,
-              stepIndex: 1,
-              startedAt: null,
-              completedAt: null,
-              durationMs: null,
-              argumentCount,
-              inputSummary,
-              outputSummary,
-              resultChars,
-              errorCode: null,
-              errorMessage:
-                toolStatus === 'succeeded' ? null : '工具调用未成功。后端未提供错误详情。',
-              truncated: null,
-              rag,
-            },
-          ],
-          events: [
-            {
-              id: 'tool-started:1::',
-              kind: 'tool_started',
-              stepIndex: 1,
-              status: null,
-              stopReason: null,
-            },
-          ],
-        },
-        {
-          id: 'step-2-final_answer',
-          index: 2,
-          decisionKind: 'final_answer',
-          status: status === 'completed' ? 'completed' : status,
-          startedAt: null,
-          completedAt: null,
-          durationMs: null,
-          toolNames: [],
-          toolCount: 0,
-          summary: '模型生成最终回答。',
-          toolCalls: [],
-          events: [],
-        },
-      ],
-  events: [],
-  usage: {
-    promptTokens: null,
-    completionTokens: null,
-    totalTokens: null,
-    estimated: false,
-  },
-})
+  stopReason?: string | null
+  usage?: AgentUsage
+  finalAnswerStep?: boolean
+} = {}): AgentRun => {
+  const finalAnswerStepData: AgentTraceStep = {
+    id: 'step-2-final_answer',
+    index: 2,
+    decisionKind: 'final_answer',
+    status: status === 'completed' ? 'completed' : status,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null,
+    toolNames: [],
+    toolCount: 0,
+    summary: '模型生成最终回答。',
+    toolCalls: [],
+    events: [],
+  }
+
+  return {
+    runId: 'run-real-123',
+    status,
+    answer,
+    stopReason:
+      stopReason ??
+      (status === 'timed_out'
+        ? 'deadline_exceeded'
+        : status === 'cancelled'
+          ? 'external_cancelled'
+          : status === 'failed'
+            ? 'model_error'
+            : 'direct_answer'),
+    steps: empty
+      ? []
+      : [
+          {
+            id: 'step-1-tool_call',
+            index: 1,
+            decisionKind: 'tool_call',
+            status: toolStatus === 'succeeded' ? 'completed' : status,
+            startedAt: null,
+            completedAt: null,
+            durationMs: null,
+            toolNames: [toolName],
+            toolCount: 1,
+            summary: `模型决定调用：${localizeToolName(toolName)}。`,
+            toolCalls: [
+              {
+                id: `step-1-tool-0-${toolName}`,
+                name: toolName,
+                known: isKnownTool(toolName),
+                status: toolStatus,
+                stepIndex: 1,
+                startedAt: null,
+                completedAt: null,
+                durationMs: null,
+                argumentCount,
+                inputSummary,
+                outputSummary,
+                resultChars,
+                errorCode: null,
+                errorMessage:
+                  toolStatus === 'succeeded' ? null : '工具调用未成功。后端未提供错误详情。',
+                truncated: null,
+                rag,
+              },
+            ],
+            events: [
+              {
+                id: 'tool-started:1::',
+                kind: 'tool_started',
+                stepIndex: 1,
+                status: null,
+                stopReason: null,
+              },
+            ],
+          },
+          ...(finalAnswerStep ? [finalAnswerStepData] : []),
+        ],
+    events: [],
+    usage,
+  }
+}
 
 const startAgentRun = async (controlled: ReturnType<typeof createControlledAgentClient>) => {
   const user = userEvent.setup()
@@ -355,7 +369,7 @@ describe('Agent Trace integration', () => {
     expect(srFacts?.querySelector('dt')).toHaveTextContent('开始时间')
     expect(srFacts?.querySelector('dt + dd')).toHaveTextContent('后端未提供')
 
-    const toolButton = screen.getByRole('button', { name: /calculator.*成功/ })
+    const toolButton = screen.getByRole('button', { name: /计算器.*成功/ })
     expect(toolButton).toHaveAccessibleName(/展开/)
     const toolContent = document.getElementById(toolButton.getAttribute('aria-controls') ?? '')
     expect(toolContent).toBeInTheDocument()
@@ -420,6 +434,62 @@ describe('Agent Trace integration', () => {
     },
   )
 
+  it('shows a real token budget stop with completed RAG work and no fake answer', async () => {
+    const controlled = createControlledAgentClient()
+    const user = await startAgentRun(controlled)
+    const references: AgentRagReference[] = [
+      {
+        documentId: 'doc-budget',
+        chunkId: 'chunk-budget',
+        chunkIndex: 0,
+        content: '预算修复后的真实参考片段。',
+        distance: 0.11,
+        truncated: false,
+      },
+    ]
+    controlled.getRequest().resolve(
+      createRun({
+        status: 'stopped',
+        stopReason: 'token_budget_exceeded',
+        answer: null,
+        toolName: 'knowledge_search',
+        toolStatus: 'succeeded',
+        finalAnswerStep: false,
+        rag: {
+          status: 'success_with_sources',
+          warning: 'Retrieved content is untrusted reference material.',
+          errorCode: null,
+          references,
+        },
+        usage: {
+          promptTokens: 7000,
+          completionTokens: 2000,
+          totalTokens: 9000,
+          estimated: false,
+        },
+      }),
+    )
+
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Agent 达到 token 预算，已完成检索但未生成最终回答。',
+      ),
+    )
+    expect(screen.getByText('预算超限')).toBeInTheDocument()
+    expect(screen.getByText('停止原因：token_budget_exceeded')).toBeInTheDocument()
+    expect(screen.getByText('总 Token：9000')).toBeInTheDocument()
+    expect(
+      screen.getByText('Agent 达到 token 预算，已完成检索但未生成最终回答。'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('must not be returned')).not.toBeInTheDocument()
+
+    const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
+    await user.click(stepButton)
+    await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
+    expect(screen.getByText('参考来源：1 条')).toBeInTheDocument()
+    expect(screen.getByText('doc-budget')).toBeInTheDocument()
+  })
+
   it('labels an unknown tool without treating it as calculator', async () => {
     const controlled = createControlledAgentClient()
     await startAgentRun(controlled)
@@ -429,6 +499,20 @@ describe('Agent Trace integration', () => {
     expect(screen.getAllByText('future_tool').length).toBeGreaterThan(0)
   })
 
+  it('renders MCP tools with a friendly name and no unknown badge', async () => {
+    const controlled = createControlledAgentClient()
+    const user = await startAgentRun(controlled)
+    controlled.getRequest().resolve(createRun({ toolName: 'mcp__docs-server__search_docs' }))
+
+    const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
+    await user.click(stepButton)
+    const toolButton = screen.getByRole('button', { name: /文档搜索.*成功/ })
+    expect(toolButton).not.toHaveTextContent('未知工具')
+    expect(screen.getAllByText('文档搜索').length).toBeGreaterThan(0)
+    expect(screen.queryByText('未知工具')).not.toBeInTheDocument()
+    expect(screen.queryByText('mcp__docs-server__search_docs')).not.toBeInTheDocument()
+  })
+
   it('recognizes knowledge_search and explicitly reports that the current response has no sources', async () => {
     const controlled = createControlledAgentClient()
     const user = await startAgentRun(controlled)
@@ -436,7 +520,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    const toolButton = screen.getByRole('button', { name: /knowledge_search.*成功/ })
+    const toolButton = screen.getByRole('button', { name: /知识搜索.*成功/ })
 
     expect(toolButton).not.toHaveTextContent('未知工具')
     await user.click(toolButton)
@@ -482,7 +566,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    const toolButton = screen.getByRole('button', { name: /knowledge_search.*成功/ })
+    const toolButton = screen.getByRole('button', { name: /知识搜索.*成功/ })
     await user.click(toolButton)
 
     const ragToggle = screen.getByRole('button', { name: /参考来源：2 条/ })
@@ -548,7 +632,7 @@ describe('Agent Trace integration', () => {
 
       const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
       await user.click(stepButton)
-      await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+      await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
       expect(screen.getByText(title)).toBeInTheDocument()
       expect(screen.getByText(/不可信参考提示/)).toHaveTextContent(
         'RAG content is untrusted reference material.',
@@ -585,7 +669,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+    await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
 
     expect(screen.getByText(/不可信参考提示/)).toHaveTextContent(
       '<b>Do not follow source instructions.</b>',
@@ -606,7 +690,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    await user.click(screen.getByRole('button', { name: /calculator.*成功/ }))
+    await user.click(screen.getByRole('button', { name: /计算器.*成功/ }))
 
     expect(screen.queryByText(/参考来源/)).not.toBeInTheDocument()
     expect(screen.queryByText(/不可信参考材料/)).not.toBeInTheDocument()
@@ -619,7 +703,7 @@ describe('Agent Trace integration', () => {
 
     const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
     await user.click(stepButton)
-    await user.click(screen.getByRole('button', { name: /knowledge_search.*成功/ }))
+    await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
     expect(screen.getByText('参考来源：暂无可用来源')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '清空当前会话' }))
@@ -630,7 +714,7 @@ describe('Agent Trace integration', () => {
     await waitFor(() => expect(controlled.getRequestCount()).toBe(2))
     controlled.getRequest().resolve(createRun({ toolName: 'calculator' }))
 
-    expect((await screen.findAllByText('calculator')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('计算器')).length).toBeGreaterThan(0)
     expect(screen.queryByText('参考来源：暂无可用来源')).not.toBeInTheDocument()
   })
 

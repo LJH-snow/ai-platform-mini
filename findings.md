@@ -1,5 +1,11 @@
 # 阶段 6 发现
 
+## 2026-08-06 文档收口记录
+
+- 已将 README 更新为面向 HR 的项目说明，明确展示 Agent Runtime、Tool Calling、RAG 闭环、SSE 可观察性、安全边界和推荐演示路径。
+- 已补记 RAG readiness、`preset="rag"`、Chat/Agent 模式隔离、长页面独立滚动和 Agent budget 修复，避免文档继续描述已经过时的“知识库入口进入 Chat 模式”或“默认 2048 budget”。
+- 尚未实现且仍明确记录：Ollama `num_ctx` 配置、多轮 transcript 的增量预算语义、完整屏幕阅读器验收、持久化 Trace 历史和回答内精确引用。
+
 ## 当前基线
 
 - 当前分支：`codex/sprint-7-multi-llm-gateway`；本轮开始前工作区已有阶段 6 文档、前端实现和 Vite 配置变更，本轮只继续修改指定文档，不回退既有变更。
@@ -8,6 +14,40 @@
 - 刚完成的 `npm run a11y:smoke` 使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG 路径通过：初始空态与真实 Agent/RAG 状态 axe `violations=0`；初始空态另有 1 个 `incomplete` color-contrast（`.emptyIcon` 内容过短无法判断），不是 violation，也不能写成 axe 完全无 incomplete。4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、键盘 Space 后焦点保持、live region 非逐字播报和 320px 无横向溢出均通过；完整 VoiceOver/NVDA/Orca 仍未验证。
 - 根 README 明确：RAG 公开投影只允许安全来源摘要，不能展示原始输入/输出、Prompt、Provider 响应、堆栈、密钥、内部路径或假引用。
 - 项目要求 Python 3.12-3.14，默认 3.14；提交前需通过 Ruff、mypy、pytest 及前端五项门禁。
+
+## Agent token budget 修复（本轮）
+
+- 根因已确认：前端之前只显式发送 `timeout_seconds`，后端默认 `token_budget=2048`。
+  Runtime 将每轮模型调用的 `prompt_tokens + completion_tokens` 累加到
+  `state.token_usage`；多轮 Agent 会把完整 transcript 重新发送，RAG 工具结果回填后
+  下一轮 prompt 变长并再次计入累计用量，因此 RAG 检索成功后、最终回答生成前就会触发
+  `token_budget_exceeded`。这不是数据库、Embedding 或 RAG 检索失败。
+- 本轮采用最小修复：前端类型与请求构造显式发送 `token_budget=8192`、
+  `max_steps=4`、`timeout_seconds=60`；后端 `AgentRunRequest` 默认值与边界对齐
+  （`token_budget <= 16384`、`max_steps <= 20`、`timeout_seconds <= 120`）。
+  前端对预算和步骤数做整数/边界校验，旧客户端未传字段时仍使用新的安全默认值。
+- 没有删除预算检查、没有改成无限、没有吞掉 `token_budget_exceeded`。真正超预算仍返回
+  `stopped / token_budget_exceeded`、真实 usage 和真实 Trace；没有 `answer` 时页面不会
+  显示成功回答，而是显示“Agent 达到 token 预算，已完成检索但未生成最终回答”。
+- 新增回归测试覆盖：默认值、显式 8192 的 RAG+最终回答完成、真实超预算停止、
+  上限校验、RAG 工具输出 8192 字符有界截断且保留 `document_id`/`chunk_id`、
+  usage/answer/stop_reason/Trace 语义一致，以及敏感信息不进入模型反馈。
+- RAG 边界：`RAGService` 用 `RAG_MAX_CONTEXT_CHARS`（默认 10000）限制上下文；
+  `ToolExecutor` 默认输出上限 8192，并保护稳定标识字段；公开投影仍限制片段 1200
+  字符。提高默认 token budget 不会让回填 prompt 无限放大。
+- 真实 SSE 验证同时发现 Trace 的“总 Token”此前一直显示“后端未提供”：流事件没有携带
+  usage。本轮补充把 Runtime `AgentEvent.cumulative_token_usage` 投影到 SSE 的
+  `cumulative_token_usage` 可选字段，前端 reducer 只更新 `usage.totalTokens`，不补造
+  prompt/completion 分项；同步 JSON 仍提供完整 `usage`。预算超限的 SSE 终态现在也能
+  显示真实累计用量。
+- 真实浏览器最终验证（Vite `127.0.0.1:5178` + 本机后端 + Ollama）完成：首次运行模型
+  生成的检索 query 未命中知识库，页面真实显示 `no_relevant_sources` 并给出“知识库中
+  没有相关内容”的回答，没有改写成成功；第二次运行 `knowledge_search` 返回 1 条真实
+  PDF 来源，Trace 显示 `success_with_sources`、`document_id`、`chunk_id`，随后进入
+  `final_answer` 步骤，页面显示真实“大语言模型”回答，`stop_reason=direct_answer`，
+  SSE Trace 总 Token 为 `1208`，未再触发 `token_budget_exceeded`。
+- Ollama Provider 目前没有 `num_ctx` 配置入口，本轮不重构 Provider；后续需要增加
+  `OLLAMA_NUM_CTX` 之类的上下文窗口配置，并验证 Agent/RAG 提示词不超过模型上下文。
 
 ## 待读重点
 

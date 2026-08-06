@@ -1,5 +1,12 @@
 # 阶段 6 进度
 
+## 2026-08-06 后续收口
+
+- 已完成 RAG readiness 契约：`/api/v1/ready` 返回真实 RAG、数据库和 Embedding 状态，前端知识库页面按状态机展示，不再用缺失 runtime config 误判 RAG 关闭。
+- 已完成 Agent budget 修复：前后端默认 `token_budget=8192`、`max_steps=4`、`timeout_seconds=60`，SSE 展示真实累计 Token；预算超限仍保留真实终态，不伪造回答。
+- 已完成 Chat/Agent/RAG 模式隔离：知识库入口进入 Agent Run 并使用受限 `rag` preset，普通 Chat SSE 不执行工具调用；长会话桌面端使用独立滚动区域，移动端保持单列布局。
+- 真实浏览器验证覆盖 Chat 模式、calculator Agent、RAG preset 来源路径、页面滚动和 375px 移动端无横向溢出；`no_relevant_sources` 由测试覆盖，完整屏幕阅读器仍未验证。
+
 ## 2026-08-05
 
 - 已读取项目协作规则、规划 skill 和子代理治理规则。
@@ -9,7 +16,7 @@
 - 架构核验完成：Runtime 负责稳定排序、累计完整答案和取消/超时边界；`answer_delta` 不是精确 Token 计数，不能伪造 usage、时间或耗时。
 - 已委托后端子代理 Pascal，写入范围限定为后端 Runtime/service/API/schema 与后端测试；等待其完成后由主代理 Review。
 - 后端子代理已完成 Agent SSE、Runtime Step/RAG Observer 事件、安全投影、取消边界和测试；后端门禁通过。
-- 前端子代理已完成 Agent SSE 解析、实时 reducer、Trace 增量更新、状态区分和测试；前端门禁通过（7 个测试文件、79 个测试全部通过）。
+- 前端子代理已完成 Agent SSE 解析、实时 reducer、Trace 增量更新、状态区分和测试；阶段 6 初始前端门禁通过（当时为 7 个测试文件、79 个测试；后续收口已扩展为 13 个文件、141 个测试）。
 - 文档子任务已完成：新增 Agent SSE 事件契约和阶段 6 开发记录，更新根 README、前端 README 与计划记录。
 - 开发期已加入 Vite dev-only proxy：`AI_PLATFORM_DEV_API_BASE_URL` 配置后端地址，`AI_PLATFORM_DEV_API_KEY` 只由 Node proxy 注入 `Authorization`，两个变量不进入浏览器 bundle 或生产构建。
 - 真实浏览器已通过代理验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待并显示“后端终态未知”、offline 后 `connection_lost`、恢复网络后重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行；Trace 步骤按钮已验证 `aria-expanded`/`aria-controls`，点击后焦点保持并正确展开，普通键盘输入与提交也已验证。

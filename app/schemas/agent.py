@@ -41,6 +41,13 @@ type AgentToolErrorCode = Literal[
     "tool_execution_failed",
 ]
 
+DEFAULT_AGENT_MAX_STEPS = 4
+MAX_AGENT_MAX_STEPS = 20
+DEFAULT_AGENT_TIMEOUT_SECONDS = 60.0
+MAX_AGENT_TIMEOUT_SECONDS = 120.0
+DEFAULT_AGENT_TOKEN_BUDGET = 8192
+MAX_AGENT_TOKEN_BUDGET = 16384
+
 
 class AgentRunRequest(BaseModel):
     """Validated input for one synchronous Agent Runtime execution."""
@@ -49,9 +56,28 @@ class AgentRunRequest(BaseModel):
     model: str | None = Field(default=None, min_length=1)
     system_prompt: str | None = Field(default=None)
     history: list[ChatMessage] = Field(default_factory=list)
-    max_steps: int = Field(default=5, ge=1, le=20)
-    timeout_seconds: float = Field(default=120.0, gt=0, le=120.0)
-    token_budget: int = Field(default=2048, gt=0, le=32768)
+    max_steps: int = Field(
+        default=DEFAULT_AGENT_MAX_STEPS, ge=1, le=MAX_AGENT_MAX_STEPS
+    )
+    timeout_seconds: float = Field(
+        default=DEFAULT_AGENT_TIMEOUT_SECONDS,
+        gt=0,
+        le=MAX_AGENT_TIMEOUT_SECONDS,
+    )
+    token_budget: int = Field(
+        default=DEFAULT_AGENT_TOKEN_BUDGET,
+        gt=0,
+        le=MAX_AGENT_TOKEN_BUDGET,
+    )
+    preset: Literal["rag"] | None = Field(
+        default=None,
+        description=(
+            "Restricted preset that scopes this Agent Run. `rag` requires the "
+            "model to call knowledge_search before producing a final answer and "
+            "to base the answer on retrieved sources only. It is only meaningful "
+            "when RAG is enabled; ordinary Agent Runs do not set it."
+        ),
+    )
 
 
 class AgentRAGReferenceSummary(BaseModel):
@@ -185,6 +211,7 @@ class AgentStreamEvent(BaseModel):
     result_chars: int | None = Field(default=None, ge=0, le=8192)
     status: RunStatus | None = None
     stop_reason: StopReason | None = None
+    cumulative_token_usage: int | None = Field(default=None, ge=0)
     answer: str | None = None
     delta: str | None = None
     succeeded: bool | None = None

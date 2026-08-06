@@ -5,7 +5,7 @@
 
 ## Current status
 
-- Current milestone: **Sprint 11 MCP foundation completed; production hardening next**
+- Current milestone: **Agent Console + RAG product demo completed; production hardening next**
 - Version: `0.1.0`
 - Runtime: Python `3.12`–`3.14`（默认 `3.14`）
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
@@ -16,11 +16,33 @@
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
 - 前端 Agent Console：[阶段 6 已接入 Agent SSE、实时 Trace、Tool/RAG 状态和错误边界；开发期 Vite proxy 已用于真实浏览器流式验证](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md)
 - 前端平台壳层：默认 Dashboard、对话工作台、Prompt Studio、模型目录和管理员后台导航已接入。
+- HR 演示闭环：平台概览 → Agent 工作流 → RAG 知识库 → Trace/来源审计 → 管理员用量与 Run 审计均已接通真实后端能力。
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
   - PostgreSQL/pgvector integration suite：通过
   - Ruff format/lint、mypy 和 Uvicorn 启动检查：通过
+
+## Why this project is a strong Agent engineering demo
+
+这个项目不是只调用一次大模型 API 的聊天页面，而是一个可解释、可验证的 Agent 应用平台：
+
+- **Agent Runtime**：模型决策、有限步数循环、工具执行、结果回填、超时、取消、配额和预算终态都有明确边界。
+- **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
+- **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和终态；前端 Trace 展示真实事件，不补造时间、来源或回答。
+- **RAG 闭环**：PDF 入库 → 文本提取 → 分块 → Ollama Embedding → pgvector 检索 → 安全来源投影 → Agent 回答。
+- **安全与多租户**：API Key 哈希存储、限流、Token 配额、RAG 文档按 Key 隔离；Prompt、原始 Tool payload、Provider 响应和敏感信息不公开。
+- **工程质量**：前后端均有单元/契约测试、真实浏览器验证、可访问性检查、失败/超时/断连回归和 Code Review 记录。
+
+### 面向 HR 的建议演示路径
+
+1. 打开 **平台概览**，展示 Provider、Agent Runtime 和 RAG 的真实状态。
+2. 进入 **Agent 工作流**，运行 calculator，展开右侧 Trace，说明 `step_planned → tool_started → tool_completed → final_answer`。
+3. 进入 **知识库** 上传一份 PDF，再点击“去知识库问答”；入口会自动进入 **Agent Run + RAG Agent preset**，不会误用普通 Chat SSE。
+4. 展示真实来源卡片、`success_with_sources`/`no_relevant_sources` 状态和安全投影字段。
+5. 打开管理员后台，展示 API Key、Token 用量和 Agent Run 安全审计摘要。
+
+> 普通 Chat SSE 只负责普通对话，不执行工具调用；知识库问答使用 Agent Run，先检索再回答。两条链路在 UI 和 API 层均明确区分。
 
 ## Core capabilities
 
@@ -47,6 +69,8 @@
 
 Agent SSE 还会把内部 `MODEL_DECISION` 投影为可选的 `step_planned` 事件，公开 `decision_kind`、`tool_names`、`tool_count` 和安全 `summary`。Tool 事件可以公开有限的 `argument_count`、`input_summary`、`output_summary` 和 `result_chars`：calculator 的 expression/result 会经过长度限制和敏感信息清洗，knowledge_search 不公开原始 query，只提供检索状态和 RAG 安全来源，未知工具只提供参数数量和结果字符数。原始 Tool payload、Prompt、Provider 响应和模型内部推理仍不会公开。
 
+Agent SSE 的模型决策与终止事件可以携带可选 `cumulative_token_usage`，这是 Runtime 在真实事件中累计的 token 用量；前端只把它展示为 Trace 的“总 Token”，不会补造 prompt/completion 分项。同步 JSON 响应仍提供 `usage.prompt_tokens`、`usage.completion_tokens` 和 `usage.total_tokens`。
+
 公开的 `rag` 结构为：
 
 ```json
@@ -72,6 +96,31 @@ Agent SSE 还会把内部 `MODEL_DECISION` 投影为可选的 `step_planned` 事
 RAG 来源仍是不可信参考材料，不等同于回答中的精确引用。该公开契约不返回查询文本、Tool 原始输入/输出、Prompt、模型推理、Provider 响应、堆栈、密钥、内部路径、文档名称或凭空生成的 rank/citation。
 
 > 详细字段边界和错误映射见 [Agent Run RAG public contract design](docs/superpowers/specs/2026-08-05-agent-rag-public-contract.md)。
+
+## Agent token budget 与 RAG 回填
+
+Agent 前端默认显式发送 `token_budget=8192`、`max_steps=4` 和
+`timeout_seconds=60`，后端 `AgentRunRequest` 使用相同安全默认值；未发送这些字段的
+旧客户端也会得到同一组默认值。后端边界为 `token_budget <= 16384`、
+`max_steps <= 20`、`timeout_seconds <= 120`，前端在发请求前做同样的整数/边界校验，
+不发送无限预算。
+
+预算语义保持真实：Runtime 会把每一轮模型调用的 `prompt_tokens + completion_tokens`
+累加到 `state.token_usage`，多轮 Agent 会重复发送完整 transcript，因此 RAG 工具结果
+回填后会放大下一轮 prompt，并再次计入累计用量。这就是旧默认 `2048` 会在 RAG 检索完成、
+最终回答尚未生成时提前触发 `token_budget_exceeded` 的原因。本项目当前默认已提升为
+`8192`；本轮不改变该语义，也不删除
+预算检查；真正超限仍返回 `stopped / token_budget_exceeded` 和真实 usage，不会伪造
+`answer`。前端对预算终态显示“Agent 达到 token 预算，已完成检索但未生成最终回答”，
+并与超时、取消和 RAG 失败分开展示。
+
+RAG 回填已有有界保护：`RAGService` 使用 `RAG_MAX_CONTEXT_CHARS`（默认 10000）限制
+检索上下文；`ToolExecutor` 默认把结构化工具输出限制在 8192 字符，并保护
+`document_id`、`chunk_id`、`call_id`、`id` 等稳定标识不被截断；公开来源投影仍只返回
+最多 1200 字符的脱敏片段。提高默认 token budget 不会让回填 prompt 无限放大。
+
+Ollama Provider 目前没有 `num_ctx` 配置入口，本轮不为此重构 Provider；后续任务需要为
+Ollama 请求增加可配置的上下文窗口，并确保 Agent/RAG 提示词不超过模型上下文限制。
 
 ## Evaluation Foundation
 
@@ -109,9 +158,9 @@ Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序
 - Request ID 与真实 Run ID 提供复制反馈；Chat/Agent 错误使用安全文案并支持重试，重试和会话切换隔离旧回答、Trace、来源、错误及晚到回调；
 - 响应式目标覆盖 320px、375px、768px、1024px 和 1440px，长回答与长标识支持换行或安全截断；
 - Agent SSE 解析真实的 `run_started`、Step、Tool、RAG、回答和终止事件；事件按 `run_id`/`sequence` 隔离，重复或乱序事件安全忽略；
-- 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（7 个测试文件、79 个测试全部通过）和生产构建。真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行；320px、375px、768px、1024px、1440px 五档均无横向溢出。`npm run a11y:smoke` 已使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG 路径通过：初始空态与真实 Agent/RAG 状态均为 axe `violations=0`；初始空态另有 1 个 `incomplete` 的 color-contrast（`.emptyIcon` 内容过短，axe 无法判断），不能表述为 axe 完全没有 incomplete。4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、键盘 Space 后焦点保持、live region 非逐字播报和 320px 无横向溢出均通过；完整 VoiceOver/NVDA/Orca 仍未验证。
+- 前端五项门禁已通过：格式检查、Oxlint、TypeScript 类型检查、Vitest（13 个测试文件、141 个测试全部通过）和生产构建。真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行；320px、375px、768px、1024px、1440px 五档均无横向溢出。`npm run a11y:smoke` 已使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG 路径通过：初始空态与真实 Agent/RAG 状态均为 axe `violations=0`；初始空态另有 1 个 `incomplete` 的 color-contrast（`.emptyIcon` 内容过短，axe 无法判断），不能表述为 axe 完全没有 incomplete。4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、键盘 Space 后焦点保持、live region 非逐字播报和 320px 无横向溢出均通过；完整 VoiceOver/NVDA/Orca 仍未验证。
 
-当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 仅是 legacy/非 streaming 兼容事件，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。后端不提供事件时间、步骤耗时或精确 Token 统计/usage，前端不补造这些数据。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。开发期 Vite proxy 的 key 只由 Node proxy 注入，不进入浏览器 bundle；真实浏览器已验证空库 `RAG loading` → `knowledge_base_empty` → `run_completed`，并在真实 ingest 53 个 chunks 后验证 `success_with_sources` 和 5 条安全来源；该次 UI Run 后续因 `token_budget_exceeded` 停止。独立真实 SSE 请求收到多个 `answer_delta`，并以唯一 `run_timed_out`（`deadline_exceeded`）终止，不能写成 `run_completed`。当前默认 `RAG_ENABLED=false`，上述验证使用显式真实依赖；RAG 安全投影和状态仅由后端/组件测试及真实验证覆盖，不能伪造来源。完整屏幕阅读器仍未验证；事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
+当前边界：Agent SSE 的 final answer 支持真实文本 `answer_delta`，其 `delta` 来自显式 Agent final-answer `ChatService.chat_stream()` 的 provider chunks；Runtime 按 `sequence` 发布并累计完整答案。`assistant_message` 仅是 legacy/非 streaming 兼容事件，同步 Agent API 仍保持非流式。空流不生成补充文本，Provider 错误、超时和取消不被改写为成功；增量沿用安全敏感字段清洗，不暴露模型 JSON、Prompt、工具原始输入输出、Provider 原始响应、堆栈、密钥或内部路径。SSE 通过真实 `cumulative_token_usage` 提供累计总 Token，同步 JSON 提供分项 usage；前端不补造缺失的分项或事件时间。前端 Abort 只停止等待，只有收到真实 `run_cancelled` 才显示后端取消；网络断连和格式错误分别独立显示。启动阶段 `stream_error` 可以缺少 `run_id`/`sequence`，前端会归一化并将其归类为 `AgentNetworkError`；它只表示流启动或连接边界错误，不代表 Run 终态。开发期 Vite proxy 的 key 只由 Node proxy 注入，不进入浏览器 bundle；真实浏览器已验证空库 `RAG loading` → `knowledge_base_empty` → `run_completed`，并在真实 ingest 53 个 chunks 后验证 `success_with_sources` 和 5 条安全来源；该次 UI Run 后续因 `token_budget_exceeded` 停止。独立真实 SSE 请求收到多个 `answer_delta`，并以唯一 `run_timed_out`（`deadline_exceeded`）终止，不能写成 `run_completed`。当前默认 `RAG_ENABLED=false`，上述验证使用显式真实依赖；RAG 安全投影和状态仅由后端/组件测试及真实验证覆盖，不能伪造来源。完整屏幕阅读器仍未验证；事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排仍不在阶段 6 范围。
 
 > [Agent SSE 事件契约](docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md) 和 [阶段 6 开发记录](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md) 记录真实事件、字段、顺序、终止与取消边界。
 
@@ -378,7 +427,8 @@ QUOTA_RESERVATION_RENEWAL_SECONDS=60
 RAG_ENABLED=false
 
 # Agent Runtime
-# Agent requests default to a 120-second global deadline; the frontend sends this explicitly.
+# Frontend defaults: token_budget=8192, max_steps=4, timeout_seconds=60.
+# Server limits: token_budget<=16384, max_steps<=20, timeout_seconds<=120.
 RAG_EMBEDDING_MODEL=nomic-embed-text
 RAG_EMBEDDING_DIMENSIONS=768
 RAG_CHUNK_SIZE=500
@@ -779,7 +829,7 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 ### 阶段 5 / Agent Console 收口与阶段 6 浏览器验收
 
 - 完成键盘可访问性、单独低频 live region、非颜色状态表达、Step/Tool/RAG disclosure、Request ID/Run ID 复制反馈、Chat/Agent 错误恢复和旧 Run 隔离。
-- 前端五项门禁通过：format、lint、typecheck、7 个测试文件中的 79 个测试和 build；真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
+- 阶段 6 初始前端五项门禁通过：format、lint、typecheck、7 个测试文件中的 79 个测试和 build；后续收口扩展为 13 个测试文件、141 个测试；真实浏览器已通过开发期 Vite proxy 验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后的“后端终态未知”、offline 后 `connection_lost`、恢复网络后的重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
 - 真实浏览器已验证 320/375/768/1024/1440 五档无横向溢出，并核对 Agent 模式展示。`npm run a11y:smoke` 使用真实 Chromium、Vite proxy 和真实后端 Agent/RAG 路径通过：初始空态与真实 Agent/RAG 状态 axe `violations=0`；初始空态有 1 个 `incomplete` color-contrast（`.emptyIcon` 内容过短无法判断），不是 violation，也不能写成 axe 完全无 incomplete。4 个 disclosure 的 `aria-expanded`/`aria-controls`/`hidden` 关系、Space 后焦点保持、live region 非逐字播报和 320px 无横向溢出通过。Ollama 已安装 `nomic-embed-text`，真实调用 `/api/embed` 返回 1 个 768 维向量；PostgreSQL/pgvector 空库的 Agent SSE 路径已观察到 `RAG loading` → `knowledge_base_empty` → `run_completed`。随后使用仓库已有 `docs/superpowers/specs/2026-08-04-agent-runtime-design.md` 真实 ingest 53 个 chunks，浏览器真实来源路径显示 `success_with_sources` 和 5 条真实来源，公开字段为 `document_id`、`chunk_id`、`chunk_index`、`distance`、`content` 的安全投影；该次 UI Run 后续因 `token_budget_exceeded` 停止。另一次直接真实 SSE 请求使用 `token_budget=8192`、`max_steps=3`，收到 `rag_started`、`tool_completed`（`success_with_sources`，5 条 refs）、多个真实 `answer_delta`，并以唯一 `run_timed_out`（`deadline_exceeded`）终止，因此不能把该次请求记录为 `run_completed`。当前默认 `RAG_ENABLED=false`；以上 RAG 浏览器验证使用显式启用的真实本地依赖，不能将测试或安全投影写成伪造来源。完整 VoiceOver/NVDA/Orca 仍未验证，浏览器 DOM、键盘、ARIA、live region 和五档响应式已验证。
 - 保留阶段 2—5 的 Chat SSE、同步 Agent Trace、Tool 状态和 RAG 来源契约；阶段 6 已实现 Agent SSE、实时 Trace 和实时 RAG 状态投影，持久化查询和回答内精确引用仍未实现。
 
@@ -794,7 +844,7 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 - Run 启动后发生 prompt quota 扩展或 reservation 续期失败时，Runtime、Service 和 SSE 统一以唯一 `run_failed` 终态收口；setup failure 只保留给 Run 尚未启动的初始化失败。
 - Agent SSE producer 发生未预期异常时，根据是否已观察到 `run_started` 选择 `stream_setup_failed` 或合成唯一 `run_failed`，避免已启动 Run 被错误伪装成 setup error。
 - Agent SSE 显式把 `X-RateLimit-Limit`、`X-RateLimit-Remaining` 和 `X-RateLimit-Reset` 传入实际的 `StreamingResponse`。
-- 新增前后端回归测试；第三轮修复后最终后端门禁为 478 passed、28 skipped，前端门禁为 7 个测试文件 83 passed，另有 1 个既有 Starlette/httpx 弃用警告。
+- 第三轮阶段 6 修复后的基线为后端 478 passed、28 skipped，前端 7 个测试文件 83 passed；后续 RAG preset、预算和布局收口后，前端测试扩展为 13 个文件、141 个测试，另有 1 个既有 Starlette/httpx 弃用警告。
 
 #### 阶段 6 Review 修复学习总结
 
@@ -833,3 +883,26 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 这次把 RAG 从“已有检索能力”延伸到“可演示的文档入库闭环”，前端展示的每个状态都对应真实后端阶段，没有伪造上传进度。PDF 解析只把受限的纯文本交给分块和 Embedding，API 返回安全元数据和有界文本预览，避免把向量或原始文件暴露给浏览器。文档列表复用 pgvector 元数据和分块聚合结果，并通过 API Key hash 实现租户隔离。
 
 > 当前队列是单进程内存实现，重启后未完成任务不会恢复；文档数据本身按 API Key hash 隔离。同名 PDF 上传会返回冲突，不会静默覆盖已有文档。
+
+### RAG readiness、Agent preset 与 HR 演示收口（2026-08-06）
+
+- `/api/v1/ready` 现在返回稳定的顶层 `rag` 能力状态：是否启用、数据库状态、Embedding 状态、模型名和安全原因码；前端启动时读取真实状态，不再把缺失的 runtime config 误判为 RAG 关闭。
+- 知识库页面区分检查中、已就绪、空知识库、数据库不可用、Embedding 不可用和健康检查失败；文档数量只来自当前 API Key，失败时显示“不可用”而不是猜测数量。
+- `AgentRunRequest.preset="rag"` 是受限能力：只由知识库入口设置，要求先执行 `knowledge_search`；普通 Agent 和 Chat SSE 不受影响。没有来源时显示真实 `no_relevant_sources`，不把模型常识包装成知识库答案。
+- Chat SSE 与 Agent Run 在 UI 上有独立模式标识。Chat 模式不展示 Tool/RAG Trace；Agent 模式展示真实步骤、工具、来源和终态。
+- 桌面端使用固定视口和独立滚动容器，会话区、Trace 区和平台导航不会被长回答互相撑开；移动端恢复单列自然滚动并保持无横向溢出。
+
+#### 本阶段学习总结
+
+本阶段把“能调用模型”推进为“能解释模型如何完成任务”：通过受限 preset 将 RAG 约束放在服务端，而不是依赖前端提示词；通过 readiness 契约让前端展示真实基础设施状态；通过独立滚动容器解决长对话的可用性问题。验证覆盖普通 Chat、Agent Tool Call、真实 RAG 来源、无相关来源、页面滚动和移动端布局，并保留未验证的屏幕阅读器边界。
+
+### Agent 预算与 RAG 回答修复（2026-08-06）
+
+- 前端和后端统一安全默认值：`token_budget=8192`、`max_steps=4`、`timeout_seconds=60`，并保留服务端上限。
+- Runtime 仍会真实执行 Token budget 检查；超限时返回 `stopped/token_budget_exceeded`，不伪造最终回答。SSE 增加真实累计 Token，前端能展示预算超限时的实际用量。
+- RAG 工具输出有界截断，并保护 `document_id`、`chunk_id` 等来源标识；没有来源或回答时，UI 不生成假回答或假引用。
+- 真实验证：知识库问题完成 `knowledge_search → final_answer`，返回真实来源和 `completed/direct_answer`；预算超限、超时和无相关来源路径也分别通过测试覆盖。
+
+#### 本阶段学习总结
+
+本阶段定位并修复了 RAG 检索成功但最终回答未生成的预算问题，同时没有通过删除预算检查来“修好”页面。通过显式请求参数、前后端边界校验、真实 SSE usage 和有界工具输出，解决了可用性问题并保留了 Agent 的失败真实性。后续仍可独立优化多轮预算语义和 Ollama `num_ctx`，不把它们隐藏成已完成能力。

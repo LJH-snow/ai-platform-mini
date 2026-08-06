@@ -22,16 +22,22 @@ from app.agents.models import (
     ToolCall,
     ToolResult,
 )
-from app.api.agent import _to_response, get_agent_service
+from app.api.agent import _to_response, _to_stream_event, get_agent_service
 from app.auth.models import APIKey
 from app.core.container import provide_agent_run_record_service
 from app.core.context import RequestContext
-from app.exceptions.base import ProviderError, QuotaExceededError
+from app.exceptions.base import ProviderError, QuotaExceededError, RAGUnavailableError
 from app.main import app
 from app.mcp import MCPToolAdapter, MCPToolCallResult, MCPToolDefinition
 from app.providers.results import ProviderChatResult
 from app.runs import InMemoryRunTraceRecorder, RunTraceRecorderFactory
-from app.schemas.agent import AgentRunRequest
+from app.schemas.agent import (
+    DEFAULT_AGENT_MAX_STEPS,
+    DEFAULT_AGENT_TIMEOUT_SECONDS,
+    DEFAULT_AGENT_TOKEN_BUDGET,
+    MAX_AGENT_TOKEN_BUDGET,
+    AgentRunRequest,
+)
 from app.schemas.chat import ChatMessage, ChatResponse
 from app.services.agent_service import (
     AgentRunOutcome,
@@ -222,6 +228,27 @@ def _clear_overrides() -> None:
     app.dependency_overrides.pop(get_agent_service, None)
 
 
+def test_agent_endpoint_accepts_rag_preset_and_rejects_unknown_presets() -> None:
+    service = FakeAgentService(outcome=_outcome())
+    _override(service)
+    try:
+        accepted = client.post(
+            "/api/v1/agent/runs",
+            json={"message": "hello", "preset": "rag"},
+            headers=_AUTH_HEADERS,
+        )
+        rejected = client.post(
+            "/api/v1/agent/runs",
+            json={"message": "hello", "preset": "orchestration"},
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        _clear_overrides()
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 422
+
+
 def test_agent_endpoint_persists_effective_model_name() -> None:
     service = FakeAgentService(outcome=_outcome())
     record_service = FakeAgentRunRecordService(saved_models=[])
@@ -390,20 +417,51 @@ def test_agent_endpoint_preserves_quota_error_mapping() -> None:
     assert response.json()["code"] == "QUOTA_EXCEEDED"
 
 
-def test_agent_request_defaults_to_two_minute_timeout() -> None:
+def test_agent_request_uses_safe_bounded_defaults() -> None:
     request = AgentRunRequest(message="hello")
 
-    assert request.timeout_seconds == 120.0
+    assert request.token_budget == DEFAULT_AGENT_TOKEN_BUDGET
+    assert request.max_steps == DEFAULT_AGENT_MAX_STEPS
+    assert request.timeout_seconds == DEFAULT_AGENT_TIMEOUT_SECONDS
 
 
 def test_agent_request_validation_rejects_runtime_limits() -> None:
-    response = client.post(
-        "/api/v1/agent/runs",
-        json={"message": "hello", "max_steps": 21},
-        headers=_AUTH_HEADERS,
+    service = FakeAgentService(outcome=_outcome())
+    _override(service)
+    try:
+        for payload in (
+            {"max_steps": 21},
+            {"token_budget": MAX_AGENT_TOKEN_BUDGET + 1},
+            {"timeout_seconds": 120.1},
+        ):
+            response = client.post(
+                "/api/v1/agent/runs",
+                json={"message": "hello", **payload},
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 422
+    finally:
+        _clear_overrides()
+
+
+def test_stream_event_carries_real_cumulative_token_usage() -> None:
+    occurred_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    event = AgentEvent(
+        kind=AgentEventKind.RUN_STOPPED,
+        run_id="run-usage",
+        sequence=3,
+        occurred_at=occurred_at,
+        status=RunStatus.STOPPED,
+        stop_reason=StopReason.TOKEN_BUDGET_EXCEEDED,
+        cumulative_token_usage=1234,
     )
 
-    assert response.status_code == 422
+    stream_event = _to_stream_event(event, "request-1")
+
+    assert stream_event.event == "run_stopped"
+    assert stream_event.stop_reason == "token_budget_exceeded"
+    assert stream_event.cumulative_token_usage == 1234
 
 
 def test_chat_service_agent_model_parses_final_answer_json() -> None:
@@ -533,6 +591,108 @@ async def test_chat_service_agent_model_passes_prompt_and_history_to_chat_reques
     assert "user: previous question" in request.message
     assert "assistant: previous answer" in request.message
     assert "user: latest question" in request.message
+
+
+@pytest.mark.asyncio
+async def test_rag_preset_forces_knowledge_search_before_any_answer() -> None:
+    from app.schemas.chat import ChatRequest
+
+    chat_service = _FakeChatService()
+    model = _ChatServiceAgentModel(
+        chat_service,  # type: ignore[arg-type]
+        AgentRunRequest(message="什么是智能体？", model="test-model", preset="rag"),
+    )
+
+    initial_state = AgentState(
+        run_id="run-1",
+        user_input="什么是智能体？",
+        messages=[AgentMessage(role="user", content="什么是智能体？")],
+    )
+    decision = await model.decide(initial_state)
+
+    assert decision.answer is None
+    assert len(decision.tool_calls) == 1
+    assert decision.tool_calls[0].name == "knowledge_search"
+    assert decision.tool_calls[0].arguments == {"query": "什么是智能体？"}
+
+    request = chat_service.requests[0]
+    assert isinstance(request, ChatRequest)
+    assert request.system_prompt is not None
+    assert "MUST call the knowledge_search tool" in request.system_prompt
+    assert "do not invent" in request.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_rag_preset_allows_answer_after_knowledge_search_has_run() -> None:
+    chat_service = _FakeChatService()
+    model = _ChatServiceAgentModel(
+        chat_service,  # type: ignore[arg-type]
+        AgentRunRequest(message="什么是智能体？", model="test-model", preset="rag"),
+    )
+
+    after_search_state = AgentState(
+        run_id="run-1",
+        user_input="什么是智能体？",
+        messages=[
+            AgentMessage(role="user", content="什么是智能体？"),
+            AgentMessage(
+                role="tool",
+                content='{"ok":true,"results":[]}',
+                tool_call_id="knowledge-1",
+                tool_name="knowledge_search",
+            ),
+        ],
+        steps=[
+            AgentStep(
+                index=1,
+                decision=AgentDecision(
+                    tool_calls=(
+                        ToolCall(
+                            call_id="knowledge-1",
+                            name="knowledge_search",
+                            arguments={"query": "什么是智能体？"},
+                        ),
+                    )
+                ),
+                tool_results=(
+                    ToolResult(
+                        call_id="knowledge-1",
+                        name="knowledge_search",
+                        content='{"ok":true,"results":[]}',
+                        succeeded=True,
+                        error=None,
+                        truncated=False,
+                    ),
+                ),
+            )
+        ],
+    )
+    decision = await model.decide(after_search_state)
+
+    assert decision.answer == "hello"
+    assert not decision.tool_calls
+
+
+def test_agent_request_accepts_only_the_rag_preset() -> None:
+    assert AgentRunRequest(message="hello", preset="rag").preset == "rag"
+    assert AgentRunRequest(message="hello").preset is None
+    with pytest.raises(ValueError):
+        AgentRunRequest.model_validate({"message": "hello", "preset": "orchestration"})
+
+
+@pytest.mark.asyncio
+async def test_agent_service_rejects_rag_preset_without_knowledge_search_tool() -> None:
+    service = AgentService(
+        chat_service=_FakeChatService(),  # type: ignore[arg-type]
+        quota_service=_FakeQuotaService(),  # type: ignore[arg-type]
+        usage_collector=_FakeUsageCollector(),  # type: ignore[arg-type]
+    )
+    request = AgentRunRequest(message="hello", model="test-model", preset="rag")
+    context = RequestContext(request_id="request-1", api_key="hashed")
+    api_key = APIKey(key="hashed", name="test")
+
+    with pytest.raises(RAGUnavailableError):
+        await service.run(request, context=context, api_key=api_key)
 
 
 class _FakeChatService:

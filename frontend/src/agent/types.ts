@@ -1,4 +1,11 @@
-export const DEFAULT_AGENT_TIMEOUT_SECONDS = 120
+export const DEFAULT_AGENT_TOKEN_BUDGET = 8192
+export const MAX_AGENT_TOKEN_BUDGET = 16384
+export const MIN_AGENT_TOKEN_BUDGET = 1
+export const DEFAULT_AGENT_MAX_STEPS = 4
+export const MAX_AGENT_MAX_STEPS = 20
+export const MIN_AGENT_MAX_STEPS = 1
+export const DEFAULT_AGENT_TIMEOUT_SECONDS = 60
+export const MAX_AGENT_TIMEOUT_SECONDS = 120
 
 export type AgentRunStatus =
   | 'idle'
@@ -153,4 +160,11 @@ export type AgentRunInput = {
   message: string
   history: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
   timeoutSeconds?: number
+  tokenBudget?: number
+  maxSteps?: number
+  /**
+   * Restricted preset that scopes this run. `rag` requires knowledge_search
+   * before answering; only knowledge-base entry points set it.
+   */
+  preset?: 'rag'
 }

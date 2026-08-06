@@ -33,3 +33,9 @@
 | 错误 | 尝试 | 处理 |
 |---|---:|---|
 | codebase-memory MCP 工具未在当前会话暴露 | 1 | 回退到 `rg` 和定向文件阅读，未影响代码审查 |
+
+## 2026-08-06 文档收口
+
+- 对照当前代码补齐 HR 展示向 README、前端 README、`progress.md` 和 `findings.md`：明确 Agent Runtime、RAG preset、Chat/Agent 模式隔离、RAG readiness、预算默认值、实时累计 Token 和独立滚动布局。
+- 修正过时描述：`calculator` 允许展示脱敏摘要，`knowledge_search` 只展示 RAG 状态与安全来源，未知工具只展示计数；原始 payload、Prompt、Provider 响应和详细内部错误仍不公开。
+- 当前提交范围只包含本轮已 Review 的实现、测试和文档；`.env`、`output/`、`demo/`、`.headroom/`、`.tokensave/`、`CLAUDE.md` 等临时或辅助文件不纳入提交。

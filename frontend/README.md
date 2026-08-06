@@ -1,6 +1,14 @@
 # AI Platform Mini Frontend
 
-基于 Vite + React + TypeScript 的 Agent Console。当前完成阶段 6：在保留阶段 2—5 能力的基础上，接入真实 Agent SSE、实时 Trace、Tool/RAG 状态和错误恢复边界。
+基于 Vite + React + TypeScript 的 AI 应用平台前端。当前包含平台概览、Chat SSE、Agent Run、RAG 知识库、Prompt Studio、模型目录和管理员审计入口；在保留阶段 2—5 能力的基础上，接入真实 Agent SSE、实时 Trace、Tool/RAG 状态和错误恢复边界。
+
+## HR 演示重点
+
+- **Chat SSE**：普通对话，不执行工具调用，不展示 Agent Tool Trace 或 RAG 来源。
+- **Agent Run**：真实模型决策、工具调用、RAG 状态、回答增量和终态均来自后端事件。
+- **知识库问答**：从知识库页面进入时自动切换到 Agent Run，并启用受限 `RAG Agent preset`，先检索再回答。
+- **真实失败语义**：无相关来源、预算超限、超时、取消、鉴权失败和健康检查失败分别展示，不把失败状态改写成成功。
+- **长内容布局**：桌面端导航、会话区和 Trace 区独立滚动；移动端恢复单列自然滚动。
 
 ## 阶段 3 已完成
 
@@ -13,6 +21,7 @@
 ### Agent Trace 与状态
 
 - 展示后端真实 `run_id`、`status`、`stop_reason`、`steps`、`events` 和 `usage`；后端没有返回 Run ID 时不生成替代值。
+- Agent SSE 可展示后端真实累计 Token；只有同步 JSON 提供 `prompt_tokens`/`completion_tokens` 分项时才展示分项，不补造缺失数据。
 - 支持 `completed`、`stopped`、`failed`、`cancelled` 和 `timed_out` 等后端终态，并展示前端同步请求的运行中状态。
 - 浏览器主动中止请求时只显示“前端已停止等待，后端终态未知”，不会声称后端 Runtime 已取消。
 - 步骤按后端索引稳定排序，相同步骤索引和相同事件摘要会去重。
@@ -22,10 +31,11 @@
 
 ### Tool Call 卡片
 
-- 支持 `calculator` 和未知工具名称。
+- 支持 `calculator`、`knowledge_search`、MCP 风格工具（`mcp__server__tool`）和未知工具名称。
+- MCP 工具名称在 `frontend/src/agent/tool-name.ts` 的 `MCP_TOOL_NAME_MAP` 中维护精确展示名；未映射且格式明确的名称显示为 `MCP 工具：tool（server）`；只有前缀的 `mcp__` 显示通用标签 `MCP 工具`；`mcp__server__`、`mcp__a`、`mcp__a__b__c`、`mcp__my__server__search` 等无法明确解析出 server/tool 的名称保留原始名，避免误判。
 - 可表达工具成功、失败、超时、取消和未知状态；同步请求等待期间不会伪造具体工具正在执行。
-- 工具输入、输出、调用耗时和详细错误不在当前后端公开契约中，因此卡片明确显示“后端未提供”。
-- 工具摘要可展开或收起；长文本安全工具会截断内容，并清理 API Key、Bearer Token、内部路径和常见堆栈行。
+- 工具卡片只展示后端安全投影：`calculator` 可展示脱敏后的 expression/result，`knowledge_search` 隐藏原始 query、展示 RAG 状态与来源，未知工具只展示参数数量和结果字符数；原始 payload、调用耗时和详细错误仍显示“后端未提供”。
+- 工具摘要可展开或收起；长文本会安全截断，并清理 API Key、Bearer Token、内部路径和常见堆栈行。
 - HTTP、网络和异常响应使用用户可理解的固定错误信息，不展示 Provider 原始响应、Python 堆栈、内部路径、API Key 或模型思维链。
 
 ### 交互与回归保护
@@ -63,7 +73,7 @@
 ### 响应式目标与验证
 
 - 响应式目标宽度为 **320px、375px、768px、1024px 和 1440px**；长回答、Run ID、call ID、chunk ID、Tool 摘要和 RAG 内容允许换行或安全截断，操作区和触摸目标保持可用。
-- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **7 个测试文件、79 个测试全部通过**。
+- 已运行前端五项门禁：`npm run format:check`、`npm run lint`、`npm run typecheck`、`npm test -- --run`、`npm run build`；当前结果为 **13 个测试文件、141 个测试全部通过**。
 - 已在真实浏览器验证 320/375/768/1024/1440 五档无横向溢出，并核对静态页面文案和 Agent 模式展示。该回归不等同于键盘焦点或屏幕阅读器验证。
 - 开发期 Vite proxy 已提供同源真实后端边界；本轮真实浏览器已通过代理验证 Agent `answer_delta` 增量、实时 Trace、calculator 两步真实 Tool Call、停止等待后显示“后端终态未知”、offline 后显示 `connection_lost`、恢复网络后重试成功，以及 `Shift+Enter` 多行和 `Ctrl+Enter` 运行。
 
@@ -86,8 +96,8 @@
 ## 尚未实现或不在阶段 6 范围
 
 - **事件时间与步骤耗时**：当前公开 API 未提供，前端不推算或伪造。
-- **工具输入、输出和详细错误**：当前公开 API 未提供，前端不读取 Provider 或内部 Runtime 原始对象。
-- 精确 Token 统计/usage、事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排不在阶段 6 范围；`answer_delta` 是真实文本增量，不等同于逐 Token 计数。
+- **详细工具载荷和错误**：前端不读取 Provider 或内部 Runtime 原始对象；公开 UI 只展示后端安全投影，原始 payload、Prompt、Provider 响应和堆栈不公开。
+- 精确 Token 统计/usage、事件历史回放、持久化 Trace 查询、回答内精确引用、完整 MCP 工具管理/配置 UI 和复杂多 Agent 编排不在阶段 6 范围；`answer_delta` 是真实文本增量，不等同于逐 Token 计数。前端只负责 `mcp__` 风格工具名称的友好展示，不改变后端原始工具名。
 - 启动失败的 `stream_error` 可以缺少 `run_id`/`sequence`；前端解析器会将缺失字段归一化，并由客户端归类为 `AgentNetworkError`。该帧只表示流启动或连接边界错误，不代表 Agent Run 已进入任何终态。
 
 详细事件字段和边界见 [Agent SSE 事件契约](../docs/superpowers/specs/2026-08-05-agent-sse-event-contract.md)。
@@ -151,4 +161,11 @@ npm run dev
 
 平台导航中的“知识库”页面现在支持真实 PDF 入库：用户可以选择或拖拽 PDF，前端调用 `POST /api/v1/rag/documents`，展示提取文本、生成 Embedding、写入 pgvector 的明确流程状态，并通过 `GET /api/v1/rag/documents` 列出已索引文档。页面只展示安全元数据，不展示文档原文、向量或未经处理的后端异常；入库完成后可以一键带入知识库问答场景。
 
-知识库页面会在 API Key 缺失或 `RAG_ENABLED=false` 时禁用上传；上传后轮询真实 queued/processing/completed/failed 任务状态，完成后刷新列表，并支持所属 Key 的文本预览和删除。页面不保存原始 PDF，只展示有界提取文本和安全元数据；“去知识库问答”会强制进入 Chat 模式，避免沿用上一轮 Agent 演示状态。
+知识库页面会在 API Key 缺失或 `RAG_ENABLED=false` 时禁用上传；上传后轮询真实 queued/processing/completed/failed 任务状态，完成后刷新列表，并支持所属 Key 的文本预览和删除。页面不保存原始 PDF，只展示有界提取文本和安全元数据；“去知识库问答”会进入 Agent Run 并启用受限的 `RAG Agent preset`，确保先调用 `knowledge_search` 再回答。
+
+## RAG readiness、模式隔离与页面布局
+
+- 前端启动时读取 `/api/v1/ready` 的真实 `rag` 状态，区分 RAG 未启用、数据库不可用、Embedding 不可用、健康检查失败和知识库为空。
+- Chat SSE 只负责普通对话；Agent Run 才展示 Tool Call、RAG 状态和 Trace。知识库入口不会误用普通 Chat SSE。
+- `RAG Agent preset` 由服务端约束先检索再回答；`no_relevant_sources` 显示真实 0 来源，不把模型一般知识包装成知识库答案。
+- 桌面端使用固定视口和独立滚动容器，会话区与 Trace 区不会被长消息互相撑开；移动端恢复单列自然滚动。

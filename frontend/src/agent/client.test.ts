@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AgentBackendError, AgentNetworkError, createAgentClient } from './client.ts'
+import {
+  DEFAULT_AGENT_MAX_STEPS,
+  DEFAULT_AGENT_TIMEOUT_SECONDS,
+  DEFAULT_AGENT_TOKEN_BUDGET,
+  MAX_AGENT_MAX_STEPS,
+  MAX_AGENT_TIMEOUT_SECONDS,
+  MAX_AGENT_TOKEN_BUDGET,
+  type AgentRunInput,
+} from './types.ts'
 
 const successPayload = {
   run_id: 'run-api-1',
@@ -45,11 +54,132 @@ describe('createAgentClient', () => {
         body: JSON.stringify({
           message: '2+2',
           history: [{ role: 'user', content: '之前的问题' }],
-          timeout_seconds: 120,
+          token_budget: DEFAULT_AGENT_TOKEN_BUDGET,
+          max_steps: DEFAULT_AGENT_MAX_STEPS,
+          timeout_seconds: DEFAULT_AGENT_TIMEOUT_SECONDS,
         }),
       }),
     )
     expect(result.runId).toBe('run-api-1')
+  })
+
+  it('passes explicit runtime overrides for budget, steps, and timeout', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify(successPayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const client = createAgentClient({ fetchImpl })
+
+    await client.runAgent(
+      {
+        message: '2+2',
+        history: [],
+        tokenBudget: 12_000,
+        maxSteps: 6,
+        timeoutSeconds: 30,
+      },
+      new AbortController().signal,
+    )
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({
+          message: '2+2',
+          history: [],
+          token_budget: 12_000,
+          max_steps: 6,
+          timeout_seconds: 30,
+        }),
+      }),
+    )
+  })
+
+  it('sends the rag preset only when explicitly requested', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(successPayload), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
+    const client = createAgentClient({ fetchImpl })
+
+    await client.runAgent(
+      { message: '什么是智能体？', history: [], preset: 'rag' },
+      new AbortController().signal,
+    )
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({
+          message: '什么是智能体？',
+          history: [],
+          token_budget: DEFAULT_AGENT_TOKEN_BUDGET,
+          max_steps: DEFAULT_AGENT_MAX_STEPS,
+          timeout_seconds: DEFAULT_AGENT_TIMEOUT_SECONDS,
+          preset: 'rag',
+        }),
+      }),
+    )
+
+    await client.runAgent({ message: 'plain', history: [] }, new AbortController().signal)
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: expect.not.stringContaining('"preset"'),
+      }),
+    )
+  })
+
+  it.each([
+    {
+      label: 'token_budget below minimum',
+      input: { tokenBudget: 0 },
+    },
+    {
+      label: 'token_budget above maximum',
+      input: { tokenBudget: MAX_AGENT_TOKEN_BUDGET + 1 },
+    },
+    {
+      label: 'token_budget non-integer',
+      input: { tokenBudget: 1.5 },
+    },
+    {
+      label: 'max_steps below minimum',
+      input: { maxSteps: 0 },
+    },
+    {
+      label: 'max_steps above maximum',
+      input: { maxSteps: MAX_AGENT_MAX_STEPS + 1 },
+    },
+    {
+      label: 'max_steps non-integer',
+      input: { maxSteps: 2.5 },
+    },
+    {
+      label: 'timeout_seconds above maximum',
+      input: { timeoutSeconds: MAX_AGENT_TIMEOUT_SECONDS + 1 },
+    },
+    {
+      label: 'timeout_seconds non-finite',
+      input: { timeoutSeconds: Number.POSITIVE_INFINITY },
+    },
+  ])('rejects $label before sending a request', async ({ input }) => {
+    const fetchImpl = vi.fn<typeof fetch>()
+    const client = createAgentClient({ fetchImpl })
+
+    await expect(
+      client.runAgent(
+        { message: '边界', history: [], ...(input as Partial<AgentRunInput>) },
+        new AbortController().signal,
+      ),
+    ).rejects.toBeInstanceOf(RangeError)
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('normalizes HTTP and network errors without exposing raw backend details', async () => {
@@ -102,6 +232,18 @@ describe('createAgentClient', () => {
         new AbortController().signal,
       ),
     ).rejects.toBeInstanceOf(AgentNetworkError)
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/v1/agent/runs/stream',
+      expect.objectContaining({
+        body: JSON.stringify({
+          message: '启动',
+          history: [],
+          token_budget: DEFAULT_AGENT_TOKEN_BUDGET,
+          max_steps: DEFAULT_AGENT_MAX_STEPS,
+          timeout_seconds: DEFAULT_AGENT_TIMEOUT_SECONDS,
+        }),
+      }),
+    )
   })
 
   it('accepts omitted optional RAG fields without rejecting the whole run', async () => {

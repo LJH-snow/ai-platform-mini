@@ -23,6 +23,52 @@ describe('Agent stream reducer', () => {
     })
   })
 
+  it('marks MCP tools as known during SSE tool lifecycle events', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('step_planned', 1, {
+        step_index: 1,
+        decision_kind: 'tool_call',
+        tool_names: ['mcp__docs-server__search_docs'],
+        tool_count: 1,
+      }),
+      e('tool_started', 2, {
+        step_index: 1,
+        call_id: 'mcp-1',
+        tool_name: 'mcp__docs-server__search_docs',
+      }),
+      e('tool_completed', 3, {
+        step_index: 1,
+        call_id: 'mcp-1',
+        tool_name: 'mcp__docs-server__search_docs',
+        succeeded: true,
+      }),
+    ])
+
+    expect(state.run?.steps[0]?.summary).toBe('模型计划调用 1 个工具：文档搜索。')
+    expect(state.run?.steps[0]?.toolCalls[0]).toMatchObject({
+      name: 'mcp__docs-server__search_docs',
+      known: true,
+      status: 'succeeded',
+    })
+  })
+
+  it('keeps unknown SSE tools unknown', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('tool_started', 1, {
+        step_index: 1,
+        call_id: 'unknown-1',
+        tool_name: 'mystery_tool',
+      }),
+    ])
+
+    expect(state.run?.steps[0]?.toolCalls[0]).toMatchObject({
+      name: 'mystery_tool',
+      known: false,
+    })
+  })
+
   it('retains real planned step and tool metadata without inventing missing values', () => {
     const state = apply([
       e('run_started', 0),
@@ -229,6 +275,66 @@ describe('Agent stream reducer', () => {
     ])
     expect(state.run?.status).toBe('timed_out')
     expect(state.run?.events).toHaveLength(2)
+  })
+
+  it('keeps real cumulative token usage from SSE terminal events', () => {
+    const state = apply([
+      e('run_started', 0),
+      e('step_planned', 1, {
+        step_index: 1,
+        decision_kind: 'tool_call',
+        tool_names: ['knowledge_search'],
+        tool_count: 1,
+        cumulative_token_usage: 900,
+      }),
+      e('rag_started', 2, {
+        step_index: 1,
+        call_id: 'rag-1',
+        tool_name: 'knowledge_search',
+        rag: { status: 'loading', references: [] },
+      }),
+      e('tool_completed', 3, {
+        step_index: 1,
+        call_id: 'rag-1',
+        tool_name: 'knowledge_search',
+        succeeded: true,
+        rag: {
+          status: 'success_with_sources',
+          references: [
+            {
+              document_id: 'doc-1',
+              chunk_id: 'chunk-1',
+              chunk_index: 0,
+              content: '真实来源',
+              distance: 0.2,
+            },
+          ],
+        },
+      }),
+      e('run_stopped', 4, {
+        status: 'stopped',
+        stop_reason: 'token_budget_exceeded',
+        cumulative_token_usage: 9000,
+      }),
+    ])
+
+    expect(state.terminal).toBe(true)
+    expect(state.run).toMatchObject({
+      status: 'stopped',
+      stopReason: 'token_budget_exceeded',
+      answer: null,
+      usage: {
+        promptTokens: null,
+        completionTokens: null,
+        totalTokens: 9000,
+        estimated: false,
+      },
+    })
+    expect(state.run?.steps[0]?.toolCalls[0]).toMatchObject({
+      name: 'knowledge_search',
+      status: 'succeeded',
+    })
+    expect(state.run?.steps[0]?.toolCalls[0]?.rag?.references).toHaveLength(1)
   })
 
   it('accumulates answer deltas after tools and does not duplicate legacy answer', () => {
