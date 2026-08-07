@@ -29,6 +29,7 @@ from app.exceptions.base import (
     QuotaExceededError,
     RAGUnavailableError,
 )
+from app.observability.context import attach_request_id
 from app.observability.tracing import (
     get_tracer,
     set_span_duration_ms,
@@ -433,6 +434,7 @@ class AgentService:
             "agent.run",
             attributes={"agent.request_id": context.request_id},
         )
+        attach_request_id(span)
         outcome: AgentRunOutcome | None = None
         try:
             with trace.use_span(span, end_on_exit=False):

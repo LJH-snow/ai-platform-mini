@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace.export import (
     ConsoleSpanExporter,
     SimpleSpanProcessor,
 )
+from opentelemetry.sdk.trace.sampling import ParentBased, Sampler, TraceIdRatioBased
 from opentelemetry.trace import Span, Status, StatusCode
 
 from app.core.settings import Settings
@@ -22,6 +23,7 @@ _TRACER_NAME = "ai-platform-mini"
 _TRACER_VERSION = "0.1.0"
 _provider: TracerProvider | None = None
 _noop_provider = trace.NoOpTracerProvider()
+_TRACES_PATH = "/v1/traces"
 
 
 def setup_telemetry(
@@ -44,7 +46,8 @@ def setup_telemetry(
         return
 
     resource = Resource.create({"service.name": settings.telemetry_service_name})
-    provider = TracerProvider(resource=resource)
+    sampler = _sampler_for(settings)
+    provider = TracerProvider(resource=resource, sampler=sampler)
     if span_processor is not None:
         provider.add_span_processor(span_processor)
     elif settings.telemetry_exporter == "console":
@@ -52,10 +55,32 @@ def setup_telemetry(
     else:
         provider.add_span_processor(
             BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=settings.telemetry_otlp_endpoint)
+                OTLPSpanExporter(endpoint=_otlp_traces_endpoint(settings))
             )
         )
     _provider = provider
+
+
+def _otlp_traces_endpoint(settings: Settings) -> str:
+    """Return the OTLP traces endpoint, appending the path when missing."""
+
+    endpoint = settings.telemetry_otlp_endpoint
+    if endpoint.endswith(_TRACES_PATH):
+        return endpoint
+    return f"{endpoint.rstrip('/')}{_TRACES_PATH}"
+
+
+def _sampler_for(settings: Settings) -> Sampler | None:
+    """Return a parent-aware ratio sampler honoring the configured ratio.
+
+    ``ParentBased`` keeps child spans (LLM, Tool, RAG, Agent) sampled whenever
+    their HTTP root span is sampled, so a single request either appears
+    completely or not at all in the trace backend.
+    """
+
+    if settings.telemetry_sampling_ratio >= 1.0:
+        return None
+    return ParentBased(root=TraceIdRatioBased(settings.telemetry_sampling_ratio))
 
 
 def shutdown_telemetry() -> None:

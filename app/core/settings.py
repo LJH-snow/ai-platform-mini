@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, cast
 
-from pydantic import Field, SecretStr, ValidationInfo, field_validator
+from pydantic import AliasChoices, Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 if TYPE_CHECKING:
@@ -76,7 +76,24 @@ class Settings(BaseSettings):
     telemetry_enabled: bool = False
     telemetry_service_name: str = "ai-platform-mini"
     telemetry_exporter: Literal["otlp", "console"] = "otlp"
-    telemetry_otlp_endpoint: str = "http://localhost:4318/v1/traces"
+    telemetry_sampling_ratio: float = 1.0
+    telemetry_metrics_enabled: bool = True
+    telemetry_otlp_endpoint: str = Field(
+        default="http://localhost:4318/v1/traces",
+        validation_alias=AliasChoices(
+            "telemetry_otlp_endpoint", "otel_exporter_otlp_endpoint"
+        ),
+    )
+
+    @field_validator("telemetry_sampling_ratio")
+    @classmethod
+    def validate_telemetry_sampling_ratio(cls, v: float) -> float:
+        if v < 0.0 or v > 1.0:
+            raise ValueError(
+                "telemetry_sampling_ratio must be between 0.0 and 1.0 "
+                f"(inclusive), got {v}"
+            )
+        return v
 
     @field_validator("rag_embedding_dimensions")
     @classmethod

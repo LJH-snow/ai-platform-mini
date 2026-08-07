@@ -27,7 +27,13 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, setup_logging
 from app.core.settings import Settings, get_settings
 from app.middleware.context import ContextMiddleware
-from app.observability import TelemetryMiddleware, setup_telemetry, shutdown_telemetry
+from app.observability import (
+    TelemetryMiddleware,
+    setup_metrics,
+    setup_telemetry,
+    shutdown_metrics,
+    shutdown_telemetry,
+)
 
 if TYPE_CHECKING:
     from app.providers.base import LLMProvider
@@ -165,6 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         finally:
             clear_container_cache()
         shutdown_telemetry()
+        shutdown_metrics()
         if cancellation is not None:
             raise cancellation
 
@@ -192,6 +199,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     setup_logging(settings.log_level, log_format=settings.log_format)
     setup_telemetry(settings)
+    setup_metrics(settings)
 
     app = FastAPI(
         title=settings.app_name,

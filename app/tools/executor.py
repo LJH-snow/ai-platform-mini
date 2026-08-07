@@ -7,6 +7,8 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import cast
 
+from app.observability.context import attach_request_id
+from app.observability.metrics import record_tool_execution
 from app.observability.tracing import (
     get_tracer,
     set_span_duration_ms,
@@ -88,6 +90,8 @@ class ToolExecutor:
                 ),
             },
         ) as span:
+            attach_request_id(span)
+            status = "error"
             try:
                 result = await self._execute(
                     tool_name,
@@ -95,14 +99,22 @@ class ToolExecutor:
                     context,
                     timeout_seconds=timeout_seconds,
                 )
+                status = result.status.value
             except asyncio.CancelledError:
                 span.set_attribute("tool.cancelled", True)
+                status = "cancelled"
                 raise
             except BaseException:
                 set_span_error(span)
                 raise
+            finally:
+                set_span_duration_ms(span, start, "tool.duration_ms")
+                record_tool_execution(
+                    tool_name,
+                    status,
+                    round((time.monotonic() - start) * 1000, 2),
+                )
             span.set_attribute("tool.status", result.status.value)
-            set_span_duration_ms(span, start, "tool.duration_ms")
             return result
 
     async def _execute(
