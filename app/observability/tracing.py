@@ -24,6 +24,8 @@ _TRACER_VERSION = "0.1.0"
 _provider: TracerProvider | None = None
 _noop_provider = trace.NoOpTracerProvider()
 _TRACES_PATH = "/v1/traces"
+_METRICS_PATH = "/v1/metrics"
+_KNOWN_OTLP_PATHS = (_TRACES_PATH, _METRICS_PATH)
 
 
 def setup_telemetry(
@@ -61,13 +63,20 @@ def setup_telemetry(
     _provider = provider
 
 
-def _otlp_traces_endpoint(settings: Settings) -> str:
-    """Return the OTLP traces endpoint, appending the path when missing."""
+def _normalize_otlp_base(endpoint: str) -> str:
+    """Strip any known OTLP path suffix to recover the base URL."""
 
-    endpoint = settings.telemetry_otlp_endpoint
-    if endpoint.endswith(_TRACES_PATH):
-        return endpoint
-    return f"{endpoint.rstrip('/')}{_TRACES_PATH}"
+    for path in _KNOWN_OTLP_PATHS:
+        if endpoint.endswith(path):
+            return endpoint[: -len(path)].rstrip("/")
+    return endpoint.rstrip("/")
+
+
+def _otlp_traces_endpoint(settings: Settings) -> str:
+    """Return the OTLP traces endpoint, normalizing the base first."""
+
+    base = _normalize_otlp_base(settings.telemetry_otlp_endpoint)
+    return f"{base}{_TRACES_PATH}"
 
 
 def _sampler_for(settings: Settings) -> Sampler | None:
