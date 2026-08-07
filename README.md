@@ -551,6 +551,14 @@ ADMIN_API_KEYS=sk-admin-key-1
 AUTH_ENABLED=true
 AUTH_STORAGE=memory
 
+# User Auth (registration/login with bcrypt)
+USER_AUTH_ENABLED=true
+USER_AUTH_STORAGE=postgres
+JWT_SECRET=change-me-in-production
+JWT_ALGORITHM=HS256
+JWT_EXPIRATION_MINUTES=1440
+BCRYPT_ROUNDS=12
+
 # Bootstrap (Docker/Postgres only)
 INITIAL_API_KEY=
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform
@@ -650,6 +658,16 @@ TELEMETRY_ENABLED=true TELEMETRY_EXPORTER=console .venv/bin/uvicorn app.main:app
 ```
 
 在 Jaeger/OTLP Collector 端查看时，配置 `TELEMETRY_OTLP_ENDPOINT`（或标准 `OTEL_EXPORTER_OTLP_ENDPOINT`）指向 Collector 的 OTLP HTTP 端点；可以只写 base（如 `http://localhost:4318`），trace 与 metrics exporter 会自动补全 `/v1/traces` 和 `/v1/metrics` 路径，也可以直接写完整路径。采集端建议将 OTLP/Prometheus 数据接入 Grafana 查看指标，Jaeger/Tempo 查看 trace。
+
+### Auth 平台加固（用户注册、登录、身份与工作空间）
+
+- `POST /auth/register` / `POST /auth/login`：用户注册与登录，密码经 bcrypt（`BCRYPT_ROUNDS` 可配置）哈希存储，登录返回 JWT（`JWT_SECRET`/`JWT_ALGORITHM`/`JWT_EXPIRATION_MINUTES`）。
+- `GET /auth/me`：返回当前用户信息及所属工作空间列表，通过 `require_api_key` 鉴权。
+- `IdentityContext`：`_update_context` 为异步方法，通过 `_resolve_role()` 查询工作空间 membership 填充 `role`（owner/member），`api_key_id` 由 `APIKeyMetadata.id` 真实填充。
+- `POST /workspaces` / `POST /workspaces/{id}/members`：创建工作空间及添加成员。memory 与 Postgres 实现的 `add_member` 统一在重复加入时抛 `ConflictError`。
+- 安全加固：密码验证使用 `hmac.compare_digest`（抗计时攻击）；6 处 `assert identity.*` 改为显式 `if … raise AuthenticationError`（避免 `-O` 优化被剥离）。
+- `migrate_auth_schema` 执行顺序修复：置于 `create_all` 之后，并添加 `_table_exists` 守卫避免重复迁移。
+- 测试：`test_auth_users.py`（注册/登录/me）、`test_identity.py`（role 解析）、`test_workspaces.py`（CRUD + 成员管理），全量 692 passed。
 
 > [完整路线图](docs/roadmap/2026-08-04-agent-runtime-development-roadmap.md)
 > [Sprint 8 设计说明](docs/superpowers/specs/2026-08-04-agent-runtime-design.md)
