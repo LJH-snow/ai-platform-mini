@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Literal
 
 from app.rag.pg_vector_store import PgVectorStore
 from app.rag.vector_store import (
@@ -42,7 +43,12 @@ _DEFAULT_CANDIDATE_K = 25
 
 
 class HybridRetriever:
-    """VectorStore implementation fusing semantic and keyword rankings."""
+    """VectorStore implementation fusing semantic and keyword rankings.
+
+    ``mode`` selects the active composition: ``hybrid`` runs both paths
+    and fuses them; ``keyword`` skips the semantic path entirely so the
+    ranking is purely keyword-based (diagnostics/golden comparison).
+    """
 
     def __init__(
         self,
@@ -50,10 +56,12 @@ class HybridRetriever:
         *,
         rrf_k: int = _DEFAULT_RRF_K,
         candidate_k: int = _DEFAULT_CANDIDATE_K,
+        mode: Literal["hybrid", "keyword"] = "hybrid",
     ) -> None:
         self._vector_store = vector_store
         self._rrf_k = rrf_k
         self._candidate_k = candidate_k
+        self._mode = mode
 
     async def add_document(
         self,
@@ -91,11 +99,13 @@ class HybridRetriever:
         not be reachable through this method anyway; it is used by callers
         that only have an embedding).
         """
-        semantic = await self._vector_store.search(
-            query_embedding,
-            self._candidate_k,
-            owner_key_hash=owner_key_hash,
-        )
+        semantic: list[SearchResult] = []
+        if self._mode == "hybrid":
+            semantic = await self._vector_store.search(
+                query_embedding,
+                self._candidate_k,
+                owner_key_hash=owner_key_hash,
+            )
         keyword: list[KeywordSearchResult] = []
         if query:
             keyword = await self._vector_store.keyword_search(

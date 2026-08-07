@@ -180,7 +180,11 @@ def provide_vector_store() -> VectorStore | None:
     )
     if settings.rag_search_mode == "vector":
         return store
-    return HybridRetriever(store, rrf_k=settings.rag_rrf_k)
+    return HybridRetriever(
+        store,
+        rrf_k=settings.rag_rrf_k,
+        mode=settings.rag_search_mode,
+    )
 
 
 @lru_cache

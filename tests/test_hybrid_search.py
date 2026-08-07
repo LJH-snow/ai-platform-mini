@@ -24,6 +24,7 @@ class _FakeVectorStore:
         self._semantic = semantic or []
         self._keyword = keyword or []
         self.last_query: str | None = None
+        self.semantic_calls = 0
 
     async def search(
         self,
@@ -34,6 +35,7 @@ class _FakeVectorStore:
         query: str | None = None,
     ) -> list[SearchResult]:
         del query_embedding, top_k, owner_key_hash, query
+        self.semantic_calls += 1
         return self._semantic
 
     async def keyword_search(
@@ -123,17 +125,35 @@ async def test_vector_only_mode_without_query() -> None:
 
 
 async def test_candidate_set_exceeds_final_top_k() -> None:
-    """Two paths fetch candidate_k (25) each; fusion keeps only top_k."""
-    semantic = [_result(f"s{i}", i) for i in range(25)]
-    keyword = [_keyword(f"k{i}", i, 1.0) for i in range(25)]
+    """Shared chunks win: dual-path hits beat any single-path rank-1."""
+    semantic = [_result("shared", 0)] + [_result(f"s{i}", i) for i in range(1, 25)]
+    keyword = [_keyword("shared", 0, 1.0)] + [
+        _keyword(f"k{i}", i, 1.0) for i in range(1, 25)
+    ]
     retriever = _make(semantic, keyword)
 
     results = await retriever.search([], top_k=5, query="x")
 
     assert len(results) == 5
-    # A chunk present in both paths outranks single-path chunks even when
-    # its individual ranks are worse (1/61 + 1/64 > 1/61).
-    assert results[0].chunk_id in {"s0", "k0", "s1", "k1"}
+    # shared: 1/61 (semantic#1) + 1/61 (keyword#1) = 2/61 beats any
+    # single-path rank-1 chunk (1/61).
+    assert results[0].chunk_id == "shared"
+
+
+async def test_keyword_mode_skips_semantic_path() -> None:
+    """RAG_SEARCH_MODE=keyword must not run the vector path at all."""
+    store = _FakeVectorStore(
+        semantic=[_result("a", 0)],
+        keyword=[_keyword("k0", 0, 1.0)],
+    )
+    retriever = HybridRetriever(cast(PgVectorStore, store), mode="keyword")
+
+    results = await retriever.search([], top_k=3, query="x")
+
+    assert [r.chunk_id for r in results] == ["k0"]
+    assert store.semantic_calls == 0
+    # Single-path normalization: keyword rank 1 is the best possible.
+    assert results[0].distance == 0.0
 
 
 async def test_empty_results_yield_empty_fusion() -> None:
