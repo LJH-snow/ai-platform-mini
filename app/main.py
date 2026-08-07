@@ -18,6 +18,7 @@ from app.api.models import router as models_router
 from app.api.openai import router as openai_router
 from app.api.prompts import router as prompts_router
 from app.api.rag import router as rag_router
+from app.api.runs import router as runs_router
 from app.api.tools import router as tools_router
 from app.api.workflows import router as workflows_router
 from app.api.workspaces import router as workspaces_router
@@ -285,6 +286,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_router)
     app.include_router(openai_router)
     app.include_router(rag_router)
+    app.include_router(runs_router)
     app.include_router(workflows_router)
     app.include_router(admin_router)
     return app

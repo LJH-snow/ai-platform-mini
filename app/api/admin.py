@@ -35,6 +35,7 @@ from app.schemas.admin import (
 from app.services.agent_run_record_service import (
     AgentRunRecordService,
     public_run_payload,
+    public_run_summary,
 )
 from app.usage.service import UsageService
 
@@ -223,7 +224,7 @@ async def list_agent_runs(
     if record_service is None:
         return []
     rows = await record_service.list_runs(limit=limit, status=status)
-    return [_run_summary(public_run_payload(row)) for row in rows]
+    return [public_run_summary(public_run_payload(row)) for row in rows]
 
 
 @router.get(
@@ -247,43 +248,3 @@ async def get_agent_run(
         raise HTTPException(status_code=404, detail="Agent Run record not found.")
     payload = public_run_payload(row)
     return AgentRunRecordResponse(**payload)
-
-
-def _run_summary(payload: object) -> AgentRunRecordSummary:
-    if not isinstance(payload, dict):
-        raise TypeError("Agent Run payload must be a mapping.")
-    response = payload.get("response")
-    if not isinstance(response, dict):
-        response = {}
-    tool_count = sum(
-        len(step.get("tool_calls", []) or [])
-        for step in response.get("steps", [])
-        if isinstance(step, dict)
-    )
-    rag_reference_count = 0
-    for step in response.get("steps", []):
-        if not isinstance(step, dict):
-            continue
-        for tool in step.get("tool_calls", []) or []:
-            if not isinstance(tool, dict):
-                continue
-            rag = tool.get("rag")
-            if isinstance(rag, dict):
-                references = rag.get("references", [])
-                if isinstance(references, list):
-                    rag_reference_count += len(references)
-    return AgentRunRecordSummary(
-        run_id=str(payload["run_id"]),
-        request_id=str(payload["request_id"]),
-        api_key_prefix=str(payload["api_key_prefix"]),
-        api_key_name=str(payload["api_key_name"]),
-        model=str(payload["model"]),
-        status=str(payload["status"]),
-        stop_reason=str(payload["stop_reason"]),
-        started_at=payload.get("started_at"),
-        completed_at=payload.get("completed_at"),
-        duration_ms=payload.get("duration_ms"),
-        total_tokens=payload.get("total_tokens"),
-        tool_count=tool_count,
-        rag_reference_count=rag_reference_count,
-    )

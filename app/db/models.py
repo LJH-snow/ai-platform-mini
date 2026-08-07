@@ -91,6 +91,11 @@ class AgentRunRecordTable(Base):
     request_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     api_key_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     api_key_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # F1 tenant scoping for run records: workspace-bound runs carry the
+    # workspace id; legacy (unbound) runs keep NULL and match by key hash.
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     stop_reason: Mapped[str] = mapped_column(String(64), nullable=False)
