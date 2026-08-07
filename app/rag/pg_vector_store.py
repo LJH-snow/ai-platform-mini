@@ -6,13 +6,16 @@ import re
 from sqlalchemy import Select, delete, desc, func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.rag_models import RagDocument, RagDocumentChunk
 from app.exceptions.base import ConflictError, RAGStorageUnavailableError
+from app.rag.tokenize import tokenize_keywords
 from app.rag.vector_store import (
     MAX_DOCUMENT_PREVIEW_CHARACTERS,
     DocumentPreview,
     DocumentSummary,
+    KeywordSearchResult,
     SearchResult,
     validate_document_id,
     validate_owner_key_hash,
@@ -33,6 +36,19 @@ def _get_constraint_name(exc: IntegrityError) -> str | None:
             return match.group(1)
     match = re.search(r'constraint "([^"]+)"', str(exc))
     return match.group(1) if match else None
+
+
+def _keyword_vector(chunk_content: str) -> ColumnElement[object]:
+    """Build the tsvector expression for one chunk from jieba tokens.
+
+    Tokenization happens in the application (jieba cannot run inside
+    PostgreSQL); the database only converts the space-joined tokens with
+    the ``simple`` config so the indexed vocabulary matches exactly what
+    ``keyword_search`` queries with ``plainto_tsquery('simple', ...)``.
+    """
+
+    token_text = " ".join(tokenize_keywords(chunk_content))
+    return func.to_tsvector("simple", token_text)
 
 
 class PgVectorStore:
@@ -137,6 +153,7 @@ class PgVectorStore:
                             chunk_index=index,
                             content=chunk_content,
                             embedding=embedding,
+                            search_vector=_keyword_vector(chunk_content),
                         )
                     )
 
@@ -341,15 +358,79 @@ class PgVectorStore:
             text_characters=int(mapping["text_characters"]),
         )
 
+    async def keyword_search(
+        self,
+        query_text: str,
+        top_k: int,
+        *,
+        owner_key_hash: str | None = None,
+    ) -> list[KeywordSearchResult]:
+        """Rank chunks by ``ts_rank`` over their jieba token vectors.
+
+        This is the concrete keyword path used by ``HybridRetriever``; it
+        is deliberately not part of the ``VectorStore`` protocol so pure
+        vector stores stay untouched.
+        """
+        owner_hash = validate_owner_key_hash(owner_key_hash)
+        query_tokens = " ".join(tokenize_keywords(query_text)).strip()
+        if not query_tokens:
+            return []
+        try:
+            async with self._session_factory() as session:
+                tsquery = func.plainto_tsquery("simple", query_tokens)
+                rank_expr = func.ts_rank(RagDocumentChunk.search_vector, tsquery).label(
+                    "rank"
+                )
+                statement = (
+                    select(
+                        RagDocumentChunk.document_id,
+                        RagDocumentChunk.id,
+                        RagDocumentChunk.chunk_index,
+                        RagDocumentChunk.content,
+                        rank_expr,
+                    )
+                    .join(
+                        RagDocument,
+                        RagDocument.id == RagDocumentChunk.document_id,
+                    )
+                    .where(
+                        RagDocument.owner_key_hash == owner_hash,
+                        RagDocumentChunk.search_vector.is_not(None),
+                        RagDocumentChunk.search_vector.op("@@")(tsquery),
+                    )
+                    .order_by(rank_expr.desc())
+                    .limit(top_k)
+                )
+                result = await session.execute(statement)
+                return [
+                    KeywordSearchResult(
+                        document_id=str(row.document_id),
+                        chunk_id=str(row.id),
+                        chunk_index=int(row.chunk_index),
+                        content=str(row.content),
+                        rank=float(row.rank),
+                    )
+                    for row in result.all()
+                ]
+        except SQLAlchemyError as exc:
+            raise RAGStorageUnavailableError("RAG storage unavailable") from exc
+
     async def search(
         self,
         query_embedding: list[float],
         top_k: int,
         *,
         owner_key_hash: str | None = None,
+        query: str | None = None,
     ) -> list[SearchResult]:
-        """Search only chunks owned by the supplied API-key hash."""
+        """Search only chunks owned by the supplied API-key hash.
 
+        The optional ``query`` text is accepted for protocol compatibility
+        with ``HybridRetriever`` and deliberately ignored: this store stays
+        purely vector-based.
+        """
+
+        del query
         owner_hash = validate_owner_key_hash(owner_key_hash)
         try:
             async with self._session_factory() as session:

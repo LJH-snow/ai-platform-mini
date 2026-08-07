@@ -8,6 +8,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -16,6 +17,7 @@ from sqlalchemy import (
     inspect,
     text,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -62,6 +64,11 @@ class RagDocumentChunk(Base):
     __tablename__ = "rag_document_chunks"
     __table_args__ = (
         UniqueConstraint("document_id", "chunk_index", name="uq_rag_chunk_doc_index"),
+        Index(
+            "ix_rag_chunk_search_vector_gin",
+            "search_vector",
+            postgresql_using="gin",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -75,6 +82,7 @@ class RagDocumentChunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(String, nullable=False)
     embedding = mapped_column(Vector(RAG_EMBEDDING_DIMENSIONS), nullable=False)
+    search_vector = mapped_column(TSVECTOR, nullable=True)
 
 
 def migrate_rag_schema(connection: Connection) -> None:
@@ -219,6 +227,17 @@ def migrate_rag_schema(connection: Connection) -> None:
                     ON DELETE CASCADE;
                 END IF;
             END $$
+            """,
+            # Keyword search support (Sprint C): the tsvector column is
+            # written by the application (jieba tokenization) on ingest
+            # and backfill; only the simple config conversion happens in SQL.
+            """
+            ALTER TABLE rag_document_chunks
+            ADD COLUMN IF NOT EXISTS search_vector tsvector
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS ix_rag_chunk_search_vector_gin
+            ON rag_document_chunks USING GIN (search_vector)
             """,
         )
     )

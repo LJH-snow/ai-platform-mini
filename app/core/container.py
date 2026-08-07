@@ -32,9 +32,9 @@ if TYPE_CHECKING:
     from app.prompts.service import PromptRegistryService
     from app.rag.ingestion import RAGIngestionService
     from app.rag.ollama_embedder import OllamaEmbedder
-    from app.rag.pg_vector_store import PgVectorStore
     from app.rag.queue import RAGIngestionQueue
     from app.rag.service import RAGService
+    from app.rag.vector_store import VectorStore
     from app.services.agent_run_record_service import AgentRunRecordService
     from app.services.agent_service import AgentService
     from app.services.chat_service import ChatService
@@ -159,18 +159,28 @@ def provide_embedder() -> OllamaEmbedder | None:
 
 
 @lru_cache
-def provide_vector_store() -> PgVectorStore | None:
+def provide_vector_store() -> VectorStore | None:
+    """Provide the active retriever according to RAG_SEARCH_MODE.
+
+    ``vector`` returns the pure PgVectorStore (byte-identical legacy
+    behavior); ``hybrid``/``keyword`` wrap it in a HybridRetriever that
+    composes semantic + jieba keyword rankings via RRF.
+    """
+    from app.rag.hybrid import HybridRetriever
     from app.rag.pg_vector_store import PgVectorStore
 
     settings = get_settings()
     if not settings.rag_enabled:
         return None
     session_factory = provide_session_factory()
-    return PgVectorStore(
+    store = PgVectorStore(
         session_factory=session_factory,
         embedding_model=settings.rag_embedding_model,
         embedding_dimensions=RAG_EMBEDDING_DIMENSIONS,
     )
+    if settings.rag_search_mode == "vector":
+        return store
+    return HybridRetriever(store, rrf_k=settings.rag_rrf_k)
 
 
 @lru_cache

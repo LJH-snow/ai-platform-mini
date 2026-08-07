@@ -70,7 +70,9 @@ class FakeVectorStore:
         top_k: int,
         *,
         owner_key_hash: str | None = None,
+        query: str | None = None,
     ) -> list[SearchResult]:
+        del query
         return []
 
     async def delete_document(self, owner_key_hash: str, document_id: str) -> bool:

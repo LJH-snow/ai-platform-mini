@@ -64,6 +64,23 @@ class SearchResult:
     distance: float
 
 
+@dataclass(frozen=True)
+class KeywordSearchResult:
+    """Raw keyword-rank output of the concrete keyword search path.
+
+    Deliberately not part of the ``VectorStore`` protocol: keyword
+    ranking is a concrete ``PgVectorStore`` capability that
+    ``HybridRetriever`` composes, maps to ``SearchResult.distance``, and
+    exposes through the protocol.
+    """
+
+    document_id: str
+    chunk_id: str
+    chunk_index: int
+    content: str
+    rank: float
+
+
 @runtime_checkable
 class VectorStore(Protocol):
     async def add_document(
@@ -84,6 +101,7 @@ class VectorStore(Protocol):
         top_k: int,
         *,
         owner_key_hash: str | None = None,
+        query: str | None = None,
     ) -> list[SearchResult]: ...
 
     async def get_document_summary(

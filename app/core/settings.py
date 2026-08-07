@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     rag_max_upload_bytes: int = Field(default=10_000_000, gt=0, le=50_000_000)
     rag_max_pdf_pages: int = Field(default=100, gt=0, le=1_000)
     rag_max_document_characters: int = Field(default=1_000_000, gt=0, le=10_000_000)
+    # Search mode: vector-only by default (byte-identical legacy behavior).
+    # Switch to hybrid after the golden-set gate confirms hybrid >= vector
+    # on the evaluation dataset (Sprint C milestone).
+    rag_search_mode: Literal["hybrid", "vector", "keyword"] = "vector"
+    rag_rrf_k: int = Field(default=60, ge=1, le=200)
 
     mcp_enabled: bool = False
     mcp_servers_json: str = ""

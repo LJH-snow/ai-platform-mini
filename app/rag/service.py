@@ -214,6 +214,7 @@ class RAGService:
             query_embedding,
             self._top_k,
             owner_key_hash=owner_hash,
+            query=request.message,
         )
         if not results:
             raise KnowledgeBaseEmptyError(

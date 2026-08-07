@@ -143,8 +143,9 @@ class FakeVectorStore:
         top_k: int,
         *,
         owner_key_hash: str | None = None,
+        query: str | None = None,
     ) -> list[SearchResult]:
-        del query_embedding, top_k, owner_key_hash
+        del query_embedding, top_k, owner_key_hash, query
         return [
             SearchResult(
                 document_id="document-1",

@@ -4,3 +4,4 @@ pydantic-settings
 uvicorn[standard]
 pypdf>=5.0,<7.0
 python-multipart>=0.0.9,<1.0
+jieba==0.42.1
