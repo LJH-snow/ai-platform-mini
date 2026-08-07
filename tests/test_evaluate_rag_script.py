@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import SecretStr
 
+from app.evals.memory_repository import InMemoryRAGEvaluationRepository
 from app.evals.rag_models import (
     RAGEvalCaseResult,
     RAGReport,
@@ -15,6 +16,7 @@ from app.evals.rag_models import (
     RetrievalOutcome,
     RetrievalReference,
 )
+from app.evals.repository import RAGEvaluationRun
 from scripts import evaluate_rag
 
 _FIXTURE = Path("tests/fixtures/evals/rag_golden.jsonl")
@@ -211,3 +213,50 @@ def test_rag_script_markdown_escapes_user_fields() -> None:
     assert "\\r" in markdown
     assert "`c`" not in markdown
     assert "`x`" not in markdown
+
+
+@pytest.mark.asyncio
+async def test_rag_script_persists_run_record(tmp_path: Path) -> None:
+    repo = InMemoryRAGEvaluationRepository()
+    report = RAGReport(
+        results=(),
+        summary=RAGSummary(
+            case_count=2,
+            retrieval_success_count=1,
+            retrieval_success_rate=0.5,
+            context_recall_at_k=0.6,
+            document_recall_at_k=0.7,
+            chunk_recall_at_k=0.8,
+            answer_correctness_accuracy=1.0,
+            answer_correctness_case_count=1,
+            average_retrieved_chunks=1.5,
+            p95_latency_ms=12.3,
+        ),
+    )
+    run = RAGEvaluationRun(
+        id="run-1",
+        dataset="tests/fixtures/evals/rag_golden.jsonl",
+        retriever="embedding",
+        model=None,
+        case_count=report.summary.case_count,
+        retrieval_success_rate=report.summary.retrieval_success_rate,
+        context_recall_at_k=report.summary.context_recall_at_k,
+        document_recall_at_k=report.summary.document_recall_at_k,
+        chunk_recall_at_k=report.summary.chunk_recall_at_k,
+        answer_correctness_accuracy=report.summary.answer_correctness_accuracy,
+        answer_correctness_case_count=report.summary.answer_correctness_case_count,
+        average_retrieved_chunks=report.summary.average_retrieved_chunks,
+        p95_latency_ms=report.summary.p95_latency_ms,
+    )
+    saved = await repo.save(run)
+
+    assert saved.id == "run-1"
+    assert saved.dataset == "tests/fixtures/evals/rag_golden.jsonl"
+    assert saved.retriever == "embedding"
+    assert saved.case_count == 2
+    assert saved.retrieval_success_rate == 0.5
+    assert saved.created_at is not None
+
+    recent = await repo.list_recent(limit=10)
+    assert len(recent) == 1
+    assert recent[0].id == "run-1"

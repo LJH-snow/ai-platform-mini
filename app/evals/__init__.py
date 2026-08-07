@@ -43,6 +43,7 @@ from app.evals.rag_models import (
     context_recall_at_k,
 )
 from app.evals.rag_runner import RAGEvaluationRunner, RunRAGCase
+from app.evals.repository import RAGEvaluationRepository, RAGEvaluationRun
 from app.evals.retrievers import (
     EmbeddingVectorStoreRetriever,
     RAGServiceRetriever,
@@ -70,6 +71,8 @@ __all__ = [
     "RAGReport",
     "RAGServiceRetriever",
     "RAGSummary",
+    "RAGEvaluationRun",
+    "RAGEvaluationRepository",
     "RetrievalOutcome",
     "RetrievalReference",
     "RunCase",

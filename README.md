@@ -1146,3 +1146,33 @@ checkpoint 被重复消费；PostgreSQL `UPDATE ... WHERE status = expected RETU
 事后补，要从设计阶段就纳入：屏幕阅读器区域 (`aria-live`)、错误提示
 (`role="alert"`) 和按钮语义 (`aria-label`) 缺一不可。测试命名要精确，
 `concurrent` 和 `double` 在 async 代码里语义完全不同。
+
+### Sprint 15（RAG 评估升级：CI 回归 + 报表持久化）
+
+- 新增 `rag_evaluation_runs` 表：持久化每次评估的 dataset、retriever、模型、
+  各项指标、用例数和 created_at；注册到 `_CORE_TABLES`，默认随 init_db 创建。
+- 新增 `app/evals/repository.py` + `memory_repository.py` +
+  `postgres_repository.py`：内存模式用于本地开发和测试，PostgreSQL 模式用于
+  生产环境持久化；`list_recent` 支持分页查询最近 N 条记录。
+- `scripts/evaluate_rag.py` 运行结束后自动写入一条 `RAGEvaluationRun` 记录；
+  数据库不可用时降级为 `InMemoryRAGEvaluationRepository`，脚本不失败。
+- 新增 `test_rag_ci_regression_meets_thresholds`：对 `rag_golden.jsonl` 用
+  fake retriever 跑完整评估，断言 retrieval_success_rate >= 0.5、
+  context_recall_at_k >= 0.4、answer_correctness_accuracy == 1.0 等阈值；
+  离线、确定性、不调用真实 LLM。
+- 新增 repository 测试：验证内存 save/list_recent 行为；脚本测试验证
+  run 记录写入。
+- **不默认引入 RAGAS**：LLM-as-a-judge 虽然能评估答案相关性和忠实度，但
+  依赖外部模型调用、成本高、结果非确定性、引入额外依赖；当前评估以
+  确定性指标（recall@k、retrieval success rate、latency）为主，
+  answer_correctness 通过 `expected_answer_contains` 字符串匹配完成；
+  后续如需 LLM judge，将以可选模块形式独立引入，不影响现有 CI 回归路径。
+
+#### Sprint 15 学习总结
+
+从命令行工具升级为可回归的平台能力，关键是把"评估结果"也当作持久化实体：
+  `rag_evaluation_runs` 让团队能追踪每次评估的指标趋势，而不是每次都看
+  本地 JSON 文件。CI 回归阈值不是越低越好，而是要贴近 fixture 的真实行为，
+  过高会导致无害的波动触发失败，过低则失去回归意义。
+  `InMemoryRAGEvaluationRepository` 降级策略保证了脚本在无 DB 环境也能跑完，
+  这是工具类脚本和生产代码的重要区别——工具失败不应阻塞整个流程。

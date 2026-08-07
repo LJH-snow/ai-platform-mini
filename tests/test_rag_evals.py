@@ -441,3 +441,31 @@ async def test_embedding_vector_store_retriever_filters_and_maps_empty() -> None
     filtered = await retriever.retrieve("what")
     assert filtered.status == "no_sources"
     assert filtered.error == "no_relevant_context"
+
+
+@pytest.mark.asyncio
+async def test_rag_ci_regression_meets_thresholds() -> None:
+    """Run the golden dataset through a fake retriever and assert CI thresholds.
+
+    This test is deterministic, offline, and must never call a real LLM.
+    Thresholds are chosen from the known fixture behavior; if they fail,
+    the retriever contract or the golden data has drifted.
+    """
+    report = await RAGEvaluationRunner(_fake_run_case).run(
+        read_rag_golden_dataset(_FIXTURE)
+    )
+    summary = report.summary
+
+    assert summary.case_count == 8
+    assert summary.retrieval_success_rate >= 0.5
+    assert summary.retrieval_success_count >= 4
+    assert summary.context_recall_at_k is not None
+    assert summary.context_recall_at_k >= 0.4
+    assert summary.document_recall_at_k is not None
+    assert summary.document_recall_at_k >= 0.4
+    assert summary.chunk_recall_at_k is not None
+    assert summary.chunk_recall_at_k >= 0.2
+    assert summary.answer_correctness_accuracy == 1.0
+    assert summary.answer_correctness_case_count >= 1
+    assert summary.average_retrieved_chunks >= 0.5
+    assert summary.p95_latency_ms >= 0.0
