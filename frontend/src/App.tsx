@@ -40,6 +40,7 @@ import { ModelCatalog } from './platform/ModelCatalog.tsx'
 import { AgentStudio } from './platform/AgentStudio.tsx'
 import { createConfigClient } from './platform/config-client.ts'
 import { PromptStudio } from './platform/PromptStudio.tsx'
+import { RunDetail } from './platform/RunDetail.tsx'
 import { ToolCenter } from './platform/ToolCenter.tsx'
 import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
@@ -49,7 +50,7 @@ import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
-type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members' | 'agents' | 'tools'
+type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members' | 'agents' | 'tools' | 'run'
 type RequestStatus =
   | 'idle'
   | 'sending'
@@ -542,6 +543,8 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   )
   // Auth page switching
   const [authPage, setAuthPage] = useState<'login' | 'register' | null>(null)
+  // Run replay: run_id opened from the console Trace panel
+  const [replayRunId, setReplayRunId] = useState<string | null>(null)
   // Workspace selection
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   // activeWorkspaceRole will be set by WorkspaceSwitcher in Sprint A5 X-Workspace-Id integration
@@ -1458,6 +1461,15 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   if (page === 'tools') {
     return renderPlatformShell(<ToolCenter client={configClient} />)
   }
+  if (page === 'run' && replayRunId !== null) {
+    return renderPlatformShell(
+      <RunDetail
+        client={configClient}
+        runId={replayRunId}
+        onBack={() => setPage('console')}
+      />,
+    )
+  }
   if (page === 'models') {
     return renderPlatformShell(
       <ModelCatalog apiKeyConfigured={Boolean(effectiveApiKey)} client={platformClient} />,
@@ -1709,14 +1721,27 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
                   <span className="runIdLine">
                     <span>Run ID：{agentRun.runId ?? '后端未提供'}</span>
                     {agentRun.runId ? (
-                      <button
-                        type="button"
-                        className="copyButton"
-                        aria-label={`复制 Run ID ${agentRun.runId}`}
-                        onClick={() => void handleCopy('Run ID', agentRun.runId)}
-                      >
-                        复制 Run ID
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="copyButton"
+                          aria-label={`复制 Run ID ${agentRun.runId}`}
+                          onClick={() => void handleCopy('Run ID', agentRun.runId)}
+                        >
+                          复制 Run ID
+                        </button>
+                        <button
+                          type="button"
+                          className="copyButton"
+                          aria-label={`回放 Run ${agentRun.runId}`}
+                          onClick={() => {
+                            setReplayRunId(agentRun.runId)
+                            setPage('run')
+                          }}
+                        >
+                          回放
+                        </button>
+                      </>
                     ) : null}
                     {copyFeedback ? (
                       <span className="copyFeedback" aria-live="polite">

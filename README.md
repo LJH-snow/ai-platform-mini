@@ -22,6 +22,7 @@
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Agent 配置层（Sprint B 批 A）：`AgentDefinitionService` 把 `Agent = Model + Prompt(版本) + Tools(白名单)` 落库；`POST /api/v1/agent/runs` 支持 `{agent_id}` 解析（model/prompt_ref/max_steps/工具白名单），显式请求字段覆盖定义；Prompt Registry 按 workspace 隔离模板并支持版本激活/回滚；Agent CRUD 全链路 IDOR 隔离（无 workspace 的 Key 统一 404/400）
 - Agent 配置前端（Sprint B 收尾）：PromptStudio 已服务端化（版本历史 + 保存即新版本 + 设为当前版本/回滚）；新增 Agent Studio（模型/Prompt 版本/工具勾选/步数/温度）与 Tool Center（workspace 级启用开关 + JSON Schema 展示）；run 审计 payload 记录 agent_id + prompt_ref
+- Agent Run 回放（Sprint D1）：`GET /api/v1/runs`（列表，可按 agent_id 过滤）与 `GET /api/v1/runs/{run_id}`（详情）按租户隔离（workspace 或 legacy key hash），跨租户统一 404；`agent_run_records` 新增 workspace_id 列（幂等迁移）；前端 Trace 面板 Run ID 旁新增「回放」入口，步骤时间线页展示 LLM 决策/工具调用/RAG 来源/最终回答（沿用后端安全投影）
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
   - PostgreSQL/pgvector integration suite：通过

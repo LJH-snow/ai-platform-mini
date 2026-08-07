@@ -39,6 +39,23 @@ export type AgentSummary = {
   tool_names: string[]
 }
 
+export type RunRecordSummary = {
+  run_id: string
+  model: string
+  status: string
+  stop_reason: string
+  started_at: string | null
+  completed_at: string | null
+  duration_ms: number | null
+  total_tokens: number | null
+  tool_count: number
+  rag_reference_count: number
+}
+
+export type RunRecordDetail = RunRecordSummary & {
+  response: Record<string, unknown>
+}
+
 export type AgentDraft = {
   name: string
   model: string
@@ -149,6 +166,34 @@ const normalizeTool = (payload: unknown): ToolInfo => {
   }
 }
 
+const normalizeRunSummaries = (payload: unknown): RunRecordSummary[] =>
+  asArray(payload).map((entry) => {
+    const item = asObject(entry)
+    return {
+      run_id: asString(item.run_id, ''),
+      model: asString(item.model, ''),
+      status: asString(item.status, ''),
+      stop_reason: asString(item.stop_reason, ''),
+      started_at: typeof item.started_at === 'string' ? item.started_at : null,
+      completed_at: typeof item.completed_at === 'string' ? item.completed_at : null,
+      duration_ms:
+        typeof item.duration_ms === 'number' ? item.duration_ms : null,
+      total_tokens:
+        typeof item.total_tokens === 'number' ? item.total_tokens : null,
+      tool_count: asNumber(item.tool_count, 0),
+      rag_reference_count: asNumber(item.rag_reference_count, 0),
+    }
+  })
+
+const normalizeRunDetail = (payload: unknown): RunRecordDetail => {
+  const item = asObject(payload)
+  const summary = normalizeRunSummaries([payload])[0]
+  return {
+    ...summary,
+    response: asObject(item.response),
+  }
+}
+
 const normalizeAgents = (payload: unknown): AgentSummary[] =>
   asArray(payload).map((entry) => {
     const item = asObject(entry)
@@ -252,6 +297,17 @@ export const createConfigClient = (options: ConfigClientOptions = {}) => {
       ),
     deleteAgent: (agentId: string) =>
       request('DELETE', `/api/v1/agents/${encodeURIComponent(agentId)}`, null, () => null),
+    listRuns: (agentId?: string) =>
+      request(
+        'GET',
+        agentId
+          ? `/api/v1/runs?agent_id=${encodeURIComponent(agentId)}`
+          : '/api/v1/runs',
+        null,
+        normalizeRunSummaries,
+      ),
+    getRun: (runId: string) =>
+      request('GET', `/api/v1/runs/${encodeURIComponent(runId)}`, null, normalizeRunDetail),
   }
 }
 

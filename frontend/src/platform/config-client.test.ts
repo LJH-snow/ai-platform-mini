@@ -141,6 +141,49 @@ describe('createConfigClient', () => {
     await expect(client.listAgents()).rejects.toMatchObject({ status: 404 })
   })
 
+  it('fetches run details with the response payload', async () => {
+    const fetchImpl = vi.fn(async () =>
+      okJson({
+        run_id: 'run-1',
+        request_id: 'req-1',
+        api_key_prefix: 'abcd',
+        api_key_name: 'test',
+        model: 'qwen3:4b',
+        status: 'completed',
+        stop_reason: 'direct_answer',
+        started_at: null,
+        completed_at: null,
+        duration_ms: 12.5,
+        total_tokens: 30,
+        tool_count: 1,
+        rag_reference_count: 0,
+        response: { answer: 'ok', steps: [] },
+      }),
+    )
+    const client = createConfigClient({ fetchImpl })
+
+    const detail = await client.getRun('run-1')
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/v1/runs/run-1',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(detail.run_id).toBe('run-1')
+    expect(detail.response.answer).toBe('ok')
+  })
+
+  it('lists runs with an optional agent filter', async () => {
+    const fetchImpl = vi.fn(async () => okJson([]))
+    const client = createConfigClient({ fetchImpl })
+
+    await client.listRuns('agent-1')
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/v1/runs?agent_id=agent-1',
+      expect.anything(),
+    )
+  })
+
   it('surfaces network failures as a stable error', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new TypeError('fetch failed')

@@ -10,6 +10,7 @@ import { ModelCatalog } from './ModelCatalog.tsx'
 import { AgentStudio } from './AgentStudio.tsx'
 import type { ConfigClient } from './config-client.ts'
 import { PromptStudio } from './PromptStudio.tsx'
+import { RunDetail } from './RunDetail.tsx'
 import { ToolCenter } from './ToolCenter.tsx'
 import type { PlatformClient } from './client.ts'
 
@@ -135,6 +136,20 @@ const createConfigClient = (overrides: Partial<ConfigClient> = {}): ConfigClient
     tool_names: [],
   })),
   deleteAgent: vi.fn(async () => null),
+  listRuns: vi.fn(async () => []),
+  getRun: vi.fn(async () => ({
+    run_id: 'run-1',
+    model: 'm',
+    status: 'completed',
+    stop_reason: 'direct_answer',
+    started_at: null,
+    completed_at: null,
+    duration_ms: 1,
+    total_tokens: 2,
+    tool_count: 0,
+    rag_reference_count: 0,
+    response: {},
+  })),
   ...overrides,
 })
 
@@ -289,6 +304,66 @@ describe('AgentStudio', () => {
 
     await user.click(screen.getByRole('button', { name: '删除' }))
     expect(deleteAgent).toHaveBeenCalledWith('agent-1')
+  })
+})
+
+describe('RunDetail', () => {
+  it('renders the timeline, tool calls, and final answer from a stored run', async () => {
+    const getRun = vi.fn(async () => ({
+      run_id: 'run-1',
+      model: 'qwen3:4b',
+      status: 'completed',
+      stop_reason: 'direct_answer',
+      started_at: null,
+      completed_at: null,
+      duration_ms: 120,
+      total_tokens: 42,
+      tool_count: 1,
+      rag_reference_count: 1,
+      response: {
+        answer: '最终回答内容',
+        steps: [
+          {
+            index: 1,
+            decision_kind: 'tool_call',
+            summary: 'Planned 1 tool call(s): calculator.',
+            tool_names: ['calculator'],
+            tool_calls: [
+              {
+                call_id: 'call-1',
+                name: 'calculator',
+                succeeded: true,
+                error_code: null,
+                error_message: null,
+                input_summary: 'expression: 2 + 2',
+                output_summary: 'result: 4',
+                rag: null,
+              },
+            ],
+          },
+          {
+            index: 2,
+            decision_kind: 'final_answer',
+            summary: 'Final answer planned.',
+            tool_names: [],
+            tool_calls: null,
+          },
+        ],
+      },
+    }))
+    const onBack = vi.fn()
+    render(
+      <RunDetail client={createConfigClient({ getRun })} runId="run-1" onBack={onBack} />,
+    )
+
+    await screen.findByText('Step 1')
+    expect(screen.getByText('calculator')).toBeInTheDocument()
+    expect(screen.getByText('输入：expression: 2 + 2')).toBeInTheDocument()
+    expect(screen.getByText('最终回答内容')).toBeInTheDocument()
+    expect(screen.getByText('42')).toBeInTheDocument()
+
+    await userEvent.setup().click(screen.getByRole('button', { name: '← 返回' }))
+    expect(onBack).toHaveBeenCalled()
   })
 })
 
