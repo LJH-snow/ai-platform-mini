@@ -1,9 +1,9 @@
-"""Reference LangGraph workflow for PDF report generation.
+"""LangGraph workflow for PDF report generation.
 
-This module is intentionally isolated from the main API. The production
-``AgentRuntime`` remains the default orchestration layer; this workflow is a
-reference implementation that demonstrates stateful graph execution,
-human-in-the-loop approval, and checkpoint resume with LangGraph.
+The production ``AgentRuntime`` remains the default orchestration layer; this
+workflow is a reference implementation that demonstrates stateful graph
+execution, human-in-the-loop approval, and checkpoint resume with LangGraph.
+It is consumed by ``PDFReportWorkflowService`` and the standalone CLI.
 
 Existing components are reused through narrow adapters:
 - PDF extraction: ``app.rag.pdf_extractor.extract_pdf_text``
