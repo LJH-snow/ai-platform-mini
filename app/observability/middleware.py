@@ -14,6 +14,8 @@ from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 
 from app.core.context import RequestContext
+from app.observability.context import reset_request_id, set_request_id
+from app.observability.metrics import record_http_request
 from app.observability.tracing import (
     get_tracer,
     set_span_duration_ms,
@@ -40,12 +42,24 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
         except asyncio.CancelledError:
             span.set_attribute("http.cancelled", True)
             set_span_duration_ms(span, start, "http.duration_ms")
+            record_http_request(
+                request.method,
+                request.url.path,
+                status_code=499,
+                duration_ms=round((time.monotonic() - start) * 1000, 2),
+            )
             span.end()
             raise
         except BaseException:
             set_span_error(span)
             span.set_attribute("http.response.status_code", 500)
             set_span_duration_ms(span, start, "http.duration_ms")
+            record_http_request(
+                request.method,
+                request.url.path,
+                status_code=500,
+                duration_ms=round((time.monotonic() - start) * 1000, 2),
+            )
             span.end()
             raise
 
@@ -60,6 +74,12 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
             )
 
         set_span_duration_ms(span, start, "http.duration_ms")
+        record_http_request(
+            request.method,
+            request.url.path,
+            status_code=response.status_code,
+            duration_ms=round((time.monotonic() - start) * 1000, 2),
+        )
         span.end()
         return response
 
@@ -89,6 +109,10 @@ async def _instrument_stream(
     start: float,
     status_code: int,
 ) -> AsyncIterator[bytes | str | memoryview[int]]:
+    context: RequestContext | None = getattr(request.state, "context", None)
+    token = set_request_id(context.request_id if context is not None else None)
+    effective_status = status_code
+    effective_error = False
     try:
         iterator = iterable.__aiter__()
         with trace.use_span(span, end_on_exit=False):
@@ -96,15 +120,26 @@ async def _instrument_stream(
                 yield chunk
     except asyncio.CancelledError:
         span.set_attribute("http.cancelled", True)
+        effective_status = 499
         raise
     except Exception:
-        set_span_error(span)
+        effective_error = True
+        effective_status = 500
         raise
     finally:
         _attach_request_attributes(span, request)
-        span.set_attribute("http.response.status_code", status_code)
+        if effective_error:
+            set_span_error(span)
+        span.set_attribute("http.response.status_code", effective_status)
         set_span_duration_ms(span, start, "http.duration_ms")
+        record_http_request(
+            request.method,
+            request.url.path,
+            status_code=effective_status,
+            duration_ms=round((time.monotonic() - start) * 1000, 2),
+        )
         span.end()
+        reset_request_id(token)
 
 
 def _attach_request_attributes(span: Span, request: Request) -> None:

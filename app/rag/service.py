@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from opentelemetry import trace
 
 from app.exceptions.base import KnowledgeBaseEmptyError, NoRelevantContextError
+from app.observability.context import attach_request_id
+from app.observability.metrics import record_rag_retrieval
 from app.observability.tracing import (
     get_tracer,
     set_span_duration_ms,
@@ -152,7 +154,9 @@ class RAGService:
             "rag.retrieve",
             attributes={"rag.top_k": self._top_k},
         )
+        attach_request_id(span)
         counts = _RetrievalCounts()
+        status = "error"
         try:
             with trace.use_span(span, end_on_exit=False):
                 prepared = await self._prepare(
@@ -160,8 +164,10 @@ class RAGService:
                     owner_key_hash=owner_key_hash,
                     counts=counts,
                 )
+            status = "ok"
         except asyncio.CancelledError:
             span.set_attribute("rag.cancelled", True)
+            status = "cancelled"
             raise
         except BaseException:
             set_span_error(span)
@@ -170,6 +176,10 @@ class RAGService:
             span.set_attribute("rag.retrieved_count", counts.retrieved)
             span.set_attribute("rag.used_count", counts.used)
             set_span_duration_ms(span, start, "rag.duration_ms")
+            record_rag_retrieval(
+                status,
+                round((time.monotonic() - start) * 1000, 2),
+            )
             span.end()
         return prepared
 

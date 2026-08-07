@@ -590,6 +590,9 @@ MCP_SERVERS_JSON=
 TELEMETRY_ENABLED=false
 TELEMETRY_SERVICE_NAME=ai-platform-mini
 TELEMETRY_EXPORTER=otlp
+# TELEMETRY_SAMPLING_RATIO=1.0        # 0.0 (drop all) ~ 1.0 (keep all)
+# TELEMETRY_METRICS_ENABLED=true
+# OTLP endpoint may also be set via OTEL_EXPORTER_OTLP_ENDPOINT
 TELEMETRY_OTLP_ENDPOINT=http://localhost:4318/v1/traces
 ```
 
@@ -624,12 +627,21 @@ TELEMETRY_OTLP_ENDPOINT=http://localhost:4318/v1/traces
 - Discovered tools require the `mcp:server:<server_name>` permission; the application grants it only to the Agent runtime for successfully discovered, explicitly configured servers, never from model output or user input
 - Real stdio tools must provide explicit read-only/destructive annotations; unknown risk metadata is rejected (fail-closed), and duplicate tool names isolate the affected Server
 
-### OpenTelemetry tracing notes
+### OpenTelemetry notes
 
-- `TELEMETRY_ENABLED=true` 启用 OpenTelemetry；默认关闭时 `setup_telemetry()` 是 no-op，不依赖外部 Collector
+- `TELEMETRY_ENABLED=true` 启用 OpenTelemetry（trace + metrics）；默认关闭时 `setup_telemetry()`/`setup_metrics()` 都是 no-op，不依赖外部 Collector
 - `TELEMETRY_EXPORTER=otlp` 使用 OTLP/HTTP exporter（默认 `http://localhost:4318/v1/traces`），`console` 则把 span 输出到 stdout，便于本地查看
+- `TELEMETRY_SAMPLING_RATIO`（0.0–1.0，默认 `1.0`）控制根 span 采样率；使用 `ParentBased(TraceIdRatioBased)`，子 span（LLM/Tool/RAG/Agent）跟随父 span 的采样决策，保证同一请求要么完整出现、要么完全不出现
+- `TELEMETRY_METRICS_ENABLED=false` 可单独关闭指标，保留 trace；OTLP endpoint 也可通过标准环境变量 `OTEL_EXPORTER_OTLP_ENDPOINT` 配置
+- 指标（默认随 `TELEMETRY_ENABLED` 开启，`PeriodicExportingMetricReader` 每 5s 导出一次，关闭时释放干净）：
+  - `http.requests` counter / `http.duration_ms` histogram（method、endpoint、status_code）
+  - `llm.calls` counter / `llm.duration_ms` histogram（model、stream、status）
+  - `llm.prompt_tokens` / `llm.completion_tokens` counters（model）
+  - `tool.executions` counter / `tool.duration_ms` histogram（name、status）
+  - `rag.retrievals` counter / `rag.duration_ms` histogram（status）
 - 覆盖的边界 span：HTTP 根 span（`request_id`、脱敏后的 `api_key_hash` 前缀、endpoint、状态码、耗时）、LLM `chat`/`chat_stream`（模型、耗时、`llm.usage.prompt_tokens`/`llm.usage.completion_tokens`）、Tool 执行（工具名、风险等级、状态、耗时）、RAG 检索（`top_k`、向量库原始返回数、进入上下文的引用数、耗时）、Agent Run（`run_id`、`stop_reason`、总 token）
-- span 属性不会写入原始 prompt、API Key、完整文档或堆栈；`api_key_hash` 只暴露前 8 个字符；客户端取消会记录 `*_cancelled` 属性且不标记为错误
+- request_id 关联：HTTP 根 span 携带 `app.request_id`；`ContextMiddleware` 通过 contextvar 把当前请求 ID 显式附加到 LLM/Tool/RAG/Agent span（`app.request_id`），SSE/流式响应体迭代期间会重新绑定同一 request_id（async generator 不继承创建时的 contextvar，见 `_instrument_stream`），同时这些子 span 通过 span context 嵌套在 HTTP 根 span 之下，两种关联机制都可用
+- span 属性与指标标签不会写入原始 prompt、API Key、完整文档或堆栈；`api_key_hash` 只暴露前 8 个字符；客户端取消会记录 `*_cancelled` 属性且不标记为错误
 - SSE/Streaming 响应的 HTTP 根 span 会覆盖整个响应体生命周期，而不是在响应头返回时提前结束
 - 本地快速查看：
 
@@ -637,7 +649,7 @@ TELEMETRY_OTLP_ENDPOINT=http://localhost:4318/v1/traces
 TELEMETRY_ENABLED=true TELEMETRY_EXPORTER=console .venv/bin/uvicorn app.main:app --reload
 ```
 
-在 Jaeger/OTLP Collector 端查看时，配置 `TELEMETRY_OTLP_ENDPOINT` 指向 Collector 的 HTTP trace endpoint。
+在 Jaeger/OTLP Collector 端查看时，配置 `TELEMETRY_OTLP_ENDPOINT`（或标准 `OTEL_EXPORTER_OTLP_ENDPOINT`）指向 Collector 的 OTLP HTTP 端点；可以只写 base（如 `http://localhost:4318`），trace 与 metrics exporter 会自动补全 `/v1/traces` 和 `/v1/metrics` 路径，也可以直接写完整路径。采集端建议将 OTLP/Prometheus 数据接入 Grafana 查看指标，Jaeger/Tempo 查看 trace。
 
 > [完整路线图](docs/roadmap/2026-08-04-agent-runtime-development-roadmap.md)
 > [Sprint 8 设计说明](docs/superpowers/specs/2026-08-04-agent-runtime-design.md)
@@ -1176,3 +1188,37 @@ checkpoint 被重复消费；PostgreSQL `UPDATE ... WHERE status = expected RETU
   过高会导致无害的波动触发失败，过低则失去回归意义。
   `InMemoryRAGEvaluationRepository` 降级策略保证了脚本在无 DB 环境也能跑完，
   这是工具类脚本和生产代码的重要区别——工具失败不应阻塞整个流程。
+
+### Sprint 16（OpenTelemetry 指标、采样与 request_id 关联）
+
+- 新增 `app/observability/metrics.py`：HTTP、LLM、Tool、RAG 四类服务的 counter
+  与 histogram 指标，通过 `PeriodicExportingMetricReader` 每 5s 分批导出；提供
+  `InMemoryMetricReader` 作为 test seam。
+- 新增 `TELEMETRY_METRICS_ENABLED` 配置项，可独立关闭指标而保留 trace；
+  OTLP endpoint 支持只写 base URL，trace exporter 自动补全 `/v1/traces`，
+  metrics exporter 自动补全 `/v1/metrics`。
+- 新增 `TELEMETRY_SAMPLING_RATIO`（0.0–1.0，默认 1.0）控制根 span 采样率；
+  使用 `ParentBased(TraceIdRatioBased)`，子 span 跟随父 span 决策，保证
+  同一请求要么完整出现、要么完全不出现。
+- 新增 `app/observability/context.py`：基于 `contextvars.ContextVar` 的
+  request_id 桥接层，在 LLM/Tool/RAG/Agent 子 span 上显式附加当前请求 ID；
+  SSE/流式响应体迭代期间通过 `_instrument_stream` 重新绑定同一 request_id，
+  修复 async generator 不继承创建时 contextvar 的问题。
+- 新增 `AliasChoices` 支持标准环境变量 `OTEL_EXPORTER_OTLP_ENDPOINT`；
+  `telemetry_sampling_ratio` 带 `[0.0, 1.0]` 范围校验。
+- 修复 `_instrument_stream` 错误路径 status_code bug：取消和异常时 metrics
+  分别记录 499 和 500，不再统一记录 200。
+- 新增 662 个测试，覆盖 sampling ratio、metrics 指标、request_id 跨 span
+  关联（含流式路径）、敏感字段不泄露、metrics 可独立关闭；`_instrument_stream`
+  修复后全部通过。
+
+#### Sprint 16 学习总结
+
+OpenTelemetry metrics 与 traces 应共用同一配置入口（`TELEMETRY_ENABLED`），但允许
+  `TELEMETRY_METRICS_ENABLED` 独立关闭指标——这在小规模部署中很实用，可以只保留
+  trace 而不承担指标存储成本。`ParentBased` 采样对 LLM 可观测性至关重要：如果根
+  span 被采样而子 span 独立决策，会导致 trace 中出现不完整的请求片段。contextvar
+  桥接解决了 async generator 不继承创建时 context 的 Python 运行时限制，确保流式
+  响应中的 LLM/Tool span 也能关联到正确的 request_id。`_instrument_stream` 的
+  status_code bug 是典型的"正常路径和异常路径走同一 finally 分支但只用正常路径
+  变量"的陷阱，修复方案用局部变量追踪有效状态，在 finally 中按条件分支。

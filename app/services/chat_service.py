@@ -7,6 +7,8 @@ from typing import cast
 from opentelemetry.trace import Span
 
 from app.exceptions.ollama import OllamaServiceError
+from app.observability.context import attach_request_id
+from app.observability.metrics import record_llm_call, record_llm_tokens
 from app.observability.tracing import (
     get_tracer,
     set_span_duration_ms,
@@ -19,6 +21,23 @@ from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse, ChatRole
 logger = logging.getLogger(__name__)
 
 _VALID_ROLES = {"system", "user", "assistant"}
+
+
+def _record_llm_metrics(
+    model: str,
+    *,
+    stream: bool,
+    status: str,
+    start: float,
+) -> None:
+    """Record LLM call count and duration for the current invocation."""
+
+    record_llm_call(
+        model,
+        stream,
+        status,
+        round((time.monotonic() - start) * 1000, 2),
+    )
 
 
 class ChatService:
@@ -49,20 +68,26 @@ class ChatService:
                 "llm.stream": False,
             },
         ) as span:
+            attach_request_id(span)
+            status = "ok"
             try:
                 data = await self._provider.chat(payload)
                 result = self._parse_chat_response(data)
             except asyncio.CancelledError:
                 span.set_attribute("llm.cancelled", True)
+                status = "cancelled"
                 raise
             except BaseException:
                 set_span_error(span)
+                status = "error"
                 raise
             finally:
                 set_span_duration_ms(span, start, "llm.duration_ms")
+                _record_llm_metrics(model, stream=False, status=status, start=start)
             span.set_attribute("llm.model", result.model)
             self._record_llm_usage(
                 span,
+                model=result.model,
                 prompt_tokens=result.prompt_tokens,
                 completion_tokens=result.completion_tokens,
             )
@@ -100,6 +125,8 @@ class ChatService:
                 "llm.stream": True,
             },
         ) as span:
+            attach_request_id(span)
+            status = "ok"
             try:
                 async for chunk in self._provider.chat_stream(payload):
                     result = self._parse_stream_chunk(chunk)
@@ -114,22 +141,27 @@ class ChatService:
                     yield result
             except asyncio.CancelledError:
                 span.set_attribute("llm.cancelled", True)
+                status = "cancelled"
                 raise
             except Exception:
                 set_span_error(span)
+                status = "error"
                 raise
             finally:
                 self._record_llm_usage(
                     span,
+                    model=model,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                 )
                 set_span_duration_ms(span, start, "llm.duration_ms")
+                _record_llm_metrics(model, stream=True, status=status, start=start)
 
     @staticmethod
     def _record_llm_usage(
         span: Span,
         *,
+        model: str,
         prompt_tokens: int | None,
         completion_tokens: int | None,
     ) -> None:
@@ -137,6 +169,11 @@ class ChatService:
             span.set_attribute("llm.usage.prompt_tokens", prompt_tokens)
         if completion_tokens is not None:
             span.set_attribute("llm.usage.completion_tokens", completion_tokens)
+        record_llm_tokens(
+            model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
 
     def _build_messages(self, request: ChatRequest) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = []
