@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # on the evaluation dataset (Sprint C milestone).
     rag_search_mode: Literal["hybrid", "vector", "keyword"] = "vector"
     rag_rrf_k: int = Field(default=60, ge=1, le=200)
+    # Reranker: RERANKER_API_KEY is loaded from the local .env only and
+    # must never be committed; empty key disables reranking (Noop).
+    reranker_api_key: SecretStr = SecretStr("")
+    reranker_model: str = "jina-reranker-v2-base-multilingual"
+    reranker_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
     mcp_enabled: bool = False
     mcp_servers_json: str = ""

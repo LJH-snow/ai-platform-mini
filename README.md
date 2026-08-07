@@ -12,7 +12,7 @@
 - OpenAIProvider: 已接入 ProviderRouter、DI 和应用生命周期
 - Storage: Memory 或 PostgreSQL
 - Conversation memory: Chat/Agent/OpenAI 端点按 `thread_id` 维护服务端会话记忆（`conversation_thread` / `conversation_message`），支持 `CONVERSATION_STORAGE=memory|postgres`
-- RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）；keyword/hybrid 检索（Sprint C）：jieba 中文分词 → `to_tsvector('simple')`，`RAG_SEARCH_MODE=hybrid` 用 RRF（`1/(60+rank)`）融合向量与关键词两路排序，`vector`（默认）与 legacy 行为逐字节一致，`keyword` 仅关键词路
+- RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）；keyword/hybrid 检索（Sprint C）：jieba 中文分词 → `to_tsvector('simple')`，`RAG_SEARCH_MODE=hybrid` 用 RRF（`1/(60+rank)`）融合向量与关键词两路排序，`vector`（默认）与 legacy 行为逐字节一致，`keyword` 仅关键词路；融合后可选 Jina rerank（`RERANKER_API_KEY` 仅 .env 加载，无 Key 或调用失败自动降级为原顺序，Cohere 预留同一 Protocol）
 - LangGraph PDF Workflow：`POST /api/v1/workflows/pdf-report` 上传 PDF 创建人工审批任务，支持 PostgreSQL checkpoint 持久化和跨重启恢复，按 API Key 租户隔离
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
@@ -605,6 +605,10 @@ RAG_EMBEDDING_TIMEOUT_SECONDS=60
 # switch to hybrid after the golden-set gate confirms hybrid >= vector.
 RAG_SEARCH_MODE=vector
 RAG_RRF_K=60
+# Reranker: set RERANKER_API_KEY in .env to enable Jina reranking; without
+# it (or on any reranker failure) results pass through unchanged.
+RERANKER_MODEL=jina-reranker-v2-base-multilingual
+RERANKER_TIMEOUT_SECONDS=10
 
 # MCP (disabled by default; JSON array of explicitly allowlisted servers)
 MCP_ENABLED=false

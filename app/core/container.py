@@ -168,6 +168,7 @@ def provide_vector_store() -> VectorStore | None:
     """
     from app.rag.hybrid import HybridRetriever
     from app.rag.pg_vector_store import PgVectorStore
+    from app.rag.reranker import create_reranker
 
     settings = get_settings()
     if not settings.rag_enabled:
@@ -180,10 +181,16 @@ def provide_vector_store() -> VectorStore | None:
     )
     if settings.rag_search_mode == "vector":
         return store
+    reranker = create_reranker(
+        settings.reranker_api_key.get_secret_value(),
+        model=settings.reranker_model,
+        timeout_seconds=settings.reranker_timeout_seconds,
+    )
     return HybridRetriever(
         store,
         rrf_k=settings.rag_rrf_k,
         mode=settings.rag_search_mode,
+        reranker=reranker,
     )
 
 

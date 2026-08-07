@@ -140,6 +140,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     logger.warning("RAG embedder close was cancelled.")
                 except Exception:
                     logger.exception("Failed to close RAG embedder.")
+            if settings.rag_enabled:
+                try:
+                    from app.core.container import provide_vector_store
+
+                    store = provide_vector_store()
+                    close = getattr(store, "close", None)
+                    if close is not None:
+                        await close()
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                    logger.warning("Vector store close was cancelled.")
+                except Exception:
+                    logger.exception("Failed to close vector store.")
             if db_initialized:
                 try:
                     from app.db.init import dispose_db

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.rag.pg_vector_store import PgVectorStore
+from app.rag.reranker import Reranker
 from app.rag.vector_store import (
     MAX_DOCUMENT_PREVIEW_CHARACTERS,
     DocumentPreview,
@@ -57,11 +58,13 @@ class HybridRetriever:
         rrf_k: int = _DEFAULT_RRF_K,
         candidate_k: int = _DEFAULT_CANDIDATE_K,
         mode: Literal["hybrid", "keyword"] = "hybrid",
+        reranker: Reranker | None = None,
     ) -> None:
         self._vector_store = vector_store
         self._rrf_k = rrf_k
         self._candidate_k = candidate_k
         self._mode = mode
+        self._reranker = reranker
 
     async def add_document(
         self,
@@ -113,7 +116,16 @@ class HybridRetriever:
                 self._candidate_k,
                 owner_key_hash=owner_key_hash,
             )
-        return _fuse(semantic, keyword, top_k=top_k, rrf_k=self._rrf_k)
+        fused = _fuse(semantic, keyword, top_k=top_k, rrf_k=self._rrf_k)
+        if self._reranker is not None and query:
+            fused = await self._reranker.rerank(query, fused)
+        return fused
+
+    async def close(self) -> None:
+        """Close the wrapped reranker's HTTP resources if any."""
+        close = getattr(self._reranker, "close", None)
+        if close is not None:
+            await close()
 
     # ── Delegated protocol members ───────────────────────────────────────
 
