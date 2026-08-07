@@ -27,6 +27,8 @@ import type { ChatStreamResult } from './chat/types.ts'
 
 const idleChatClient: ChatClient = {
   streamChat: vi.fn(() => new Promise<ChatStreamResult>(() => undefined)),
+  listThreadMessages: vi.fn(async () => []),
+  listConversations: vi.fn(async () => []),
 }
 
 type ControlledAgentRequest = {

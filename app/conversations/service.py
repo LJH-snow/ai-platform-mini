@@ -63,6 +63,10 @@ class ConversationService:
             raise ConversationNotFoundError("Conversation thread not found.")
         return thread
 
+    async def list_threads(self, owner_key_hash: str) -> list[ConversationThread]:
+        owner = validate_owner_key_hash(owner_key_hash)
+        return await self._repository.list_threads(owner)
+
     async def append_message(
         self,
         owner_key_hash: str,

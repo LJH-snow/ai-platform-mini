@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from app.api.admin import router as admin_router
 from app.api.agent import router as agent_router
 from app.api.chat import router as chat_router
+from app.api.conversations import router as conversations_router
 from app.api.health import router as health_router
 from app.api.models import router as models_router
 from app.api.openai import router as openai_router
@@ -188,6 +189,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(models_router)
     app.include_router(chat_router)
+    app.include_router(conversations_router)
     app.include_router(agent_router)
     app.include_router(openai_router)
     app.include_router(rag_router)

@@ -52,6 +52,18 @@ class PostgresConversationRepository:
             )
             return _thread_to_domain(row) if row is not None else None
 
+    async def list_threads(self, owner_key_hash: str) -> list[ConversationThread]:
+        async with self._session_factory() as session:
+            rows = await session.scalars(
+                select(ConversationThreadTable)
+                .where(ConversationThreadTable.owner_key_hash == owner_key_hash)
+                .order_by(
+                    ConversationThreadTable.updated_at.desc(),
+                    ConversationThreadTable.created_at.desc(),
+                )
+            )
+            return [_thread_to_domain(row) for row in rows]
+
     async def add_message(
         self,
         thread_id: str,

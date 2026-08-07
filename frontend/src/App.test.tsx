@@ -9,7 +9,13 @@ import { AgentNetworkError, type AgentClient } from './agent/client.ts'
 import type { AgentRunInput } from './agent/types.ts'
 import type { AgentStreamEvent } from './agent/stream.ts'
 import { ChatBackendError, ChatNetworkError, type ChatClient } from './chat/client.ts'
-import type { ChatApiMessage, ChatStreamHandlers, ChatStreamResult } from './chat/types.ts'
+import type {
+  ChatApiMessage,
+  ChatMessage,
+  ChatStreamHandlers,
+  ChatStreamResult,
+  ConversationSummary,
+} from './chat/types.ts'
 
 type ControlledRequest = {
   handlers: ChatStreamHandlers
@@ -20,7 +26,9 @@ type ControlledRequest = {
   reject: (error: Error) => void
 }
 
-const createControlledClient = (): {
+const createControlledClient = (
+  options: { historyMessages?: ChatMessage[]; conversations?: ConversationSummary[] } = {},
+): {
   client: ChatClient
   emitDelta: (content: string, index?: number) => void
   emitRequestId: (requestId: string, index?: number) => void
@@ -29,8 +37,17 @@ const createControlledClient = (): {
   fail: (error: Error, index?: number) => void
   getRequest: (index?: number) => ControlledRequest
   getRequestCount: () => number
+  listThreadMessages: ReturnType<typeof vi.fn>
+  listConversations: ReturnType<typeof vi.fn>
 } => {
   const requests: ControlledRequest[] = []
+  const listThreadMessages = vi.fn(
+    async (_threadId: string, _signal?: AbortSignal): Promise<ChatMessage[]> =>
+      options.historyMessages ?? [],
+  )
+  const listConversations = vi.fn(
+    async (): Promise<ConversationSummary[]> => options.conversations ?? [],
+  )
   const client: ChatClient = {
     streamChat: vi.fn(
       (
@@ -44,6 +61,8 @@ const createControlledClient = (): {
         })
       },
     ),
+    listThreadMessages,
+    listConversations,
   }
 
   const getRequest = (index = requests.length - 1): ControlledRequest => {
@@ -67,6 +86,8 @@ const createControlledClient = (): {
     fail: (error, index) => getRequest(index).reject(error),
     getRequest,
     getRequestCount: () => requests.length,
+    listThreadMessages,
+    listConversations,
   }
 }
 
@@ -944,5 +965,139 @@ describe('App', () => {
     controlled.getRequest().reject(new AgentNetworkError(undefined, 'thread-agent-error'))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/失败/))
     expect(sessionStorage.getItem('ai-platform-thread-id')).toBe('thread-agent-error')
+  })
+
+  it('restores thread history on mount and sends it as current messages', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-history')
+    const user = userEvent.setup()
+    const controlled = createControlledClient({
+      historyMessages: [
+        { id: 'server-1', role: 'user', content: '历史问题' },
+        { id: 'server-2', role: 'assistant', content: '历史回答' },
+      ],
+    })
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await waitFor(() =>
+      expect(controlled.listThreadMessages).toHaveBeenCalledWith(
+        'thread-history',
+        expect.any(AbortSignal),
+      ),
+    )
+    await waitFor(() => expect(screen.getByText('历史问题')).toBeInTheDocument())
+    expect(screen.getByText('历史回答')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('输入消息'), '继续')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).threadId).toBe('thread-history')
+    expect(controlled.getRequest(0).messages).toEqual([
+      { role: 'user', content: '历史问题' },
+      { role: 'assistant', content: '历史回答' },
+      { role: 'user', content: '继续' },
+    ])
+  })
+
+  it('keeps the thread id and stays usable when history restore fails', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-failed')
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    controlled.listThreadMessages.mockRejectedValueOnce(new ChatNetworkError())
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('会话历史恢复失败，可继续提问。'),
+    )
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBe('thread-failed')
+
+    await user.type(screen.getByLabelText('输入消息'), '还能提问')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).threadId).toBe('thread-failed')
+  })
+
+  it('clears an expired thread id when history restore returns CONVERSATION_NOT_FOUND', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-expired')
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    controlled.listThreadMessages.mockRejectedValueOnce(
+      new ChatBackendError('会话不存在', 404, 'CONVERSATION_NOT_FOUND', 'req-history-404'),
+    )
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await waitFor(() => expect(sessionStorage.getItem('ai-platform-thread-id')).toBeNull())
+    expect(screen.getByRole('status')).toHaveTextContent('原会话已失效，已准备好新会话。')
+    expect(screen.queryByText('会话历史恢复失败，可继续提问。')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('输入消息'), '新会话问题')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).threadId).toBeNull()
+  })
+
+  it('lists older conversations and restores the selected thread', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-recent')
+    const previousRuntimeConfig = window.__AI_PLATFORM_RUNTIME_CONFIG__
+    window.__AI_PLATFORM_RUNTIME_CONFIG__ = {
+      apiBaseUrl: 'http://localhost',
+      apiKey: 'sk-test',
+    }
+    const user = userEvent.setup()
+    const controlled = createControlledClient({
+      conversations: [
+        {
+          thread_id: 'thread-recent',
+          title: '最近的问题',
+          created_at: '2026-08-07T00:00:00Z',
+          updated_at: '2026-08-07T01:00:00Z',
+        },
+        {
+          thread_id: 'thread-older',
+          title: '更早的问题',
+          created_at: '2026-08-01T00:00:00Z',
+          updated_at: '2026-08-02T00:00:00Z',
+        },
+      ],
+    })
+    controlled.listThreadMessages.mockImplementation(async (threadId: string) =>
+      threadId === 'thread-older' ? [{ id: 'old-1', role: 'user', content: '更早的历史消息' }] : [],
+    )
+
+    try {
+      renderConsole(<App chatClient={controlled.client} />)
+
+      await waitFor(() => expect(controlled.listConversations).toHaveBeenCalled())
+      expect(screen.getAllByText('最近的问题').length).toBeGreaterThan(0)
+      expect(screen.getByText('更早的问题')).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /更早的问题/ }))
+      await waitFor(() =>
+        expect(controlled.listThreadMessages).toHaveBeenCalledWith(
+          'thread-older',
+          expect.any(AbortSignal),
+        ),
+      )
+      await waitFor(() => expect(screen.getByText('更早的历史消息')).toBeInTheDocument())
+      expect(sessionStorage.getItem('ai-platform-thread-id')).toBe('thread-older')
+
+      await user.type(screen.getByLabelText('输入消息'), '继续')
+      await user.click(screen.getByRole('button', { name: '发送消息' }))
+      await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+      expect(controlled.getRequest(0).threadId).toBe('thread-older')
+    } finally {
+      if (previousRuntimeConfig === undefined) {
+        delete window.__AI_PLATFORM_RUNTIME_CONFIG__
+      } else {
+        window.__AI_PLATFORM_RUNTIME_CONFIG__ = previousRuntimeConfig
+      }
+    }
+  })
+
+  it('does not request history when no thread id exists', async () => {
+    const controlled = createControlledClient()
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await waitFor(() => expect(controlled.listThreadMessages).not.toHaveBeenCalled())
   })
 })
