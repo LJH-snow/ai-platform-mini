@@ -53,6 +53,15 @@ class AgentRunRequest(BaseModel):
     """Validated input for one synchronous Agent Runtime execution."""
 
     message: str = Field(min_length=1, description="Latest user message.")
+    agent_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Optional agent definition id. When provided, model, system_prompt,"
+            "max_steps, and tool whitelist are resolved from the stored"
+            "Agent definition.  Explicit request fields override definition."
+        ),
+    )
     thread_id: str | None = Field(
         default=None,
         max_length=128,

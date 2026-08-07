@@ -8,13 +8,17 @@ from fastapi import FastAPI
 
 from app.api.admin import router as admin_router
 from app.api.agent import router as agent_router
+from app.api.agents import router as agents_router
 from app.api.auth import router as auth_router
+from app.api.benchmarks import router as benchmarks_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.health import router as health_router
 from app.api.models import router as models_router
 from app.api.openai import router as openai_router
+from app.api.prompts import router as prompts_router
 from app.api.rag import router as rag_router
+from app.api.tools import router as tools_router
 from app.api.workflows import router as workflows_router
 from app.api.workspaces import router as workspaces_router
 from app.core.container import (
@@ -190,11 +194,52 @@ async def _bootstrap_keys(settings: Settings) -> None:
     for entry in _parse_admin_keys(settings.admin_api_keys.get_secret_value()):
         await service.ensure_initial_key(entry, name=f"admin-{entry[:8]}")
 
+    # Seed built-in prompt templates and tools
+    await _bootstrap_seeds()
+
 
 def _parse_admin_keys(raw: str) -> list[str]:
     if not raw:
         return []
     return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+async def _bootstrap_seeds() -> None:
+    """Seed built-in prompt templates and tool definitions."""
+    logger.info("Seeding prompt registry and tool definitions...")
+    try:
+        from app.core.container import (
+            provide_agent_definition_service,
+            provide_prompt_registry,
+        )
+        from app.prompts.seeds import seed_prompt_registry
+        from app.tools.calculator import CalculatorTool
+        from app.tools.knowledge_search import KnowledgeSearchTool
+
+        registry = provide_prompt_registry()
+        await seed_prompt_registry(registry)
+
+        agent_svc = provide_agent_definition_service()
+        # Export tool schemas from the tool classes so the seed and the
+        # runtime registry can never drift apart.
+        calculator = CalculatorTool()
+        await agent_svc.seed_tool(
+            name=calculator.name,
+            description=calculator.description,
+            parameters_schema=dict(calculator.input_schema),
+            enabled_by_default=True,
+            owner="builtin",
+        )
+        await agent_svc.seed_tool(
+            name=KnowledgeSearchTool.name,
+            description=KnowledgeSearchTool.description,
+            parameters_schema=dict(KnowledgeSearchTool.input_schema),
+            enabled_by_default=True,
+            owner="builtin",
+        )
+        logger.info("Seeds bootstrap complete.")
+    except Exception:
+        logger.warning("Seed bootstrap skipped (DB may not be ready).", exc_info=True)
 
 
 def create_app() -> FastAPI:
@@ -217,6 +262,10 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(workspaces_router)
+    app.include_router(prompts_router)
+    app.include_router(agents_router)
+    app.include_router(tools_router)
+    app.include_router(benchmarks_router)
     app.include_router(models_router)
     app.include_router(chat_router)
     app.include_router(conversations_router)

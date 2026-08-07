@@ -3,6 +3,8 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
+from app.db.agent_models import AgentTable, AgentToolTable, ToolTable
+from app.db.benchmark_models import AgentBenchmarkRunTable
 from app.db.conversation_models import (
     ConversationMessageTable,
     ConversationThreadTable,
@@ -15,6 +17,7 @@ from app.db.models import (
     DailyUsageTable,
     QuotaReservationTable,
 )
+from app.db.prompt_models import PromptTemplateTable
 from app.db.user_models import (
     UserTable,
     WorkspaceMemberTable,
@@ -29,6 +32,11 @@ _CORE_TABLES = [
     WorkspaceTable,
     WorkspaceMemberTable,
     APIKeyTable,
+    PromptTemplateTable,
+    ToolTable,
+    AgentTable,
+    AgentToolTable,
+    AgentBenchmarkRunTable,
     DailyUsageTable,
     QuotaReservationTable,
     AgentRunRecordTable,

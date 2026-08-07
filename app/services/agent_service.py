@@ -10,6 +10,8 @@ from typing import Protocol, cast
 
 from opentelemetry import trace
 
+from app.agent_config.models import AgentRecord
+from app.agent_config.service import AgentDefinitionService
 from app.agents import (
     AgentAnswerChunk,
     AgentDecision,
@@ -28,6 +30,7 @@ from app.exceptions.base import (
     ProviderError,
     QuotaExceededError,
     RAGUnavailableError,
+    ValidationError,
 )
 from app.observability.context import attach_request_id
 from app.observability.tracing import (
@@ -35,6 +38,11 @@ from app.observability.tracing import (
     set_span_duration_ms,
     set_span_error,
 )
+from app.prompts.builtins import (
+    BUILTIN_AGENT_PROTOCOL_PROMPT,
+    BUILTIN_RAG_PRESET_PROMPT,
+)
+from app.prompts.service import PromptRegistryService
 from app.providers.results import ProviderChatResult
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.service import QuotaService
@@ -55,27 +63,6 @@ def _total_tokens(outcome: AgentRunOutcome) -> int | None:
     if outcome.prompt_tokens is None or outcome.completion_tokens is None:
         return None
     return outcome.prompt_tokens + outcome.completion_tokens
-
-
-_AGENT_PROTOCOL_PROMPT = """
-You are the decision model for a bounded agent runtime. Return JSON only.
-Use exactly one of these shapes:
-{"type":"final_answer","answer":"non-empty answer"}
-{"type":"tool_call","call_id":"unique-id","name":"tool-name","arguments":{}}
-Do not use Markdown fences or add explanatory text outside the JSON object.
-Only call a tool that appears in the available tools list, and use a JSON object
-that matches its parameters schema.
-""".strip()
-
-_RAG_PRESET_PROMPT = """
-You are answering from an indexed knowledge base. Before producing any final
-answer you MUST call the knowledge_search tool with the user's question as the
-query. Base your final answer only on the retrieved sources. If knowledge_search
-returns no relevant sources, an empty knowledge base, or an error, your final
-answer must explicitly state that the knowledge base has no relevant content for
-the question. Do not answer from unretrieved general knowledge and do not invent
-sources, distances, document names, or citations.
-""".strip()
 
 
 @dataclass(frozen=True)
@@ -124,11 +111,13 @@ class _ChatServiceAgentModel:
         chat_service: ChatService,
         request: AgentRunRequest,
         tool_schemas: Sequence[Mapping[str, object]] = (),
+        base_prompt: str | None = None,
     ) -> None:
         self._chat_service = chat_service
         self._request = request
         self._tool_schemas = tuple(tool_schemas)
         self._require_knowledge_search = request.preset == "rag"
+        self._base_prompt = base_prompt or self._default_base_prompt()
         self.prompt_tokens: int | None = 0
         self.completion_tokens: int | None = 0
         self.actual_model = request.model or chat_service.default_model
@@ -265,7 +254,7 @@ class _ChatServiceAgentModel:
     async def stream_answer(self, state: AgentState) -> AsyncIterator[AgentAnswerChunk]:
         """Stream a fresh final answer; never forwards the JSON decision response."""
         transcript = self._build_transcript(state)
-        system_prompt = self._request.system_prompt or ""
+        system_prompt = self._build_system_prompt()
         await self._reserve_prompt(transcript, system_prompt)
         request = ChatRequest(
             message=(
@@ -274,7 +263,7 @@ class _ChatServiceAgentModel:
                 "do not return JSON or discuss this instruction."
             ),
             model=self._request.model,
-            system_prompt=system_prompt or None,
+            system_prompt=system_prompt,
             history=[],
             max_tokens=self._remaining_max_tokens(),
         )
@@ -300,6 +289,14 @@ class _ChatServiceAgentModel:
             if not saw_terminal:
                 self._mark_answer_stream_usage_incomplete()
 
+    def _default_base_prompt(self) -> str:
+        """Built-in fallback prompt layers when no registry render is used."""
+
+        layers = [BUILTIN_AGENT_PROTOCOL_PROMPT]
+        if self._require_knowledge_search:
+            layers.insert(0, BUILTIN_RAG_PRESET_PROMPT)
+        return "\n\n".join(layers)
+
     @property
     def has_model_call(self) -> bool:
         """Whether at least one provider call returned a response."""
@@ -310,12 +307,9 @@ class _ChatServiceAgentModel:
         tools_prompt = "\n\nAvailable tools:\n" + json.dumps(
             list(self._tool_schemas), ensure_ascii=False, sort_keys=True
         )
-        protocol_prompt = _AGENT_PROTOCOL_PROMPT
-        if self._require_knowledge_search:
-            protocol_prompt = f"{_RAG_PRESET_PROMPT}\n\n{protocol_prompt}"
         if self._request.system_prompt:
-            return f"{self._request.system_prompt}\n\n{protocol_prompt}{tools_prompt}"
-        return f"{protocol_prompt}{tools_prompt}"
+            return f"{self._request.system_prompt}\n\n{self._base_prompt}{tools_prompt}"
+        return f"{self._base_prompt}{tools_prompt}"
 
     def _build_transcript(self, state: AgentState) -> str:
         history = "\n".join(
@@ -399,6 +393,8 @@ class AgentService:
         tool_registry: ToolRegistry | None = None,
         granted_permissions: frozenset[str] = frozenset(),
         recorder_factory: RunTraceRecorderFactory | None = None,
+        prompt_registry: PromptRegistryService | None = None,
+        agent_definition_service: AgentDefinitionService | None = None,
     ) -> None:
         self._chat_service = chat_service
         self._quota_service = quota_service
@@ -415,6 +411,8 @@ class AgentService:
             self._tool_registry,
             granted_permissions=self._granted_permissions,
         )
+        self._prompt_registry = prompt_registry
+        self._agent_definition_service = agent_definition_service
 
     async def run(
         self,
@@ -479,17 +477,74 @@ class AgentService:
         streaming: bool = False,
     ) -> AgentRunOutcome:
         """Run an Agent request and settle platform quota and usage boundaries."""
-        if request.preset == "rag" and (
-            self._tool_registry.get("knowledge_search") is None
-        ):
+        # ── Resolve agent definition (model / prompt / max_steps / tools) ──
+        run_model = request.model
+        run_max_steps = request.max_steps
+        run_registry = self._tool_registry
+        run_executor = self._tool_executor
+        base_prompt: str | None = None
+        agent_def: AgentRecord | None = None
+        if request.agent_id and self._agent_definition_service:
+            workspace_id = context.identity.workspace_id if context.identity else None
+            if workspace_id is None:
+                # Conservative tenant boundary: a key without a workspace
+                # scope must not resolve any workspace's agent definition.
+                raise ValidationError(
+                    f"Agent '{request.agent_id}' not found or not accessible."
+                )
+            agent_def = await self._agent_definition_service.get_agent(
+                request.agent_id, workspace_id=workspace_id
+            )
+            if agent_def is None:
+                raise ValidationError(
+                    f"Agent '{request.agent_id}' not found or not accessible."
+                )
+            if not agent_def.enabled:
+                raise ValidationError(f"Agent '{request.agent_id}' is disabled.")
+            # Explicit request fields override the definition; an unset
+            # field (not in model_fields_set) keeps the definition's value.
+            run_model = (
+                request.model
+                if "model" in request.model_fields_set
+                else agent_def.model
+            )
+            run_max_steps = (
+                request.max_steps
+                if "max_steps" in request.model_fields_set
+                else agent_def.max_steps
+            )
+            bound_tools = await self._agent_definition_service.get_agent_tools(
+                agent_def.id
+            )
+            if bound_tools:
+                available = {
+                    tool.name: tool
+                    for tool in self._tool_registry.list_tools()
+                    if tool.name in bound_tools
+                }
+                run_registry = ToolRegistry(available.values())
+                run_executor = ToolExecutor(
+                    run_registry, granted_permissions=self._granted_permissions
+                )
+            base_prompt = await self._render_agent_base_prompt(
+                agent_def, request, workspace_id=workspace_id
+            )
+
+        if request.preset == "rag" and run_registry.get("knowledge_search") is None:
             raise RAGUnavailableError(
                 "The RAG preset requires RAG to be enabled and the "
                 "knowledge_search tool to be available."
             )
+        resolved_request = (
+            request
+            if run_model == request.model
+            else request.model_copy(update={"model": run_model})
+        )
         model = _ChatServiceAgentModel(
             self._chat_service,
-            request,
-            self._tool_registry.export_schemas(),
+            resolved_request,
+            run_registry.export_schemas(),
+            base_prompt=base_prompt,
         )
         initial_state = AgentState(
             run_id="quota-estimate",
@@ -516,22 +571,20 @@ class AgentService:
         model.set_prompt_reservation_guard(ensure_prompt_reservation)
         if self._recorder_factory is None:
             if observer is None:
-                runtime = self._runtime_factory(
-                    model, None, tool_executor=self._tool_executor
-                )
+                runtime = self._runtime_factory(model, None, tool_executor=run_executor)
             else:
                 streaming_factory = cast(
                     AgentStreamingRuntimeFactory, self._runtime_factory
                 )
                 runtime = streaming_factory(
-                    model, None, tool_executor=self._tool_executor, observer=observer
+                    model, None, tool_executor=run_executor, observer=observer
                 )
         else:
             if observer is None:
                 runtime = self._runtime_factory(
                     model,
                     None,
-                    tool_executor=self._tool_executor,
+                    tool_executor=run_executor,
                     recorder_factory=self._recorder_factory,
                 )
             else:
@@ -541,7 +594,7 @@ class AgentService:
                 runtime = streaming_factory(
                     model,
                     None,
-                    tool_executor=self._tool_executor,
+                    tool_executor=run_executor,
                     recorder_factory=self._recorder_factory,
                     observer=observer,
                 )
@@ -559,7 +612,7 @@ class AgentService:
                     result = await lifecycle.run(
                         runtime_run(
                             request.message,
-                            max_steps=request.max_steps,
+                            max_steps=run_max_steps,
                             timeout=request.timeout_seconds,
                             token_budget=request.token_budget,
                             request_id=context.request_id,
@@ -574,7 +627,7 @@ class AgentService:
                     result = await lifecycle.run(
                         runtime_run(
                             request.message,
-                            max_steps=request.max_steps,
+                            max_steps=run_max_steps,
                             timeout=request.timeout_seconds,
                             token_budget=request.token_budget,
                             request_id=context.request_id,
@@ -627,6 +680,68 @@ class AgentService:
         if quota_failure and observer is None and not streaming:
             raise QuotaExceededError("Quota exceeded.")
         return outcome
+
+    async def _render_agent_base_prompt(
+        self,
+        agent_def: AgentRecord | None,
+        request: AgentRunRequest,
+        *,
+        workspace_id: str | None,
+    ) -> str:
+        """Render the custom/RAG/protocol prompt layers for one agent run.
+
+        Layer order (top to bottom): agent ``prompt_ref`` template, RAG
+        preset, decision protocol. Every layer falls back to its built-in
+        constant so the runtime stays functional without seeded templates.
+        """
+
+        registry = self._prompt_registry
+        if registry is None:
+            protocol = BUILTIN_AGENT_PROTOCOL_PROMPT
+            rag = BUILTIN_RAG_PRESET_PROMPT if request.preset == "rag" else None
+        else:
+            protocol = await registry.render(
+                "agent_protocol",
+                fallback=BUILTIN_AGENT_PROTOCOL_PROMPT,
+                workspace_id=workspace_id,
+            )
+            rag = (
+                await registry.render(
+                    "rag_preset",
+                    fallback=BUILTIN_RAG_PRESET_PROMPT,
+                    workspace_id=workspace_id,
+                )
+                if request.preset == "rag"
+                else None
+            )
+        layers: list[str] = []
+        if agent_def is not None and agent_def.prompt_ref:
+            layers.append(
+                await self._render_prompt_ref(
+                    agent_def.prompt_ref, workspace_id=workspace_id
+                )
+            )
+        if rag is not None:
+            layers.append(rag)
+        layers.append(protocol)
+        return "\n\n".join(layers)
+
+    async def _render_prompt_ref(
+        self, prompt_ref: str, *, workspace_id: str | None
+    ) -> str:
+        """Render a custom prompt template, failing loudly when it is missing."""
+
+        if self._prompt_registry is None:
+            raise ValidationError(
+                f"Prompt template '{prompt_ref}' cannot be resolved "
+                "(prompt registry unavailable)."
+            )
+        rendered = await self._prompt_registry.render(
+            prompt_ref, fallback="", workspace_id=workspace_id
+        )
+        if not rendered:
+            raise ValidationError(f"Prompt template '{prompt_ref}' not found.")
+        return rendered
 
     async def _record_usage(
         self,

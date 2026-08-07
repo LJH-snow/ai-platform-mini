@@ -26,7 +26,10 @@ from app.usage.service import UsageService
 from app.workflows.repository import WorkflowRunRepository
 
 if TYPE_CHECKING:
+    from app.agent_config.service import AgentDefinitionService
+    from app.api.benchmarks import AgentBenchmarkRunner
     from app.mcp.manager import MCPToolManager
+    from app.prompts.service import PromptRegistryService
     from app.rag.ingestion import RAGIngestionService
     from app.rag.ollama_embedder import OllamaEmbedder
     from app.rag.pg_vector_store import PgVectorStore
@@ -322,6 +325,77 @@ def provide_agent_service() -> AgentService:
         usage_collector=provide_usage_collector(),
         tool_registry=ToolRegistry(tools),
         granted_permissions=mcp_manager.granted_permissions(),
+        prompt_registry=provide_prompt_registry(),
+        agent_definition_service=provide_agent_definition_service(),
+    )
+
+
+@lru_cache
+def provide_prompt_registry() -> PromptRegistryService:
+    """Provide the PromptRegistryService with appropriate storage backend."""
+    from app.prompts.repository import (
+        InMemoryPromptRepository,
+        PostgresPromptRepository,
+        PromptRepository,
+    )
+    from app.prompts.service import PromptRegistryService
+
+    settings = get_settings()
+    if settings.auth_storage == "postgres":
+        repo: PromptRepository = PostgresPromptRepository(provide_session_factory())
+    else:
+        repo = InMemoryPromptRepository()
+    return PromptRegistryService(repository=repo)
+
+
+@lru_cache
+def provide_agent_definition_service() -> AgentDefinitionService:
+    """Provide AgentDefinitionService with appropriate storage backend."""
+    from app.agent_config.repository import (
+        AgentDefinitionRepository,
+        InMemoryAgentDefinitionRepository,
+        PostgresAgentDefinitionRepository,
+    )
+    from app.agent_config.service import AgentDefinitionService
+
+    settings = get_settings()
+    if settings.auth_storage == "postgres":
+        repo: AgentDefinitionRepository = PostgresAgentDefinitionRepository(
+            provide_session_factory()
+        )
+    else:
+        repo = InMemoryAgentDefinitionRepository()
+    # Build a lightweight ToolRegistry from seeds — must NOT call
+    # provide_agent_service() here to avoid a circular import.
+    from app.tools.calculator import CalculatorTool
+    from app.tools.registry import ToolRegistry
+
+    tool_registry = ToolRegistry([CalculatorTool()])
+    rag_service = provide_rag_service()
+    if rag_service is not None:
+        from app.tools.knowledge_search import KnowledgeSearchTool
+
+        tool_registry.register(KnowledgeSearchTool(rag_service=rag_service))
+    # MCP tools are also valid agent whitelist entries; register them so
+    # create/update tool_names validation matches the runtime registry.
+    # provide_mcp_manager() only depends on Settings, so no cycle here.
+    for tool in provide_mcp_manager().list_tools():
+        tool_registry.register(tool)
+    return AgentDefinitionService(
+        repository=repo,
+        tool_registry=tool_registry,
+        prompt_registry=provide_prompt_registry(),
+    )
+
+
+@lru_cache
+def provide_agent_benchmark_runner() -> AgentBenchmarkRunner:
+    """Provide the AgentBenchmarkRunner."""
+    from app.api.benchmarks import AgentBenchmarkRunner
+
+    return AgentBenchmarkRunner(
+        agent_service=provide_agent_definition_service(),
+        record_service=provide_agent_run_record_service(),
     )
 
 
@@ -345,6 +419,9 @@ def clear_container_cache() -> None:
     )
 
     # Clear in reverse dependency order: dependents before their deps.
+    provide_agent_benchmark_runner.cache_clear()
+    provide_agent_definition_service.cache_clear()
+    provide_prompt_registry.cache_clear()
     provide_agent_service.cache_clear()
     provide_agent_run_record_service.cache_clear()
     provide_workflow_service.cache_clear()
