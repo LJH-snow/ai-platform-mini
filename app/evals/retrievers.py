@@ -128,6 +128,7 @@ class EmbeddingVectorStoreRetriever:
                     chunk_id=result.chunk_id,
                     chunk_index=result.chunk_index,
                     distance=result.distance,
+                    content=result.content,
                 )
                 for result in filtered
             ),
@@ -143,4 +144,5 @@ def _to_retrieval_reference(reference: RAGReference) -> RetrievalReference:
         chunk_id=reference.chunk_id,
         chunk_index=reference.chunk_index,
         distance=reference.distance,
+        content=reference.content,
     )

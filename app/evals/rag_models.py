@@ -61,13 +61,20 @@ def context_recall_at_k(
 
 @dataclass(frozen=True)
 class RAGEvalCase:
-    """One serializable golden expectation for RAG retrieval quality."""
+    """One serializable golden expectation for RAG retrieval quality.
+
+    Expectations may target document/chunk IDs (stable only when the
+    corpus is pre-seeded with known IDs) or content substrings
+    (``expected_content_contains``) — the self-contained CI corpus uses
+    content expectations because chunk UUIDs are not predictable.
+    """
 
     case_id: str
     query: str
     expected_document_ids: str | Sequence[str] | None = None
     expected_chunk_ids: str | Sequence[str] | None = None
     expected_answer_contains: str | Sequence[str] | None = None
+    expected_content_contains: str | None = None
     metadata: Mapping[str, JSONValue] = field(default_factory=dict)
     top_k: int | None = None
 
@@ -78,6 +85,10 @@ class RAGEvalCase:
             raise ValueError("case_id must not be empty")
         if not isinstance(self.query, str) or not self.query.strip():
             raise ValueError("query must not be empty")
+        if self.expected_content_contains is not None and not isinstance(
+            self.expected_content_contains, str
+        ):
+            raise TypeError("expected_content_contains must be a string or null")
         if self.top_k is not None:
             if not isinstance(self.top_k, int) or isinstance(self.top_k, bool):
                 raise TypeError("top_k must be an integer or null")
@@ -102,10 +113,10 @@ class RAGEvalCase:
         )
         _validate_unique_ids(document_ids, field_name="expected_document_ids")
         _validate_unique_ids(chunk_ids, field_name="expected_chunk_ids")
-        if not document_ids and not chunk_ids:
+        if not document_ids and not chunk_ids and not self.expected_content_contains:
             raise ValueError(
-                "at least one of expected_document_ids or expected_chunk_ids "
-                "must be non-empty"
+                "at least one of expected_document_ids, expected_chunk_ids, "
+                "or expected_content_contains must be non-empty"
             )
 
         object.__setattr__(self, "expected_document_ids", document_ids)
@@ -118,6 +129,12 @@ class RAGEvalCase:
                 field_name="expected_answer_contains",
             ),
         )
+        if self.expected_content_contains is not None:
+            object.__setattr__(
+                self,
+                "expected_content_contains",
+                self.expected_content_contains.strip(),
+            )
         object.__setattr__(self, "metadata", metadata)
 
     @property
@@ -158,6 +175,7 @@ class RAGEvalCase:
             "expected_answer_contains": (
                 None if self.answer_fragments is None else list(self.answer_fragments)
             ),
+            "expected_content_contains": self.expected_content_contains,
             "metadata": dict(self.metadata),
             "top_k": self.top_k,
         }
@@ -172,6 +190,7 @@ class RAGEvalCase:
             "expected_document_ids",
             "expected_chunk_ids",
             "expected_answer_contains",
+            "expected_content_contains",
             "metadata",
             "top_k",
         }
@@ -200,6 +219,7 @@ class RAGEvalCase:
                 raise TypeError("metadata must contain only strict JSON values")
             metadata[key] = value
 
+        raw_content_contains = payload.get("expected_content_contains")
         top_k_value = payload.get("top_k")
         if top_k_value is not None and (
             not isinstance(top_k_value, int) or isinstance(top_k_value, bool)
@@ -221,6 +241,9 @@ class RAGEvalCase:
                 payload.get("expected_answer_contains"),
                 field_name="expected_answer_contains",
             ),
+            expected_content_contains=(
+                raw_content_contains if isinstance(raw_content_contains, str) else None
+            ),
             metadata=metadata,
             top_k=top_k_value,
         )
@@ -228,12 +251,18 @@ class RAGEvalCase:
 
 @dataclass(frozen=True)
 class RetrievalReference:
-    """Stable retrieval metadata used by deterministic RAG metrics."""
+    """Stable retrieval metadata used by deterministic RAG metrics.
+
+    ``content`` is optional: it feeds content-substring expectations
+    (``expected_content_contains``) and is never required for ID-based
+    metrics.
+    """
 
     document_id: str
     chunk_id: str
     chunk_index: int
     distance: float
+    content: str | None = None
 
     def __post_init__(self) -> None:
         """Reject malformed retrieval observations early."""
@@ -326,6 +355,8 @@ class RAGEvalCaseResult:
     top_k: int | None
     latency_ms: float
     error: str | None = None
+    expected_content_contains: str | None = None
+    content_hit: bool | None = None
 
     def to_dict(self) -> dict[str, JSONValue]:
         """Return the stable JSON object used by RAG evaluation reports."""
@@ -336,6 +367,8 @@ class RAGEvalCaseResult:
             "success": self.success,
             "expected_document_ids": list(self.expected_document_ids),
             "expected_chunk_ids": list(self.expected_chunk_ids),
+            "expected_content_contains": self.expected_content_contains,
+            "content_hit": self.content_hit,
             "retrieved_document_ids": list(self.retrieved_document_ids),
             "retrieved_chunk_ids": list(self.retrieved_chunk_ids),
             "retrieved_count": self.retrieved_count,
@@ -363,6 +396,8 @@ class RAGSummary:
     answer_correctness_case_count: int
     average_retrieved_chunks: float
     p95_latency_ms: float
+    content_hit_rate: float | None = None
+    content_expected_count: int = 0
 
     def to_dict(self) -> dict[str, JSONValue]:
         """Return the stable JSON object used by RAG evaluation reports."""
@@ -378,6 +413,8 @@ class RAGSummary:
             "answer_correctness_case_count": self.answer_correctness_case_count,
             "average_retrieved_chunks": self.average_retrieved_chunks,
             "p95_latency_ms": self.p95_latency_ms,
+            "content_hit_rate": self.content_hit_rate,
+            "content_expected_count": self.content_expected_count,
         }
 
 

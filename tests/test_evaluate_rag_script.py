@@ -24,6 +24,9 @@ _OWNER = "a" * 64
 
 
 class _FakeEmbedder:
+    def __init__(self, **kwargs: object) -> None:
+        del kwargs
+
     async def close(self) -> None:
         return None
 
@@ -55,6 +58,12 @@ class _FakeSettings:
         self.debug = False
         self.rag_top_k = 5
         self.rag_max_distance = 0.9
+        self.rag_embedding_model = "nomic-embed-text"
+        self.rag_embedding_dimensions = 768
+        self.rag_chunk_size = 500
+        self.rag_chunk_overlap = 50
+        self.ollama_base_url = "http://localhost:11434"
+        self.rag_embedding_timeout_seconds = 60.0
 
 
 def _make_args(dataset: Path, output: Path) -> argparse.Namespace:
@@ -63,6 +72,10 @@ def _make_args(dataset: Path, output: Path) -> argparse.Namespace:
         owner_key_hash=_OWNER,
         output=str(output),
         retriever="embedding",
+        embedder="ollama",
+        search_mode="auto",
+        ingest_file=None,
+        compare=False,
     )
 
 
@@ -74,7 +87,7 @@ async def test_rag_script_runs_with_string_dataset_path(
     monkeypatch.setattr(evaluate_rag, "get_settings", _FakeSettings)
     monkeypatch.setattr(evaluate_rag, "init_db", AsyncMock())
     monkeypatch.setattr(evaluate_rag, "dispose_db", AsyncMock())
-    monkeypatch.setattr(evaluate_rag, "provide_embedder", lambda: _FakeEmbedder())
+    monkeypatch.setattr(evaluate_rag, "OllamaEmbedder", _FakeEmbedder)
     monkeypatch.setattr(evaluate_rag, "provide_vector_store", lambda: object())
     monkeypatch.setattr(
         evaluate_rag,

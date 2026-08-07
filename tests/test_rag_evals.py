@@ -223,7 +223,7 @@ async def test_rag_runner_fail_fast_and_report_serialization_are_safe() -> None:
     serialized = full.to_json()
     payload = json.loads(serialized)
     assert payload["summary"]["case_count"] == 8
-    assert "content" not in serialized
+    assert '"content":' not in serialized
     assert "owner_key_hash" not in serialized
     assert payload["results"][0]["expected_chunk_ids"]
 
@@ -342,7 +342,9 @@ async def test_rag_service_retriever_projects_prepare_results() -> None:
     outcome = await retriever.retrieve("what")
 
     assert outcome.status == "success"
-    assert outcome.references == (RetrievalReference("d1", "c1", 2, distance=0.12),)
+    assert outcome.references == (
+        RetrievalReference("d1", "c1", 2, distance=0.12, content="ignored"),
+    )
     stub.prepare_mock.assert_awaited_once_with(
         ChatRequest(message="what"),
         owner_key_hash=_OWNER,
@@ -416,7 +418,9 @@ async def test_embedding_vector_store_retriever_filters_and_maps_empty() -> None
     outcome = await retriever.retrieve("what")
 
     assert outcome.status == "success"
-    assert outcome.references == (RetrievalReference("d1", "c1", 0, distance=0.2),)
+    assert outcome.references == (
+        RetrievalReference("d1", "c1", 0, distance=0.2, content="ignored"),
+    )
     embedder.embed_query.assert_awaited_once_with("what")
     store.search.assert_awaited_once_with(
         [0.1, 0.2],

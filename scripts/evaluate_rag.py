@@ -21,12 +21,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from app.core.container import (
-    provide_embedder,
-    provide_rag_service,
-    provide_vector_store,
-)
-from app.core.settings import get_settings
+from app.core.container import provide_rag_service, provide_vector_store
+from app.core.settings import Settings, get_settings
 from app.db.init import dispose_db, init_db
 from app.evals.jsonl import GoldenDatasetError
 from app.evals.memory_repository import InMemoryRAGEvaluationRepository
@@ -39,15 +35,27 @@ from app.evals.retrievers import (
     EmbeddingVectorStoreRetriever,
     RAGServiceRetriever,
 )
+from app.rag.embedder import Embedder
 from app.rag.ollama_embedder import OllamaEmbedder
-from app.rag.vector_store import validate_owner_key_hash
+from app.rag.vector_store import VectorStore, validate_owner_key_hash
 
 
 async def run_evaluation(args: argparse.Namespace) -> int:
     """Run a real retrieval evaluation and hide all internal failure details."""
 
     try:
-        return await _run_evaluation(args)
+        await _validate_args(args)
+        if args.compare:
+            return await _run_compare(args)
+        report = await _run_single(args, mode=args.search_mode)
+        await _write_reports(report, args, mode=args.search_mode)
+        await _persist_run(report, args, mode=args.search_mode)
+        _print_summary(report, args, mode=args.search_mode)
+        return 0
+    except ValueError as exc:
+        # Configuration/dataset errors are safe to surface by message.
+        print(str(exc), file=sys.stderr)
+        return 1
     except Exception:
         print(
             "RAG evaluation failed; no internal details are printed.",
@@ -56,67 +64,84 @@ async def run_evaluation(args: argparse.Namespace) -> int:
         return 1
 
 
-async def _run_evaluation(args: argparse.Namespace) -> int:
-    """Execute the evaluation and write JSON/Markdown reports."""
+async def _validate_args(args: argparse.Namespace) -> None:
+    """Validate environment and CLI inputs, raising on any violation."""
 
     settings = get_settings()
     if not settings.rag_enabled:
-        print(
-            "RAG_ENABLED=false; set RAG_ENABLED=true to run a real RAG evaluation.",
-            file=sys.stderr,
+        raise ValueError(
+            "RAG_ENABLED=false; set RAG_ENABLED=true to run a real RAG evaluation."
         )
-        return 1
-
     database_url = settings.database_url.get_secret_value()
     if not database_url.startswith("postgresql+asyncpg://"):
-        print(
-            "RAG evaluation requires a PostgreSQL asyncpg database_url.",
-            file=sys.stderr,
-        )
-        return 1
-
+        raise ValueError("RAG evaluation requires a PostgreSQL asyncpg database_url.")
     try:
         validate_owner_key_hash(args.owner_key_hash)
     except ValueError as exc:
-        print(f"Invalid --owner-key-hash: {exc}", file=sys.stderr)
-        return 1
-
+        raise ValueError(f"Invalid --owner-key-hash: {exc}") from exc
     try:
         cases = read_rag_golden_dataset(Path(args.dataset))
     except (GoldenDatasetError, OSError, UnicodeDecodeError) as exc:
-        print(f"Dataset error: {exc}", file=sys.stderr)
-        return 1
+        raise ValueError(f"Dataset error: {exc}") from exc
     if not cases:
-        print("Dataset contains no RAG cases.", file=sys.stderr)
-        return 1
+        raise ValueError("Dataset contains no RAG cases.")
+    if args.ingest_file is not None and not Path(args.ingest_file).is_file():
+        raise ValueError(f"Corpus file not found: {args.ingest_file}")
+    args.cases = cases
+    args.settings = settings
 
-    embedder: OllamaEmbedder | None = None
+
+async def _run_single(args: argparse.Namespace, *, mode: str) -> RAGReport:
+    """Execute one evaluation pass for a search mode and return its report."""
+
+    settings = args.settings
+    cases = args.cases
+    embedder: Embedder | None = None
     db_initialized = False
     with _suppress_internal_logging():
         try:
-            await init_db(database_url, echo=settings.debug, include_rag=True)
+            await init_db(
+                settings.database_url.get_secret_value(),
+                echo=settings.debug,
+                include_rag=True,
+            )
             db_initialized = True
 
-            embedder = provide_embedder()
-            vector_store = provide_vector_store()
-            if embedder is None or vector_store is None:
-                print(
-                    "Could not initialize the RAG embedder/vector store.",
-                    file=sys.stderr,
-                )
-                return 1
+            if args.embedder == "mock":
+                from app.evals.mock_embedder import MockEmbedder
 
-            retriever: EmbeddingVectorStoreRetriever | RAGServiceRetriever
+                embedder = MockEmbedder(dimensions=settings.rag_embedding_dimensions)
+            else:
+                # Construct per pass (never reuse the lru_cache instance):
+                # compare mode runs two passes and each closes its embedder.
+                embedder = OllamaEmbedder(
+                    base_url=settings.ollama_base_url,
+                    model=settings.rag_embedding_model,
+                    dimensions=settings.rag_embedding_dimensions,
+                    timeout_seconds=settings.rag_embedding_timeout_seconds,
+                )
+            if embedder is None:
+                raise ValueError("Could not initialize the RAG embedder.")
+
+            if args.ingest_file is not None:
+                await _ingest_corpus(embedder, args.ingest_file, settings, args)
+
             if args.retriever == "service":
+                # Service path follows RAG_SEARCH_MODE from settings; the
+                # mode override only applies to the embedding retriever.
                 rag_service = provide_rag_service()
                 if rag_service is None:
-                    print("Could not initialize the RAG service.", file=sys.stderr)
-                    return 1
-                retriever = RAGServiceRetriever(
-                    rag_service,
-                    args.owner_key_hash,
+                    raise ValueError("Could not initialize the RAG service.")
+                retriever: EmbeddingVectorStoreRetriever | RAGServiceRetriever = (
+                    RAGServiceRetriever(
+                        rag_service,
+                        args.owner_key_hash,
+                    )
                 )
             else:
+                vector_store = _build_store(mode, settings)
+                if vector_store is None:
+                    raise ValueError("Could not initialize the vector store.")
                 retriever = EmbeddingVectorStoreRetriever(
                     embedder=embedder,
                     vector_store=vector_store,
@@ -126,26 +151,7 @@ async def _run_evaluation(args: argparse.Namespace) -> int:
                 )
 
             runner = RAGEvaluationRunner(lambda case: retriever.retrieve(case.query))
-            report = await runner.run(cases)
-
-            output_path = Path(args.output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            json_path = output_path.with_suffix(".json")
-            markdown_path = output_path.with_suffix(".md")
-            json_path.write_text(report.to_json(indent=2), encoding="utf-8")
-            markdown_path.write_text(
-                _build_markdown(
-                    report,
-                    dataset=str(Path(args.dataset)),
-                    retriever=args.retriever,
-                ),
-                encoding="utf-8",
-            )
-
-            await _persist_run(report, args)
-
-            _print_summary(report, json_path, markdown_path)
-            return 0
+            return await runner.run(cases)
         finally:
             if embedder is not None:
                 try:
@@ -157,6 +163,191 @@ async def _run_evaluation(args: argparse.Namespace) -> int:
                     await dispose_db()
                 except Exception:
                     print("Warning: failed to dispose database.", file=sys.stderr)
+
+
+def _build_store(mode: str, settings: Settings) -> VectorStore | None:
+    """Build the retriever store for one search mode.
+
+    ``auto`` follows ``RAG_SEARCH_MODE`` from settings; explicit modes
+    construct a fresh store so golden comparisons are hermetic.
+    """
+
+    if mode == "auto":
+        return provide_vector_store()
+    from typing import Literal, cast
+
+    from app.db.session import create_async_session_factory
+    from app.rag.hybrid import HybridRetriever
+    from app.rag.pg_vector_store import PgVectorStore
+
+    store = PgVectorStore(
+        session_factory=create_async_session_factory(),
+        embedding_model=settings.rag_embedding_model,
+        embedding_dimensions=settings.rag_embedding_dimensions,
+    )
+    if mode == "vector":
+        return store
+    return HybridRetriever(
+        store,
+        mode=cast(Literal["hybrid", "keyword"], mode),
+    )
+
+
+async def _ingest_corpus(
+    embedder: Embedder,
+    corpus_path: str,
+    settings: Settings,
+    args: argparse.Namespace,
+) -> None:
+    """Ingest one corpus file with the active embedder before evaluation.
+
+    Blank-line-separated paragraphs become individual chunks (the CI
+    corpus format); a single paragraph falls back to ``chunk_text``.
+    Re-ingesting the same corpus replaces the previous document so the
+    script is idempotent for CI re-runs.
+    """
+
+    import hashlib
+    import re
+
+    from app.rag.chunker import chunk_text
+
+    text = Path(corpus_path).read_text(encoding="utf-8")
+    if not text.strip():
+        raise ValueError(f"Corpus file is empty: {corpus_path}")
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    chunks = (
+        paragraphs
+        if len(paragraphs) > 1
+        else chunk_text(
+            text,
+            chunk_size=settings.rag_chunk_size,
+            overlap=settings.rag_chunk_overlap,
+        )
+    )
+    if not chunks:
+        raise ValueError(f"Corpus file produced no chunks: {corpus_path}")
+    embeddings = await embedder.embed(chunks)
+    store = _build_store("vector", settings)
+    if store is None:
+        raise ValueError("Could not initialize the ingestion vector store.")
+    corpus_name = str(Path(corpus_path).name)
+    existing = await store.list_documents(owner_key_hash=args.owner_key_hash)
+    for document in existing:
+        if document.filename == corpus_name:
+            await store.delete_document(args.owner_key_hash, document.document_id)
+            print(f"Replaced existing corpus document {document.document_id}.")
+    await store.add_document(
+        source_path=corpus_name,
+        content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        embedding_model=settings.rag_embedding_model,
+        embedding_dimensions=settings.rag_embedding_dimensions,
+        chunks=chunks,
+        embeddings=embeddings,
+        owner_key_hash=args.owner_key_hash,
+    )
+    print(
+        f"Ingested {len(chunks)} chunks from {corpus_path} ",
+        "with the active embedder.",
+    )
+
+
+async def _run_compare(args: argparse.Namespace) -> int:
+    """Run vector and hybrid modes and gate CI on retrieval regressions.
+
+    The gate is strictly relative: hybrid must score at least as high as
+    vector-only on retrieval success rate and (when content expectations
+    are present) content hit rate.  No absolute thresholds.
+    """
+
+    reports: dict[str, RAGReport] = {}
+    for mode in ("vector", "hybrid"):
+        report = await _run_single(args, mode=mode)
+        reports[mode] = report
+        await _write_reports(report, args, mode=mode)
+        await _persist_run(report, args, mode=mode)
+
+    vector_summary = reports["vector"].summary
+    hybrid_summary = reports["hybrid"].summary
+
+    checks: list[tuple[bool, str, str, str]] = []
+    checks.append(
+        (
+            hybrid_summary.retrieval_success_rate
+            >= vector_summary.retrieval_success_rate,
+            "retrieval_success_rate",
+            _format_percent(vector_summary.retrieval_success_rate),
+            _format_percent(hybrid_summary.retrieval_success_rate),
+        )
+    )
+    if (
+        hybrid_summary.content_hit_rate is not None
+        and vector_summary.content_hit_rate is not None
+    ):
+        checks.append(
+            (
+                hybrid_summary.content_hit_rate >= vector_summary.content_hit_rate,
+                "content_hit_rate",
+                _format_percent(vector_summary.content_hit_rate),
+                _format_percent(hybrid_summary.content_hit_rate),
+            )
+        )
+    print(
+        "\nComparison (vector-only -> hybrid): "
+        f"retrieval_success_rate "
+        f"{_format_percent(vector_summary.retrieval_success_rate)} -> "
+        f"{_format_percent(hybrid_summary.retrieval_success_rate)}, "
+        f"context_recall_at_k {_format_metric(vector_summary.context_recall_at_k)} "
+        f"-> {_format_metric(hybrid_summary.context_recall_at_k)}"
+    )
+    if (
+        vector_summary.content_hit_rate is not None
+        and hybrid_summary.content_hit_rate is not None
+    ):
+        print(
+            f"content_hit_rate "
+            f"{_format_percent(vector_summary.content_hit_rate)} -> "
+            f"{_format_percent(hybrid_summary.content_hit_rate)}"
+        )
+
+    failed = [name for ok, name, _, _ in checks if not ok]
+    for ok, name, before, after in checks:
+        status = "ok" if ok else "REGRESSION"
+        print(f"  [{status}] {name}: {before} -> {after}")
+    if failed:
+        print(
+            f"Golden gate FAILED: hybrid regressed on {', '.join(failed)}. ",
+            file=sys.stderr,
+        )
+        return 1
+    print("Golden gate passed: hybrid >= vector-only on all compared metrics.")
+    return 0
+
+
+async def _write_reports(
+    report: RAGReport,
+    args: argparse.Namespace,
+    *,
+    mode: str,
+) -> None:
+    """Write JSON and Markdown reports for one evaluation pass."""
+
+    suffix = "" if mode == "auto" else f"_{mode}"
+    output_path = Path(f"{args.output}{suffix}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path = output_path.with_suffix(".json")
+    markdown_path = output_path.with_suffix(".md")
+    json_path.write_text(report.to_json(indent=2), encoding="utf-8")
+    markdown_path.write_text(
+        _build_markdown(
+            report,
+            dataset=str(Path(args.dataset)),
+            retriever=f"{args.retriever}:{mode}",
+        ),
+        encoding="utf-8",
+    )
+    print(f"JSON report: {json_path}")
+    print(f"Markdown report: {markdown_path}")
 
 
 class _NoStackFilter(logging.Filter):
@@ -207,6 +398,11 @@ def _build_markdown(
         ),
         (f"- Average retrieved chunks: {summary.average_retrieved_chunks:.3f}"),
         f"- p95 latency: {summary.p95_latency_ms:.1f} ms",
+        (
+            "- Content hit rate: "
+            f"{_format_metric(summary.content_hit_rate)}"
+            f" ({summary.content_expected_count} content cases)"
+        ),
         "",
         "## Case Results",
         "",
@@ -282,7 +478,12 @@ def _escape_markdown(value: str) -> str:
     )
 
 
-async def _persist_run(report: RAGReport, args: argparse.Namespace) -> None:
+async def _persist_run(
+    report: RAGReport,
+    args: argparse.Namespace,
+    *,
+    mode: str,
+) -> None:
     """Write an evaluation run record when PostgreSQL is available."""
 
     try:
@@ -299,7 +500,7 @@ async def _persist_run(report: RAGReport, args: argparse.Namespace) -> None:
     run = RAGEvaluationRun(
         id=str(uuid.uuid4()),
         dataset=str(Path(args.dataset)),
-        retriever=args.retriever,
+        retriever=f"{args.retriever}:{mode}",
         model=None,
         case_count=summary.case_count,
         retrieval_success_rate=summary.retrieval_success_rate,
@@ -319,20 +520,19 @@ async def _persist_run(report: RAGReport, args: argparse.Namespace) -> None:
 
 def _print_summary(
     report: RAGReport,
-    json_path: Path,
-    markdown_path: Path,
+    args: argparse.Namespace,
+    *,
+    mode: str,
 ) -> None:
-    """Print only aggregate results and output paths."""
+    """Print only aggregate results for one evaluation pass."""
 
     summary = report.summary
     recall = _format_metric(summary.context_recall_at_k)
     print(
-        f"RAG evaluation complete: {summary.case_count} cases, "
+        f"RAG evaluation complete (mode={mode}): {summary.case_count} cases, "
         f"retrieval success {summary.retrieval_success_count}/"
         f"{summary.case_count}, context recall@k {recall}."
     )
-    print(f"JSON report: {json_path}")
-    print(f"Markdown report: {markdown_path}")
 
 
 def main() -> None:
@@ -350,13 +550,35 @@ def main() -> None:
     parser.add_argument(
         "--output",
         default="output/rag_eval_report",
-        help="Report base path (writes .json and .md)",
+        help="Report base path (writes .json and .md; mode suffix added)",
     )
     parser.add_argument(
         "--retriever",
         choices=("embedding", "service"),
         default="embedding",
         help="Retrieval adapter: embedding (default) or service",
+    )
+    parser.add_argument(
+        "--embedder",
+        choices=("ollama", "mock"),
+        default="ollama",
+        help="Embedding backend: ollama (default) or deterministic mock",
+    )
+    parser.add_argument(
+        "--search-mode",
+        choices=("auto", "vector", "hybrid", "keyword"),
+        default="auto",
+        help="Search mode override (default: follow RAG_SEARCH_MODE)",
+    )
+    parser.add_argument(
+        "--ingest-file",
+        default=None,
+        help="Optional TXT corpus file to ingest before evaluating",
+    )
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="Run vector and hybrid modes; fail when hybrid regresses",
     )
     args = parser.parse_args()
     sys.exit(asyncio.run(run_evaluation(args)))

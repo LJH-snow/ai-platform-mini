@@ -105,6 +105,12 @@ def _evaluate_rag_case(
         if case.answer_fragments is None
         else answer_matches_expected(case.answer_fragments, answer)
     )
+    content_hit: bool | None = None
+    if case.expected_content_contains:
+        content_hit = any(
+            case.expected_content_contains in (reference.content or "")
+            for reference in selected
+        )
     return RAGEvalCaseResult(
         case_id=case.case_id,
         status=outcome.status,
@@ -118,6 +124,7 @@ def _evaluate_rag_case(
         chunk_recall_at_k=chunk_recall,
         context_recall_at_k=context_recall,
         answer_correct=answer_correct,
+        content_hit=content_hit,
         top_k=case.top_k,
         latency_ms=latency_ms,
         error=outcome.error,
@@ -137,6 +144,7 @@ def _failed_rag_case_result(
         success=False,
         expected_document_ids=case.document_ids,
         expected_chunk_ids=case.chunk_ids,
+        expected_content_contains=case.expected_content_contains,
         retrieved_document_ids=(),
         retrieved_chunk_ids=(),
         retrieved_count=0,
@@ -203,6 +211,12 @@ def _build_rag_report(results: tuple[RAGEvalCaseResult, ...]) -> RAGReport:
         p95_latency_ms=percentile(
             [result.latency_ms for result in results],
             percentile=0.95,
+        ),
+        content_hit_rate=_average_bool(
+            [result.content_hit for result in results if result.content_hit is not None]
+        ),
+        content_expected_count=sum(
+            result.content_hit is not None for result in results
         ),
     )
     return RAGReport(results=results, summary=summary)

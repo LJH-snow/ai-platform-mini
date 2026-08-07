@@ -271,7 +271,31 @@ python scripts/evaluate_rag.py tests/fixtures/evals/rag_golden.jsonl \
 
 需要 `RAG_ENABLED=true`、PostgreSQL/pgvector 与 Ollama。`--retriever embedding` 直接注入生产 `Embedder` + `VectorStore`，评估原始检索质量；`--retriever service` 复用 `RAGService.prepare` 路径，保留生产环境的分块/上下文截断语义。脚本输出 `.json` 和 `.md` 报告。离线测试使用 `tests/fixtures/evals/rag_golden.jsonl` 与 fake retriever，不调用真实模型。
 
+混合检索对比（Sprint C）：
+
+```bash
+python scripts/evaluate_rag.py tests/fixtures/evals/rag_golden_ci.jsonl \
+  --owner-key-hash <64位SHA-256十六进制> \
+  --embedder mock \
+  --ingest-file tests/fixtures/evals/ci_corpus.txt \
+  --compare \
+  --output output/rag_eval_ci
+```
+
+`--compare` 对同一语料分别跑 `vector` 与 `hybrid` 两轮并做相对门禁：hybrid 的检索成功率与 content hit rate 必须 ≥ vector-only，否则退出码 1（CI `rag-golden` job 使用确定性 mock embedder 执行此门禁，无绝对阈值）。`expected_content_contains` 使 case 无需预知 chunk UUID（自包含语料）；`--embedder ollama` 可在本地跑真实对比。
+
 当前覆盖指标：`context_recall_at_k`、`document_recall_at_k`、`chunk_recall_at_k`、检索成功率、平均检索分块数、p95 延迟，以及可选 answer fragment 正确率；CI 回归阈值断言和数据库持久化报告已实现（Sprint 15）。后续可扩展：`precision@k`/MRR/nDCG、LLM-as-judge 的 faithfulness/answer correctness、Agent 评估的 CI 回归和数据库报表。
+
+Sprint C 实测分数（`tests/fixtures/evals/rag_golden_ci.jsonl`，4 case）：
+
+| 环境 | 模式 | retrieval_success_rate | content_hit_rate |
+| --- | --- | --- | --- |
+| CI（确定性 mock embedder） | vector-only | 0% | 0% |
+| CI（确定性 mock embedder） | hybrid | 100% | 100% |
+| 本地（Ollama nomic-embed-text） | vector-only | 100% | 75% |
+| 本地（Ollama nomic-embed-text） | hybrid | 100% | 75% |
+
+说明：mock 随机投影向量的绝对相似度低，vector 路在真实 `max_distance` 下全部过滤——恰好验证 keyword 路的**熔断救回**属性（hybrid 不依赖向量即可检索）；本地真实 embedding 下 hybrid 与 vector 持平（无提升亦无回退），按 roadmap 规则维持默认 `RAG_SEARCH_MODE=vector`，待真实语料证明提升后再切换。
 
 默认不引入 RAGAS：当前指标都是确定性、离线可复现的检索召回指标；RAGAS 的 LLM-as-judge 指标需要真实模型调用、对模型版本敏感且结果不可完全复现，适合后续作为可选扩展而不是基础依赖。
 
