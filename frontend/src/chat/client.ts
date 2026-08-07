@@ -1,4 +1,11 @@
-import type { ChatApiMessage, ChatStreamHandlers, ChatStreamResult } from './types.ts'
+import type {
+  ChatApiMessage,
+  ChatMessage,
+  ChatStreamHandlers,
+  ChatStreamResult,
+  ConversationHistoryMessage,
+  ConversationSummary,
+} from './types.ts'
 
 export type ChatClientOptions = {
   apiBaseUrl?: string
@@ -42,6 +49,13 @@ export class ChatStreamInterruptedError extends Error {
   }
 }
 
+export class ChatResponseError extends Error {
+  constructor(message = '聊天服务返回了无法识别的历史记录。') {
+    super(message)
+    this.name = 'ChatResponseError'
+  }
+}
+
 type ErrorPayload = {
   code?: unknown
   message?: unknown
@@ -56,6 +70,8 @@ export type ChatClient = {
     signal: AbortSignal,
     threadId?: string | null,
   ) => Promise<ChatStreamResult>
+  listThreadMessages: (threadId: string, signal?: AbortSignal) => Promise<ChatMessage[]>
+  listConversations: (signal?: AbortSignal) => Promise<ConversationSummary[]>
 }
 
 const getRequestId = (response: Response): string | null => {
@@ -97,6 +113,61 @@ const parseErrorResponse = async (
             : `Chat 请求失败（HTTP ${response.status}），请稍后重试。`
 
   return new ChatBackendError(message, response.status, code, errorRequestId, threadId)
+}
+
+const parseConversationMessage = (value: unknown): ChatMessage => {
+  if (typeof value !== 'object' || value === null) {
+    throw new ChatResponseError()
+  }
+  const record = value as Partial<ConversationHistoryMessage>
+  const role = record.role
+  const content = record.content
+  const rawId = record.id
+  if (
+    (role !== 'system' && role !== 'user' && role !== 'assistant') ||
+    typeof content !== 'string' ||
+    (typeof rawId !== 'number' && typeof rawId !== 'string')
+  ) {
+    throw new ChatResponseError()
+  }
+  return { id: String(rawId), role, content }
+}
+
+const parseConversationMessages = (payload: unknown): ChatMessage[] => {
+  if (!Array.isArray(payload)) {
+    throw new ChatResponseError()
+  }
+  return payload.map(parseConversationMessage)
+}
+
+const parseConversationSummary = (value: unknown): ConversationSummary => {
+  if (typeof value !== 'object' || value === null) {
+    throw new ChatResponseError()
+  }
+  const record = value as Partial<ConversationSummary>
+  const createdAt = record.created_at
+  const updatedAt = record.updated_at
+  if (
+    typeof record.thread_id !== 'string' ||
+    typeof record.title !== 'string' ||
+    (createdAt !== null && typeof createdAt !== 'string') ||
+    (updatedAt !== null && typeof updatedAt !== 'string')
+  ) {
+    throw new ChatResponseError()
+  }
+  return {
+    thread_id: record.thread_id,
+    title: record.title,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  }
+}
+
+const parseConversationSummaries = (payload: unknown): ConversationSummary[] => {
+  if (!Array.isArray(payload)) {
+    throw new ChatResponseError()
+  }
+  return payload.map(parseConversationSummary)
 }
 
 const parseSseEvent = (event: string): string | null => {
@@ -273,6 +344,66 @@ export function createChatClient(options: ChatClientOptions = {}): ChatClient {
 
       const resolvedThreadId = await readSseStream(response, handlers, signal)
       return { requestId, threadId: resolvedThreadId }
+    },
+    async listThreadMessages(threadId, signal): Promise<ChatMessage[]> {
+      const historyEndpoint = `${apiBaseUrl.replace(/\/$/, '')}/api/v1/conversations/${encodeURIComponent(threadId)}/messages`
+      let response: Response
+      try {
+        response = await fetchImpl(historyEndpoint, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            ...(options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}),
+          },
+          signal,
+        })
+      } catch (error) {
+        if (signal?.aborted) throw error
+        throw new ChatNetworkError()
+      }
+
+      const requestId = getRequestId(response)
+      if (!response.ok) {
+        throw await parseErrorResponse(response, requestId)
+      }
+
+      let payload: unknown
+      try {
+        payload = await response.json()
+      } catch {
+        throw new ChatResponseError()
+      }
+      return parseConversationMessages(payload)
+    },
+    async listConversations(signal): Promise<ConversationSummary[]> {
+      const listEndpoint = `${apiBaseUrl.replace(/\/$/, '')}/api/v1/conversations`
+      let response: Response
+      try {
+        response = await fetchImpl(listEndpoint, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            ...(options.apiKey ? { Authorization: `Bearer ${options.apiKey}` } : {}),
+          },
+          signal,
+        })
+      } catch (error) {
+        if (signal?.aborted) throw error
+        throw new ChatNetworkError()
+      }
+
+      const requestId = getRequestId(response)
+      if (!response.ok) {
+        throw await parseErrorResponse(response, requestId)
+      }
+
+      let payload: unknown
+      try {
+        payload = await response.json()
+      } catch {
+        throw new ChatResponseError()
+      }
+      return parseConversationSummaries(payload)
     },
   }
 }

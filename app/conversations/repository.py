@@ -13,6 +13,8 @@ class ConversationRepository(Protocol):
         self, thread_id: str, owner_key_hash: str
     ) -> ConversationThread | None: ...
 
+    async def list_threads(self, owner_key_hash: str) -> list[ConversationThread]: ...
+
     async def add_message(
         self,
         thread_id: str,

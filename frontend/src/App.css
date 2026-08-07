@@ -94,6 +94,10 @@ h1 {
 
 .statusPill {
   flex: 0 0 auto;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border-radius: 999px;
   padding: 0.8rem 1rem;
   color: #315efb;
@@ -1454,6 +1458,68 @@ select:focus-visible {
   padding: 0.7rem 0.9rem;
 }
 
+.conversationHistoryLabel {
+  margin-top: 0.65rem;
+}
+
+.conversationHistoryList {
+  display: grid;
+  gap: 0.3rem;
+  max-height: 36vh;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
+.conversationHistoryItems {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conversationHistoryItem {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  min-height: 2.8rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  color: #637088;
+  background: transparent;
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+.conversationHistoryItem:hover:not(:disabled) {
+  color: #27324a;
+  background: #eef2ff;
+}
+
+.conversationHistoryItemActive,
+.conversationHistoryItemActive:hover:not(:disabled) {
+  color: #315efb;
+  background: #eaf0ff;
+}
+
+.conversationHistoryTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 800;
+}
+
+.conversationHistoryTime {
+  color: #9aa6b8;
+  font-size: 0.62rem;
+}
+
+.conversationHistoryEmpty {
+  padding: 0.4rem 0.65rem;
+  color: #9aa6b8;
+  font-size: 0.7rem;
+}
+
 .platformContent {
   display: flex;
   flex-direction: column;
@@ -2075,6 +2141,26 @@ select:focus-visible {
   .sidebarSession {
     margin-top: 0.75rem;
     padding: 0.75rem 0 0.15rem;
+  }
+
+  .conversationHistoryLabel {
+    display: block;
+  }
+
+  .conversationHistoryList {
+    display: flex;
+    max-height: none;
+    overflow-x: auto;
+    padding-bottom: 0.2rem;
+  }
+
+  .conversationHistoryItems {
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  .conversationHistoryItem {
+    flex: 0 0 220px;
   }
 
   .platformNav {

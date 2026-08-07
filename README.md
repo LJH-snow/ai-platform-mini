@@ -79,10 +79,22 @@ API Key 校验归属并加载服务端历史。服务端历史排在客户端 `h
 - 能力：`ConversationService` 支持创建/获取线程、追加消息、按时间顺序加载历史；
   所有查询按 `owner_key_hash` 隔离，跨租户线程统一返回 404
   `CONVERSATION_NOT_FOUND`。
+- 历史查询：`GET /api/v1/conversations/{thread_id}/messages` 返回当前租户线程的
+  安全字段消息列表（`id`、`thread_id`、`role`、`content`、`token_count`、
+  `created_at`），按 `created_at, id` 升序；缺失、跨租户或非法 UUID 统一返回
+  404 `CONVERSATION_NOT_FOUND`。
+- 会话列表：`GET /api/v1/conversations` 返回当前租户的线程摘要
+  （`thread_id`、`title`、`created_at`、`updated_at`），按最近更新排序；
+  前端侧栏据此展示历史会话并支持点击恢复。
 - 响应：Chat/Agent 同步响应与 Agent SSE 事件返回 `thread_id`；OpenAI 流式 chunk
   同样携带 `thread_id`，客户端可用它延续同一线程。
-- 边界：`memory` 模式仅适合单进程本地开发，多 worker/多实例不会共享会话；
-  生产环境请使用 `postgres` 模式。
+- 边界：`memory` 模式仅适合单进程本地开发，后端重启会丢失历史，
+  多 worker/多实例也不会共享会话；需要跨重启恢复时请设置
+  `CONVERSATION_STORAGE=postgres`。
+- 前端恢复：刷新时从 `sessionStorage` 恢复 `thread_id` 并调用历史查询接口，
+  成功则回填聊天窗口；临时失败（网络、5xx、429、超时等）保留 `thread_id`
+  并允许继续提问；`404 CONVERSATION_NOT_FOUND` 表示线程已失效，前端清空
+  `thread_id`，下一次提问自动新建线程。
 
 学习总结：本轮把 `history` 从客户端透传推进为服务端持久化，并用
 memory/postgres 双实现保证本地开发与生产路径一致。租户隔离被固化在 repository
@@ -375,6 +387,8 @@ INTEGRATION_TEST=1 pytest
 | GET    | `/api/v1/ready`            | Readiness probe (checks downstream)                                 |
 | GET    | `/api/v1/health/mcp`       | MCP lifecycle/readiness status (when enabled)                       |
 | GET    | `/api/v1/usage`            | Token usage statistics                                              |
+| GET    | `/api/v1/conversations`    | List the tenant's conversation threads                              |
+| GET    | `/api/v1/conversations/{thread_id}/messages` | List a thread's tenant-scoped history |
 | POST   | `/v1/chat/completions`     | OpenAI-compatible chat completions (supports SSE streaming)         |
 | GET    | `/api/v1/models`           | List available LLM models                                           |
 | POST   | `/api/v1/chat`             | Generate a chat completion with model-based provider routing        |
@@ -515,6 +529,7 @@ AUTH_STORAGE=memory
 # Bootstrap (Docker/Postgres only)
 INITIAL_API_KEY=
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform
+CONVERSATION_STORAGE=postgres
 
 # Rate limiting
 RATE_LIMIT_ENABLED=true

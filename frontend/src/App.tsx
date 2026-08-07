@@ -36,7 +36,7 @@ import { PromptStudio } from './platform/PromptStudio.tsx'
 import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
 import { getRuntimeConfig } from './chat/config.ts'
-import type { ChatApiMessage, ChatMessage } from './chat/types.ts'
+import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
 type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'admin'
@@ -110,6 +110,18 @@ const statusLabels: Record<RequestStatus, string> = {
   rag_completed: 'RAG 已完成',
   response_format_error: '响应格式错误',
   connection_lost: '连接已断开',
+}
+
+const formatConversationTime = (value: string | null): string => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const now = new Date()
+  const sameDay = date.toDateString() === now.toDateString()
+  return new Intl.DateTimeFormat(
+    'zh-CN',
+    sameDay ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric' },
+  ).format(date)
 }
 
 const runStatusLabels: Record<AgentRunStatus, string> = {
@@ -238,6 +250,10 @@ const getSafeChatErrorMessage = (error: ChatBackendError): string => {
   if (error.status >= 500) return 'Chat 服务暂时不可用，请稍后重试。'
   return `Chat 请求失败（HTTP ${error.status}），请稍后重试。`
 }
+
+const isConversationNotFoundError = (error: unknown): boolean =>
+  error instanceof ChatBackendError &&
+  (error.status === 404 || error.code === 'CONVERSATION_NOT_FOUND')
 
 const getSafeAgentErrorMessage = (error: Error): string => {
   if (error instanceof AgentNetworkError) return '无法连接 Agent 服务，请稍后重试。'
@@ -584,6 +600,10 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const [threadId, setThreadId] = useState<string | null>(() =>
     sessionStorage.getItem(THREAD_ID_STORAGE),
   )
+  const [conversations, setConversations] = useState<ConversationSummary[]>([])
+  const [conversationsStatus, setConversationsStatus] = useState<
+    'idle' | 'loading' | 'ready' | 'failed'
+  >('idle')
   const [requestStatus, setRequestStatus] = useState<RequestStatus>('idle')
   const [agentSseActive, setAgentSseActive] = useState(false)
   const [requestId, setRequestId] = useState<string | null>(null)
@@ -600,8 +620,84 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   )
   const agentStreamState = useRef<AgentStreamState>(initialAgentStreamState)
   const activeRequest = useRef<ActiveRequest | null>(null)
+  const historyRestoreController = useRef<AbortController | null>(null)
+  const historyRestoreStartedFor = useRef<string | null>(null)
 
-  const sessionLabel = sessionCount === 0 ? '未命名会话' : `本地会话 ${sessionCount}`
+  useEffect(() => {
+    if (!effectiveApiKey) {
+      setConversations([])
+      setConversationsStatus('idle')
+      return
+    }
+
+    let cancelled = false
+    setConversationsStatus('loading')
+    void resolvedChatClient
+      .listConversations()
+      .then((list) => {
+        if (cancelled) return
+        setConversations(list)
+        setConversationsStatus('ready')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setConversationsStatus('failed')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [effectiveApiKey, resolvedChatClient])
+
+  useEffect(() => {
+    if (!threadId || messages.length > 0 || historyRestoreStartedFor.current === threadId) {
+      return
+    }
+
+    historyRestoreStartedFor.current = threadId
+    const controller = new AbortController()
+    historyRestoreController.current = controller
+    let cancelled = false
+    void resolvedChatClient
+      .listThreadMessages(threadId, controller.signal)
+      .then((history) => {
+        if (cancelled || historyRestoreStartedFor.current !== threadId) return
+        setMessages(history)
+        setErrorMessage(null)
+        setAnnouncement('已恢复会话历史。')
+      })
+      .catch((error: unknown) => {
+        if (cancelled || historyRestoreStartedFor.current !== threadId) return
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        if (isConversationNotFoundError(error)) {
+          setThreadId(null)
+          sessionStorage.removeItem(THREAD_ID_STORAGE)
+          setErrorMessage(null)
+          setAnnouncement('原会话已失效，已准备好新会话。')
+          return
+        }
+        setErrorMessage('会话历史恢复失败，可继续提问。')
+        setAnnouncement('会话历史恢复失败，可继续提问。')
+      })
+      .finally(() => {
+        if (historyRestoreController.current === controller) {
+          historyRestoreController.current = null
+        }
+      })
+
+    return () => {
+      cancelled = true
+      controller.abort()
+      historyRestoreStartedFor.current = null
+      if (historyRestoreController.current === controller) {
+        historyRestoreController.current = null
+      }
+    }
+  }, [messages.length, resolvedChatClient, threadId])
+
+  const activeConversation = conversations.find((item) => item.thread_id === threadId)
+  const sessionLabel =
+    activeConversation?.title ?? (sessionCount === 0 ? '未命名会话' : `本地会话 ${sessionCount}`)
   const isActive =
     agentSseActive ||
     requestStatus === 'sending' ||
@@ -616,12 +712,33 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     )
   }
 
+  const refreshConversations = (): void => {
+    if (!effectiveApiKey) return
+    void resolvedChatClient
+      .listConversations()
+      .then((list) => {
+        setConversations(list)
+        setConversationsStatus('ready')
+      })
+      .catch(() => {
+        setConversationsStatus('failed')
+      })
+  }
+
   const storeThreadId = (nextThreadId: string): void => {
     setThreadId(nextThreadId)
     sessionStorage.setItem(THREAD_ID_STORAGE, nextThreadId)
+    refreshConversations()
+  }
+
+  const cancelHistoryRestore = (): void => {
+    historyRestoreController.current?.abort()
+    historyRestoreController.current = null
+    historyRestoreStartedFor.current = null
   }
 
   const resetConversation = (action: 'new' | 'clear'): void => {
+    cancelHistoryRestore()
     if (activeRequest.current) {
       activeRequest.current.stopped = true
       activeRequest.current.controller.abort()
@@ -652,6 +769,35 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     } else {
       setClearedCount((count) => count + 1)
     }
+  }
+
+  const openConversation = (nextThreadId: string): void => {
+    if (nextThreadId === threadId) return
+    cancelHistoryRestore()
+    if (activeRequest.current) {
+      activeRequest.current.stopped = true
+      activeRequest.current.controller.abort()
+      activeRequest.current = null
+    }
+
+    setMessages([])
+    setDraft('')
+    setRequestId(null)
+    setAgentRun(null)
+    agentStreamState.current = initialAgentStreamState
+    setTraceUnavailableMessage(null)
+    setLastAgentInput(null)
+    setLastChatInput(null)
+    setLastChatAssistantMessageId(null)
+    setLastAgentAssistantMessageId(null)
+    setErrorMessage(null)
+    setCopyFeedback(null)
+    setRequestStatus('idle')
+    setAgentSseActive(false)
+    setThreadId(nextThreadId)
+    sessionStorage.setItem(THREAD_ID_STORAGE, nextThreadId)
+    setPage('console')
+    setAnnouncement('已打开历史会话。')
   }
 
   const handleStop = (): void => {
@@ -892,6 +1038,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     event.preventDefault()
     const content = draft.trim()
     if (!content || isActive) return
+    cancelHistoryRestore()
     if (sessionCount === 0) setSessionCount(1)
 
     const userMessage = createMessage('user', content)
@@ -1110,6 +1257,41 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             <button type="button" className="newSessionButton" onClick={handleNewSession}>
               新建会话
             </button>
+            <span className="navSectionLabel conversationHistoryLabel">会话记录</span>
+            <nav className="conversationHistoryList" aria-label="会话记录">
+              {conversationsStatus === 'loading' && conversations.length === 0 ? (
+                <span className="conversationHistoryEmpty">加载中…</span>
+              ) : null}
+              {conversationsStatus === 'failed' && conversations.length === 0 ? (
+                <span className="conversationHistoryEmpty">会话记录加载失败</span>
+              ) : null}
+              {conversationsStatus === 'ready' && conversations.length === 0 ? (
+                <span className="conversationHistoryEmpty">暂无历史会话</span>
+              ) : null}
+              {conversations.length > 0 ? (
+                <ul className="conversationHistoryItems">
+                  {conversations.map((conversation) => (
+                    <li key={conversation.thread_id}>
+                      <button
+                        type="button"
+                        className={
+                          conversation.thread_id === threadId
+                            ? 'conversationHistoryItem conversationHistoryItemActive'
+                            : 'conversationHistoryItem'
+                        }
+                        aria-current={conversation.thread_id === threadId ? 'true' : undefined}
+                        onClick={() => openConversation(conversation.thread_id)}
+                      >
+                        <span className="conversationHistoryTitle">{conversation.title}</span>
+                        <span className="conversationHistoryTime">
+                          {formatConversationTime(conversation.updated_at)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </nav>
           </div>
           <div className="sidebarFooter">
             <span

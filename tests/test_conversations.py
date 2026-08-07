@@ -4,19 +4,24 @@ from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
 import pytest
+from httpx import ASGITransport, AsyncClient, Response
 
 from app.auth.hash import hash_api_key
 from app.conversations.memory_repository import InMemoryConversationRepository
 from app.conversations.models import ConversationThread
 from app.conversations.postgres_repository import PostgresConversationRepository
 from app.conversations.service import ConversationService
+from app.core.container import provide_conversation_service
 from app.db.init import dispose_db, init_db
 from app.db.session import create_async_session_factory
 from app.exceptions.base import ConversationNotFoundError, ValidationError
+from app.main import app
 from app.schemas.chat import ChatMessage
 
 OWNER_1 = hash_api_key("sk-owner-1")
 OWNER_2 = hash_api_key("sk-owner-2")
+_AUTH_HEADERS = {"Authorization": "Bearer sk-test-integration"}
+_TEST_OWNER = hash_api_key("sk-test-integration")
 
 
 def _service() -> ConversationService:
@@ -209,6 +214,48 @@ async def test_memory_repository_isolates_tenants() -> None:
 
 
 @pytest.mark.asyncio
+async def test_memory_list_threads_filters_owner_and_sorts_by_updated_at() -> None:
+    repo = InMemoryConversationRepository()
+    older = ConversationThread(
+        id=str(uuid.uuid4()),
+        owner_key_hash=OWNER_1,
+        title="Older",
+        created_at=datetime(2026, 8, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 2, tzinfo=UTC),
+    )
+    recent = ConversationThread(
+        id=str(uuid.uuid4()),
+        owner_key_hash=OWNER_1,
+        title="Recent",
+        created_at=datetime(2026, 8, 3, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 4, tzinfo=UTC),
+    )
+    foreign = ConversationThread(
+        id=str(uuid.uuid4()),
+        owner_key_hash=OWNER_2,
+        title="Foreign",
+        created_at=datetime(2026, 8, 3, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 4, tzinfo=UTC),
+    )
+    await repo.create_thread(older)
+    await repo.create_thread(recent)
+    await repo.create_thread(foreign)
+
+    threads = await repo.list_threads(OWNER_1)
+
+    assert [thread.id for thread in threads] == [recent.id, older.id]
+    assert all(thread.owner_key_hash == OWNER_1 for thread in threads)
+
+
+@pytest.mark.asyncio
+async def test_service_list_threads_validates_owner() -> None:
+    service = _service()
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        await service.list_threads("not-a-hash")
+
+
+@pytest.mark.asyncio
 async def test_service_rejects_foreign_or_missing_threads() -> None:
     service = _service()
     thread = await service.create_thread(OWNER_1, "Private")
@@ -372,6 +419,41 @@ class TestPostgresConversationRepository:
         assert await pg_repo.list_messages(thread.id, OWNER_1) == []
 
     @pytest.mark.asyncio
+    async def test_list_threads_orders_most_recent_first(
+        self,
+        pg_repo: PostgresConversationRepository,
+    ) -> None:
+        older = ConversationThread(
+            id=str(uuid.uuid4()),
+            owner_key_hash=OWNER_1,
+            title="Older",
+            created_at=datetime(2026, 8, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 2, tzinfo=UTC),
+        )
+        recent = ConversationThread(
+            id=str(uuid.uuid4()),
+            owner_key_hash=OWNER_1,
+            title="Recent",
+            created_at=datetime(2026, 8, 3, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 4, tzinfo=UTC),
+        )
+        foreign = ConversationThread(
+            id=str(uuid.uuid4()),
+            owner_key_hash=OWNER_2,
+            title="Foreign",
+            created_at=datetime(2026, 8, 3, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 4, tzinfo=UTC),
+        )
+        await pg_repo.create_thread(older)
+        await pg_repo.create_thread(recent)
+        await pg_repo.create_thread(foreign)
+
+        threads = await pg_repo.list_threads(OWNER_1)
+
+        assert [thread.id for thread in threads] == [recent.id, older.id]
+        assert all(thread.owner_key_hash == OWNER_1 for thread in threads)
+
+    @pytest.mark.asyncio
     async def test_invalid_uuid_thread_is_treated_as_missing(
         self,
         pg_repo: PostgresConversationRepository,
@@ -412,3 +494,58 @@ class TestPostgresConversationRepository:
         ) is not None
         history = await pg_repo.list_messages(compact, OWNER_1)
         assert [message.content for message in history] == ["hello"]
+
+
+class TestPostgresMessagesApi:
+    pytestmark = pytest.mark.skipif(
+        not os.getenv("INTEGRATION_TEST"),
+        reason="Set INTEGRATION_TEST=1 to run PostgreSQL integration tests",
+    )
+
+    @pytest.fixture()
+    async def pg_repo(
+        self,
+    ) -> AsyncGenerator[PostgresConversationRepository, None]:
+        from testcontainers.community.postgres import PostgresContainer
+
+        with PostgresContainer("postgres:16-alpine") as pg:
+            database_url = pg.get_connection_url().replace("psycopg2", "asyncpg")
+            await init_db(database_url)
+            factory = create_async_session_factory()
+            yield PostgresConversationRepository(factory)
+            await dispose_db()
+
+    @pytest.mark.asyncio
+    async def test_messages_api_lists_postgres_history(
+        self,
+        pg_repo: PostgresConversationRepository,
+    ) -> None:
+        service = ConversationService(repository=pg_repo)
+        app.dependency_overrides[provide_conversation_service] = lambda: service
+        response: Response | None = None
+        try:
+            thread = await service.create_thread(_TEST_OWNER, "PG history API")
+            await service.append_message(
+                _TEST_OWNER, thread.id, "user", "hello", token_count=3
+            )
+            await service.append_message(
+                _TEST_OWNER, thread.id, "assistant", "hi", token_count=5
+            )
+            await service.append_message(
+                _TEST_OWNER, thread.id, "user", "again", token_count=2
+            )
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as http:
+                response = await http.get(
+                    f"/api/v1/conversations/{thread.id}/messages",
+                    headers=_AUTH_HEADERS,
+                )
+        finally:
+            app.dependency_overrides.pop(provide_conversation_service, None)
+
+        assert response is not None
+        assert response.status_code == 200
+        body = response.json()
+        assert [message["content"] for message in body] == ["hello", "hi", "again"]
+        assert [message["token_count"] for message in body] == [3, 5, 2]
+        assert all(message["thread_id"] == thread.id for message in body)

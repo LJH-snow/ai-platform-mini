@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ChatBackendError,
   ChatNetworkError,
+  ChatResponseError,
   ChatStreamInterruptedError,
   createChatClient,
 } from './client.ts'
@@ -33,6 +34,152 @@ afterEach(() => {
 })
 
 describe('createChatClient', () => {
+  it('loads and maps thread history from the conversation API', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: 1,
+            thread_id: 'thread-1',
+            role: 'user',
+            content: 'hello',
+            token_count: 3,
+            created_at: '2026-08-07T00:00:00Z',
+          },
+          {
+            id: 2,
+            thread_id: 'thread-1',
+            role: 'assistant',
+            content: 'hi',
+            token_count: 5,
+            created_at: '2026-08-07T00:00:01Z',
+          },
+        ]),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+
+    const result = await createChatClient({
+      apiBaseUrl: 'http://localhost:8000/',
+      apiKey: 'runtime-key',
+      fetchImpl,
+    }).listThreadMessages('thread-1')
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/conversations/thread-1/messages',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          Accept: 'application/json',
+          Authorization: 'Bearer runtime-key',
+        }),
+      }),
+    )
+    expect(result).toEqual([
+      { id: '1', role: 'user', content: 'hello' },
+      { id: '2', role: 'assistant', content: 'hi' },
+    ])
+  })
+
+  it('maps conversation history backend errors', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          code: 'CONVERSATION_NOT_FOUND',
+          message: 'Conversation thread not found.',
+          request_id: 'req-history-404',
+        }),
+        {
+          status: 404,
+          headers: { 'Content-Type': 'application/json', 'X-Request-ID': 'req-history-404' },
+        },
+      ),
+    )
+
+    await expect(
+      createChatClient({ fetchImpl }).listThreadMessages('missing-thread'),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<ChatBackendError>>({
+        name: 'ChatBackendError',
+        status: 404,
+        code: 'CONVERSATION_NOT_FOUND',
+        requestId: 'req-history-404',
+      }),
+    )
+  })
+
+  it('rejects malformed conversation history responses', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ messages: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await expect(
+      createChatClient({ fetchImpl }).listThreadMessages('thread-1'),
+    ).rejects.toBeInstanceOf(ChatResponseError)
+  })
+
+  it('loads conversation summaries from the conversation list API', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            thread_id: 'thread-recent',
+            title: '最近的问题',
+            created_at: '2026-08-07T00:00:00Z',
+            updated_at: '2026-08-07T01:00:00Z',
+          },
+          {
+            thread_id: 'thread-older',
+            title: '更早的问题',
+            created_at: '2026-08-01T00:00:00Z',
+            updated_at: '2026-08-02T00:00:00Z',
+          },
+        ]),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+
+    const result = await createChatClient({
+      apiBaseUrl: 'http://localhost:8000/',
+      apiKey: 'runtime-key',
+      fetchImpl,
+    }).listConversations()
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://localhost:8000/api/v1/conversations',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          Accept: 'application/json',
+          Authorization: 'Bearer runtime-key',
+        }),
+      }),
+    )
+    expect(result).toEqual([
+      {
+        thread_id: 'thread-recent',
+        title: '最近的问题',
+        created_at: '2026-08-07T00:00:00Z',
+        updated_at: '2026-08-07T01:00:00Z',
+      },
+      {
+        thread_id: 'thread-older',
+        title: '更早的问题',
+        created_at: '2026-08-01T00:00:00Z',
+        updated_at: '2026-08-02T00:00:00Z',
+      },
+    ])
+  })
+
   it('sends the OpenAI-compatible request and merges split SSE events', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

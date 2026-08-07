@@ -25,6 +25,17 @@ class InMemoryConversationRepository:
             return None
         return thread
 
+    async def list_threads(self, owner_key_hash: str) -> list[ConversationThread]:
+        return sorted(
+            (
+                thread
+                for thread in self._threads.values()
+                if thread.owner_key_hash == owner_key_hash
+            ),
+            key=_thread_order_key,
+            reverse=True,
+        )
+
     async def add_message(
         self,
         thread_id: str,
@@ -65,3 +76,7 @@ class InMemoryConversationRepository:
 def _message_order_key(message: ConversationMessage) -> tuple[datetime, int]:
     created_at = message.created_at or datetime.min.replace(tzinfo=UTC)
     return created_at, message.id
+
+
+def _thread_order_key(thread: ConversationThread) -> datetime:
+    return thread.updated_at or thread.created_at or datetime.min.replace(tzinfo=UTC)
