@@ -1,12 +1,13 @@
 """Deterministic mock embedder for golden-set comparison without Ollama.
 
-Token vectors are derived from a fixed-seed random generator keyed by the
-token itself, so the same token always maps to the same unit vector.
-Document vectors are TF-IDF-weighted sums of token vectors (rare tokens
-dominate, giving distinct documents measurable similarity gradients)
-normalized to unit length.  Query embedding uses the vocabulary counts
-collected during ingestion, so tokens that appear in many corpus chunks
-contribute less to similarity.
+Token vectors are drawn from a fixed-seed generator on first encounter,
+so within one corpus ingestion the same token always maps to the same
+unit vector (determinism is scoped to a fixed corpus/order, not across
+processes).  Document vectors are TF-IDF-weighted sums of token vectors
+(rare tokens dominate, giving distinct documents measurable similarity
+gradients) normalized to unit length.  Query embedding uses the
+vocabulary counts collected during ingestion, so tokens that appear in
+many corpus chunks contribute less to similarity.
 
 Designed for **relative** comparison (hybrid vs vector-only retrieval)
 in CI, not for absolute semantic quality.

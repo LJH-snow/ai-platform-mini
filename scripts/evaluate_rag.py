@@ -142,11 +142,16 @@ async def _run_single(args: argparse.Namespace, *, mode: str) -> RAGReport:
                 vector_store = _build_store(mode, settings)
                 if vector_store is None:
                     raise ValueError("Could not initialize the vector store.")
+                max_distance = (
+                    args.max_distance
+                    if args.max_distance is not None
+                    else settings.rag_max_distance
+                )
                 retriever = EmbeddingVectorStoreRetriever(
                     embedder=embedder,
                     vector_store=vector_store,
                     top_k=settings.rag_top_k,
-                    max_distance=settings.rag_max_distance,
+                    max_distance=max_distance,
                     owner_key_hash=args.owner_key_hash,
                 )
 
@@ -269,6 +274,15 @@ async def _run_compare(args: argparse.Namespace) -> int:
 
     vector_summary = reports["vector"].summary
     hybrid_summary = reports["hybrid"].summary
+
+    if vector_summary.retrieval_success_rate == 0.0:
+        print(
+            "Golden gate FAILED: vector baseline is zero — the comparison "
+            "would be vacuous. Fix the vector path or the corpus before "
+            "trusting this gate.",
+            file=sys.stderr,
+        )
+        return 1
 
     checks: list[tuple[bool, str, str, str]] = []
     checks.append(
@@ -579,6 +593,12 @@ def main() -> None:
         "--compare",
         action="store_true",
         help="Run vector and hybrid modes; fail when hybrid regresses",
+    )
+    parser.add_argument(
+        "--max-distance",
+        type=float,
+        default=None,
+        help="Relevance cutoff override (default: RAG_MAX_DISTANCE)",
     )
     args = parser.parse_args()
     sys.exit(asyncio.run(run_evaluation(args)))

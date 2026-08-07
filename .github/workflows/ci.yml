@@ -110,5 +110,6 @@ jobs:
             --owner-key-hash "$OWNER" \
             --embedder mock \
             --ingest-file tests/fixtures/evals/ci_corpus.txt \
+            --max-distance 1.0 \
             --compare \
             --output output/rag_eval_ci

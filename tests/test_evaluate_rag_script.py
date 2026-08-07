@@ -76,6 +76,7 @@ def _make_args(dataset: Path, output: Path) -> argparse.Namespace:
         search_mode="auto",
         ingest_file=None,
         compare=False,
+        max_distance=None,
     )
 
 
