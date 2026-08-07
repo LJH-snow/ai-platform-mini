@@ -27,6 +27,7 @@ class AgentBenchmarkRunTable(Base):
         ForeignKey("agents.id", ondelete="CASCADE"),
         nullable=False,
     )
+    workspace_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     task_set: Mapped[str] = mapped_column(String(64), nullable=False)
     tool_call_accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
     task_completion_rate: Mapped[float | None] = mapped_column(Float, nullable=True)

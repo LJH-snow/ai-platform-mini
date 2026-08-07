@@ -77,6 +77,7 @@
 - **Prompt Registry**：`GET/POST /api/v1/prompts`、`POST /api/v1/prompts/{name}/activate {version}`；模板按 `(workspace_id, name)` 隔离，每名至多一个 active 版本，激活旧版本即回滚。渲染层级：agent `prompt_ref` 模板 → RAG preset → 决策协议（内置常量回退，registry 空/停用时 Agent 仍可运行）。
 - **Tool seeds**：启动时把内置常量与工具 schema 写入 `prompt_templates`/`tools` 表；schema 从工具类导出（`CalculatorTool()`/`KnowledgeSearchTool`），seed 与运行时注册表零漂移。MCP 工具同样注册进定义校验注册表，Agent 白名单可绑定 MCP 工具。
 - **流式一致性**：SSE 流式最终答案复用与 `decide()` 相同的 system prompt 构建（含 prompt_ref/RAG/协议层与工具段），token 预留估算同步修正。
+- **Agent Benchmark**：`POST /api/v1/benchmarks/run {agent_id, task_set}` 通过真实 AgentService 逐任务执行 golden 任务集（default 集含 calculator/knowledge_search 场景），产出四项指标（Tool Call Accuracy / Task Completion Rate / Average Steps / Latency）落 `agent_benchmark_runs` 表；`GET /api/v1/benchmarks/runs` 按 workspace 读取（可传 `agent_id` 过滤）。任务级失败不中断整个集合并计入 completion rate；benchmark 与 agent CRUD 共用同一 IDOR 边界（无 workspace 的 Key 统一 404，跨 workspace agent 拒绝执行）。
 
 ## Conversation memory
 

@@ -176,6 +176,37 @@ async def migrate_auth_schema(engine: AsyncEngine) -> None:
                 logger.info("migrate_auth_schema: added UNIQUE constraint on key_hash")
 
 
+async def migrate_benchmark_schema(engine: AsyncEngine) -> None:
+    """Idempotent migration adding workspace scoping to benchmark runs."""
+    async with engine.begin() as conn:
+        if not await _table_exists(conn, "agent_benchmark_runs"):
+            return
+        result = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'agent_benchmark_runs' "
+                "AND column_name = 'workspace_id' "
+                "AND table_schema = current_schema()"
+            )
+        )
+        if result.first() is not None:
+            return
+        await conn.execute(
+            text(
+                "ALTER TABLE agent_benchmark_runs "
+                "ADD COLUMN workspace_id VARCHAR(64) NOT NULL DEFAULT ''"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_agent_benchmark_runs_workspace_id "
+                "ON agent_benchmark_runs (workspace_id)"
+            )
+        )
+        logger.info("migrate_benchmark_schema: added workspace_id column")
+
+
 def get_engine() -> AsyncEngine | None:
     return _engine
 
@@ -233,6 +264,8 @@ async def init_db(
         # Run identity schema migration after create_all so that all
         # referenced tables (users, workspaces, api_keys) exist.
         await migrate_auth_schema(_engine)
+        # Upgrade pre-existing benchmark tables that predate workspace scoping.
+        await migrate_benchmark_schema(_engine)
     except BaseException:
         # Engine was created but schema init failed — dispose to
         # prevent leaking the connection pool.  Re-raise so the

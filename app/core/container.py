@@ -27,7 +27,7 @@ from app.workflows.repository import WorkflowRunRepository
 
 if TYPE_CHECKING:
     from app.agent_config.service import AgentDefinitionService
-    from app.api.benchmarks import AgentBenchmarkRunner
+    from app.evals.agent_benchmark import AgentBenchmarkRunner
     from app.mcp.manager import MCPToolManager
     from app.prompts.service import PromptRegistryService
     from app.rag.ingestion import RAGIngestionService
@@ -390,12 +390,25 @@ def provide_agent_definition_service() -> AgentDefinitionService:
 
 @lru_cache
 def provide_agent_benchmark_runner() -> AgentBenchmarkRunner:
-    """Provide the AgentBenchmarkRunner."""
-    from app.api.benchmarks import AgentBenchmarkRunner
+    """Provide the AgentBenchmarkRunner backed by the real AgentService."""
+    from app.evals.agent_benchmark import AgentBenchmarkRunner
+    from app.evals.benchmark_repository import (
+        InMemoryBenchmarkRunRepository,
+        PostgresBenchmarkRunRepository,
+    )
 
+    settings = get_settings()
+    from app.evals.benchmark_repository import BenchmarkRunRepository
+
+    repo: BenchmarkRunRepository
+    if settings.auth_storage == "postgres":
+        repo = PostgresBenchmarkRunRepository(provide_session_factory())
+    else:
+        repo = InMemoryBenchmarkRunRepository()
     return AgentBenchmarkRunner(
-        agent_service=provide_agent_definition_service(),
-        record_service=provide_agent_run_record_service(),
+        agent_service=provide_agent_service(),
+        agent_definition_service=provide_agent_definition_service(),
+        run_repository=repo,
     )
 
 
