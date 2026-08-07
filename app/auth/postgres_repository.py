@@ -40,6 +40,8 @@ class PostgresAPIKeyRepository:
                 key_hash=record.key_hash,
                 name=record.name,
                 status=record.status,
+                user_id=record.user_id,
+                workspace_id=record.workspace_id,
             )
             session.add(row)
             await session.commit()
@@ -89,6 +91,9 @@ def _row_to_record(row: APIKeyTable) -> APIKeyRecord:
         key_hash=row.key_hash,
         name=row.name,
         status=row.status,
+        id=row.id,
+        user_id=row.user_id,
+        workspace_id=row.workspace_id,
         created_at=row.created_at,
         last_used_at=row.last_used_at,
     )

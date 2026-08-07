@@ -1,6 +1,7 @@
 import logging
 
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from app.db.conversation_models import (
     ConversationMessageTable,
@@ -14,11 +15,19 @@ from app.db.models import (
     DailyUsageTable,
     QuotaReservationTable,
 )
+from app.db.user_models import (
+    UserTable,
+    WorkspaceMemberTable,
+    WorkspaceTable,
+)
 from app.db.workflow_models import WorkflowRunTable
 
 logger = logging.getLogger(__name__)
 
 _CORE_TABLES = [
+    UserTable,
+    WorkspaceTable,
+    WorkspaceMemberTable,
     APIKeyTable,
     DailyUsageTable,
     QuotaReservationTable,
@@ -30,6 +39,133 @@ _CORE_TABLES = [
 ]
 
 _engine: AsyncEngine | None = None
+
+
+async def _table_exists(conn: AsyncConnection, table_name: str) -> bool:
+    result = await conn.execute(
+        text(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = :tbl AND table_schema = current_schema()"
+        ),
+        {"tbl": table_name},
+    )
+    return result.first() is not None
+
+
+async def migrate_auth_schema(engine: AsyncEngine) -> None:
+    """Idempotent migration for Sprint A identity schema changes.
+
+    Upgrades the api_keys table from key_hash-as-PK to id-as-UUID-PK,
+    adding user_id and workspace_id FK columns.  Must run **after**
+    create_all so that users, workspaces, and api_keys tables exist.
+    Skips cleanly when no tables are present (fresh install without
+    prior data).
+    """
+    async with engine.begin() as conn:
+        # Guard: if api_keys table doesn't exist yet (fresh create_all
+        # already created it with the new schema), nothing to migrate.
+        if not await _table_exists(conn, "api_keys"):
+            logger.info("migrate_auth_schema: api_keys not found, skipping.")
+            return
+        if not await _table_exists(conn, "users"):
+            logger.info("migrate_auth_schema: users not found, skipping.")
+            return
+        if not await _table_exists(conn, "workspaces"):
+            logger.info("migrate_auth_schema: workspaces not found, skipping.")
+            return
+
+        # 1. Add new columns if they don't exist
+        for col_name, col_def in [
+            ("id", "UUID DEFAULT gen_random_uuid() NOT NULL"),
+            (
+                "user_id",
+                "UUID REFERENCES users(id) ON DELETE SET NULL",
+            ),
+            (
+                "workspace_id",
+                "UUID REFERENCES workspaces(id) ON DELETE SET NULL",
+            ),
+        ]:
+            result = await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = 'api_keys' AND column_name = :col "
+                    "AND table_schema = current_schema()"
+                ),
+                {"col": col_name},
+            )
+            if result.first() is None:
+                await conn.execute(
+                    text(f"ALTER TABLE api_keys ADD COLUMN {col_name} {col_def}")
+                )
+                logger.info(
+                    "migrate_auth_schema: added column %s to api_keys", col_name
+                )
+
+        # 2. Check if key_hash is still the PK and if so, swap to id.
+        pk_col_result = await conn.execute(
+            text(
+                "SELECT column_name"
+                " FROM information_schema.key_column_usage"
+                " WHERE table_name = 'api_keys'"
+                " AND constraint_name IN ("
+                "  SELECT constraint_name"
+                "  FROM information_schema.table_constraints"
+                "  WHERE table_name = 'api_keys'"
+                "  AND constraint_type = 'PRIMARY KEY'"
+                "  AND table_schema = current_schema()"
+                " ) AND table_schema = current_schema()"
+            )
+        )
+        pk_col = pk_col_result.scalar_one_or_none()
+
+        if pk_col == "key_hash":
+            pk_name_result = await conn.execute(
+                text(
+                    "SELECT constraint_name"
+                    " FROM information_schema.table_constraints"
+                    " WHERE table_name = 'api_keys'"
+                    " AND constraint_type = 'PRIMARY KEY'"
+                    " AND table_schema = current_schema()"
+                )
+            )
+            pk_name_row = pk_name_result.fetchone()
+            if pk_name_row is not None:
+                await conn.execute(
+                    text(f"ALTER TABLE api_keys DROP CONSTRAINT {pk_name_row[0]}")
+                )
+            await conn.execute(text("ALTER TABLE api_keys ADD PRIMARY KEY (id)"))
+            logger.info("migrate_auth_schema: switched PK from key_hash to id")
+
+        # 3. Ensure key_hash has a unique constraint.
+        uc_result = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.table_constraints "
+                "WHERE table_name = 'api_keys' "
+                "AND constraint_type = 'UNIQUE' "
+                "AND table_schema = current_schema() "
+                "AND constraint_name = 'uq_api_keys_key_hash'"
+            )
+        )
+        if uc_result.first() is None:
+            # Only add if key_hash doesn't already have a unique index.
+            has_any_unique = await conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.table_constraints "
+                    "WHERE table_name = 'api_keys' "
+                    "AND constraint_type = 'UNIQUE' "
+                    "AND table_schema = current_schema() "
+                    "AND constraint_name LIKE '%key_hash%'"
+                )
+            )
+            if has_any_unique.first() is None:
+                await conn.execute(
+                    text(
+                        "ALTER TABLE api_keys "
+                        "ADD CONSTRAINT uq_api_keys_key_hash UNIQUE (key_hash)"
+                    )
+                )
+                logger.info("migrate_auth_schema: added UNIQUE constraint on key_hash")
 
 
 def get_engine() -> AsyncEngine | None:
@@ -85,6 +221,10 @@ async def init_db(
                         tables=core_tables,  # type: ignore[arg-type]
                     )
                 )
+
+        # Run identity schema migration after create_all so that all
+        # referenced tables (users, workspaces, api_keys) exist.
+        await migrate_auth_schema(_engine)
     except BaseException:
         # Engine was created but schema init failed — dispose to
         # prevent leaking the connection pool.  Re-raise so the

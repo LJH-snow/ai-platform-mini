@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from app.api.admin import router as admin_router
 from app.api.agent import router as agent_router
+from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.health import router as health_router
@@ -15,6 +16,7 @@ from app.api.models import router as models_router
 from app.api.openai import router as openai_router
 from app.api.rag import router as rag_router
 from app.api.workflows import router as workflows_router
+from app.api.workspaces import router as workspaces_router
 from app.core.container import (
     clear_container_cache,
     provide_embedder,
@@ -213,6 +215,8 @@ def create_app() -> FastAPI:
         app.add_middleware(TelemetryMiddleware)
     register_exception_handlers(app)
     app.include_router(health_router)
+    app.include_router(auth_router)
+    app.include_router(workspaces_router)
     app.include_router(models_router)
     app.include_router(chat_router)
     app.include_router(conversations_router)

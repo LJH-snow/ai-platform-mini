@@ -378,3 +378,10 @@ def clear_container_cache() -> None:
     auth_admin_key_hashes_cache = getattr(auth_admin_key_hashes, "cache_clear", None)
     if auth_admin_key_hashes_cache is not None:
         auth_admin_key_hashes_cache()
+
+    try:
+        from app.api.auth import _clear_auth_service_caches
+
+        _clear_auth_service_caches()
+    except Exception:
+        pass

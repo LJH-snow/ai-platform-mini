@@ -26,9 +26,20 @@ class APIKeyService:
         if record.status != "active":
             raise AuthenticationError("API key is disabled.")
         await self._throttled_touch(key_hash)
-        return APIKey(key=key_hash, name=record.name)
+        return APIKey(
+            key=key_hash,
+            name=record.name,
+            id=record.id,
+            user_id=record.user_id,
+            workspace_id=record.workspace_id,
+        )
 
-    async def create_key(self, name: str) -> tuple[APIKeyMetadata, str]:
+    async def create_key(
+        self,
+        name: str,
+        user_id: str | None = None,
+        workspace_id: str | None = None,
+    ) -> tuple[APIKeyMetadata, str]:
         raw_key = f"sk-{secrets.token_urlsafe(32)}"
         key_hash = hash_api_key(raw_key)
         now = datetime.now(UTC)
@@ -36,11 +47,14 @@ class APIKeyService:
             key_hash=key_hash,
             name=name,
             status="active",
+            user_id=user_id,
+            workspace_id=workspace_id,
             created_at=now,
         )
         saved = await self._repository.create_key(record)
         logger.info("api_key_created name=%s", name)
         metadata = APIKeyMetadata(
+            id=saved.id,
             key_hash_prefix=saved.key_hash[:8],
             name=saved.name,
             status=saved.status,
