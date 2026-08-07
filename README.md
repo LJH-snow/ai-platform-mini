@@ -21,6 +21,7 @@
 - HR 演示闭环：平台概览 → Agent 工作流 → RAG 知识库 → Trace/来源审计 → 管理员用量与 Run 审计均已接通真实后端能力。
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Agent 配置层（Sprint B 批 A）：`AgentDefinitionService` 把 `Agent = Model + Prompt(版本) + Tools(白名单)` 落库；`POST /api/v1/agent/runs` 支持 `{agent_id}` 解析（model/prompt_ref/max_steps/工具白名单），显式请求字段覆盖定义；Prompt Registry 按 workspace 隔离模板并支持版本激活/回滚；Agent CRUD 全链路 IDOR 隔离（无 workspace 的 Key 统一 404/400）
+- Agent 配置前端（Sprint B 收尾）：PromptStudio 已服务端化（版本历史 + 保存即新版本 + 设为当前版本/回滚）；新增 Agent Studio（模型/Prompt 版本/工具勾选/步数/温度）与 Tool Center（workspace 级启用开关 + JSON Schema 展示）；run 审计 payload 记录 agent_id + prompt_ref
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
   - PostgreSQL/pgvector integration suite：通过
@@ -76,6 +77,8 @@
 - **运行时解析**：`POST /api/v1/agent/runs` 传 `{agent_id}` 时，`AgentService` 从定义解析 `model`/`max_steps`/工具白名单/`prompt_ref`；未传时行为与现状完全一致。显式请求字段（Pydantic `model_fields_set`）覆盖定义，未显式设置则用定义值——无魔法默认值比较。
 - **Prompt Registry**：`GET/POST /api/v1/prompts`、`POST /api/v1/prompts/{name}/activate {version}`；模板按 `(workspace_id, name)` 隔离，每名至多一个 active 版本，激活旧版本即回滚。渲染层级：agent `prompt_ref` 模板 → RAG preset → 决策协议（内置常量回退，registry 空/停用时 Agent 仍可运行）。
 - **Tool seeds**：启动时把内置常量与工具 schema 写入 `prompt_templates`/`tools` 表；schema 从工具类导出（`CalculatorTool()`/`KnowledgeSearchTool`），seed 与运行时注册表零漂移。MCP 工具同样注册进定义校验注册表，Agent 白名单可绑定 MCP 工具。
+- **Workspace 级工具启用**：`PUT /api/v1/tools/{name}` 开关（`workspace_tools` 表，缺省继承 `enabled_by_default`）；Agent 创建/更新时白名单按 workspace 生效状态校验（禁用工具绑定被拒）。
+- **run 审计**：`agent_run_records.payload` 记录 `agent_id` + 解析后的 `prompt_ref`（roadmap B5）。
 - **流式一致性**：SSE 流式最终答案复用与 `decide()` 相同的 system prompt 构建（含 prompt_ref/RAG/协议层与工具段），token 预留估算同步修正。
 - **Agent Benchmark**：`POST /api/v1/benchmarks/run {agent_id, task_set}` 通过真实 AgentService 逐任务执行 golden 任务集（default 集含 calculator/knowledge_search 场景），产出四项指标（Tool Call Accuracy / Task Completion Rate / Average Steps / Latency）落 `agent_benchmark_runs` 表；`GET /api/v1/benchmarks/runs` 按 workspace 读取（可传 `agent_id` 过滤）。任务级失败不中断整个集合并计入 completion rate；`max_steps` 可选——省略时使用 agent 定义的步数上限（与生产请求语义一致），显式传值可统一/限制评估成本；Average Steps/Latency 只统计 completed 任务，避免早期失败拉低均值。benchmark 与 agent CRUD 共用同一 IDOR 边界（无 workspace 的 Key 统一 404，跨 workspace agent 拒绝执行）。
 

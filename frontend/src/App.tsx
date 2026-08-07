@@ -37,7 +37,10 @@ import { createKnowledgeClient } from './platform/knowledge.ts'
 import { createPlatformClient } from './platform/client.ts'
 import { KnowledgeBase } from './platform/KnowledgeBase.tsx'
 import { ModelCatalog } from './platform/ModelCatalog.tsx'
+import { AgentStudio } from './platform/AgentStudio.tsx'
+import { createConfigClient } from './platform/config-client.ts'
 import { PromptStudio } from './platform/PromptStudio.tsx'
+import { ToolCenter } from './platform/ToolCenter.tsx'
 import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
 import { createWorkflowClient } from './workflow/client.ts'
@@ -46,7 +49,7 @@ import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
-type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members'
+type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members' | 'agents' | 'tools'
 type RequestStatus =
   | 'idle'
   | 'sending'
@@ -553,6 +556,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const platformClient = useMemo(
     () =>
       createPlatformClient({
+        apiBaseUrl: runtimeConfig.apiBaseUrl,
+        apiKey: effectiveApiKey,
+      }),
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
+  )
+  const configClient = useMemo(
+    () =>
+      createConfigClient({
         apiBaseUrl: runtimeConfig.apiBaseUrl,
         apiKey: effectiveApiKey,
       }),
@@ -1245,6 +1256,8 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       { id: 'workflow', label: 'PDF 工作流', shortLabel: '工作流' },
       { id: 'knowledge', label: '知识库', shortLabel: 'RAG' },
       { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
+      { id: 'agents', label: 'Agent Studio', shortLabel: 'Agent' },
+      { id: 'tools', label: 'Tool Center', shortLabel: '工具' },
       { id: 'models', label: '模型目录', shortLabel: '模型' },
     ]
 
@@ -1435,7 +1448,15 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     )
   }
   if (page === 'prompts') {
-    return renderPlatformShell(<PromptStudio onUsePrompt={navigateToConsole} />)
+    return renderPlatformShell(
+      <PromptStudio client={configClient} onUsePrompt={navigateToConsole} />,
+    )
+  }
+  if (page === 'agents') {
+    return renderPlatformShell(<AgentStudio client={configClient} />)
+  }
+  if (page === 'tools') {
+    return renderPlatformShell(<ToolCenter client={configClient} />)
   }
   if (page === 'models') {
     return renderPlatformShell(

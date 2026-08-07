@@ -2,13 +2,15 @@ import '@testing-library/jest-dom/vitest'
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Dashboard } from './Dashboard.tsx'
 import { KnowledgeBase } from './KnowledgeBase.tsx'
 import { ModelCatalog } from './ModelCatalog.tsx'
+import { AgentStudio } from './AgentStudio.tsx'
+import type { ConfigClient } from './config-client.ts'
 import { PromptStudio } from './PromptStudio.tsx'
-import { defaultTemplates, STORAGE_KEY } from './prompt-data.ts'
+import { ToolCenter } from './ToolCenter.tsx'
 import type { PlatformClient } from './client.ts'
 
 const createClient = (listModels: PlatformClient['listModels']): PlatformClient => ({
@@ -17,19 +19,6 @@ const createClient = (listModels: PlatformClient['listModels']): PlatformClient 
 
 afterEach(() => {
   cleanup()
-})
-
-beforeEach(() => {
-  const values = new Map<string, string>()
-  Object.defineProperty(window, 'localStorage', {
-    configurable: true,
-    value: {
-      clear: () => values.clear(),
-      getItem: (key: string) => values.get(key) ?? null,
-      removeItem: (key: string) => values.delete(key),
-      setItem: (key: string, value: string) => values.set(key, value),
-    } satisfies Pick<Storage, 'clear' | 'getItem' | 'removeItem' | 'setItem'>,
-  })
 })
 
 describe('Dashboard', () => {
@@ -77,40 +66,262 @@ describe('ModelCatalog', () => {
   })
 })
 
+const createConfigClient = (overrides: Partial<ConfigClient> = {}): ConfigClient => ({
+  listPrompts: vi.fn(async () => [
+    {
+      name: 'custom_prompt',
+      active_version: 2,
+      versions: [
+        { version: 1, is_active: false },
+        { version: 2, is_active: true },
+      ],
+    },
+  ]),
+  getPromptVersions: vi.fn(async () => [
+    { name: 'custom_prompt', version: 1, content: 'v1 content', is_active: false },
+    { name: 'custom_prompt', version: 2, content: 'v2 content', is_active: true },
+  ]),
+  createPromptVersion: vi.fn(async () => ({
+    name: 'custom_prompt',
+    version: 3,
+    content: '',
+    is_active: false,
+  })),
+  activatePrompt: vi.fn(async () => ({
+    name: 'custom_prompt',
+    version: 2,
+    content: '',
+    is_active: true,
+  })),
+  listTools: vi.fn(async () => [
+    {
+      name: 'calculator',
+      description: 'Evaluate arithmetic expressions.',
+      parameters_schema: { type: 'object' },
+      enabled_by_default: true,
+      owner: 'builtin',
+      enabled: true,
+    },
+  ]),
+  setToolEnabled: vi.fn(async () => ({
+    name: 'calculator',
+    description: 'Evaluate arithmetic expressions.',
+    parameters_schema: { type: 'object' },
+    enabled_by_default: true,
+    owner: 'builtin',
+    enabled: true,
+  })),
+  listAgents: vi.fn(async () => []),
+  createAgent: vi.fn(async () => ({
+    id: 'agent-1',
+    workspace_id: 'ws-1',
+    name: 'a',
+    model: 'm',
+    prompt_ref: '',
+    temperature: 0.7,
+    max_steps: 10,
+    enabled: true,
+    tool_names: [],
+  })),
+  updateAgent: vi.fn(async () => ({
+    id: 'agent-1',
+    workspace_id: 'ws-1',
+    name: 'a',
+    model: 'm',
+    prompt_ref: '',
+    temperature: 0.7,
+    max_steps: 10,
+    enabled: true,
+    tool_names: [],
+  })),
+  deleteAgent: vi.fn(async () => null),
+  ...overrides,
+})
+
 describe('PromptStudio', () => {
-  it('edits, saves, restores, and injects a prompt into the console flow', async () => {
+  it('loads prompts, shows the active version, and injects it into the console', async () => {
     const user = userEvent.setup()
     const onUsePrompt = vi.fn()
-    render(<PromptStudio onUsePrompt={onUsePrompt} />)
+    render(<PromptStudio client={createConfigClient()} onUsePrompt={onUsePrompt} />)
 
-    const prompt = screen.getByLabelText('系统提示词')
-    await user.clear(prompt)
-    await user.type(prompt, '新的系统指令')
-    await user.click(screen.getByRole('button', { name: '保存模板' }))
+    await screen.findByRole('button', { name: /custom_prompt/ })
+    const editor = screen.getByLabelText('Prompt 内容')
+    await waitFor(() => expect(editor).toHaveValue('v2 content'))
+    expect(screen.getByText('当前 v2')).toBeInTheDocument()
 
-    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '[]')[0].prompt).toBe(
-      '新的系统指令',
-    )
-    expect(screen.getByRole('status')).toHaveTextContent('已保存到本地')
-
-    await user.click(screen.getByRole('button', { name: '恢复默认' }))
-    expect(prompt).toHaveValue(defaultTemplates[0].prompt)
-
-    await user.click(screen.getByRole('button', { name: '带入对话工作台 →' }))
-    expect(onUsePrompt).toHaveBeenCalledWith(defaultTemplates[0].example)
+    await user.click(screen.getByRole('button', { name: '使用当前版本' }))
+    expect(onUsePrompt).toHaveBeenCalledWith('v2 content')
   })
 
-  it('switches template content and keeps the editor accessible', async () => {
+  it('saves a new version through the API', async () => {
     const user = userEvent.setup()
-    render(<PromptStudio onUsePrompt={vi.fn()} />)
-
-    await user.click(screen.getByRole('button', { name: /面试模拟官/ }))
-    expect(screen.getByRole('heading', { name: '面试模拟官' })).toBeInTheDocument()
-    expect(screen.getByLabelText('演示问题')).toHaveValue(defaultTemplates[2].example)
-    expect(screen.getByRole('button', { name: /面试模拟官/ })).toHaveAttribute(
-      'aria-pressed',
-      'true',
+    const createPromptVersion = vi.fn(async () => ({
+      name: 'custom_prompt',
+      version: 3,
+      content: 'v3 content',
+      is_active: false,
+    }))
+    render(
+      <PromptStudio
+        client={createConfigClient({ createPromptVersion })}
+        onUsePrompt={vi.fn()}
+      />,
     )
+
+    await screen.findByRole('button', { name: /custom_prompt/ })
+    const editor = screen.getByLabelText('Prompt 内容')
+    await waitFor(() => expect(editor).toHaveValue('v2 content'))
+    await user.clear(editor)
+    await user.type(editor, 'v3 content')
+    await user.click(screen.getByRole('button', { name: '保存为新版本' }))
+
+    expect(createPromptVersion).toHaveBeenCalledWith('custom_prompt', 'v3 content')
+    expect(await screen.findByRole('status')).toHaveTextContent('新版本已保存')
+  })
+
+  it('activates an older version (rollback) through the API', async () => {
+    const user = userEvent.setup()
+    const activatePrompt = vi.fn(async () => ({
+      name: 'custom_prompt',
+      version: 1,
+      content: 'v1 content',
+      is_active: true,
+    }))
+    render(
+      <PromptStudio
+        client={createConfigClient({ activatePrompt })}
+        onUsePrompt={vi.fn()}
+      />,
+    )
+
+    await screen.findByRole('button', { name: /custom_prompt/ })
+    const buttons = await screen.findAllByRole('button', { name: '设为当前版本' })
+    await user.click(buttons[0])
+
+    expect(activatePrompt).toHaveBeenCalledWith('custom_prompt', 1)
+    expect(await screen.findByRole('status')).toHaveTextContent('v1 已设为当前版本')
+  })
+})
+
+describe('AgentStudio', () => {
+  it('lists agents and creates a new one with tool whitelist', async () => {
+    const user = userEvent.setup()
+    const listAgents = vi.fn(async () => [
+      {
+        id: 'agent-1',
+        workspace_id: 'ws-1',
+        name: '研究助手',
+        model: 'qwen3:4b',
+        prompt_ref: '',
+        temperature: 0.7,
+        max_steps: 10,
+        enabled: true,
+        tool_names: ['calculator'],
+      },
+    ])
+    const createAgent = vi.fn(async () => ({
+      id: 'agent-2',
+      workspace_id: 'ws-1',
+      name: '新助手',
+      model: 'qwen3:4b',
+      prompt_ref: '',
+      temperature: 0.7,
+      max_steps: 10,
+      enabled: true,
+      tool_names: ['calculator'],
+    }))
+    render(<AgentStudio client={createConfigClient({ listAgents, createAgent })} />)
+
+    await screen.findByText('研究助手')
+    await user.type(screen.getByLabelText('名称'), '新助手')
+    await user.type(screen.getByLabelText('模型'), 'qwen3:4b')
+    await user.click(screen.getByRole('checkbox', { name: 'calculator' }))
+    await user.click(screen.getByRole('button', { name: '创建' }))
+
+    expect(createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '新助手', tool_names: ['calculator'] }),
+    )
+    expect(await screen.findByRole('status')).toHaveTextContent('Agent 已创建')
+  })
+
+  it('edits an existing agent and deletes it', async () => {
+    const user = userEvent.setup()
+    const listAgents = vi.fn(async () => [
+      {
+        id: 'agent-1',
+        workspace_id: 'ws-1',
+        name: '研究助手',
+        model: 'qwen3:4b',
+        prompt_ref: '',
+        temperature: 0.7,
+        max_steps: 10,
+        enabled: true,
+        tool_names: [],
+      },
+    ])
+    const updateAgent = vi.fn(async () => ({
+      id: 'agent-1',
+      workspace_id: 'ws-1',
+      name: '研究助手',
+      model: 'qwen3:4b',
+      prompt_ref: '',
+      temperature: 0.7,
+      max_steps: 5,
+      enabled: true,
+      tool_names: [],
+    }))
+    const deleteAgent = vi.fn(async () => null)
+    render(
+      <AgentStudio client={createConfigClient({ listAgents, updateAgent, deleteAgent })} />,
+    )
+
+    await screen.findByText('研究助手')
+    await user.click(screen.getByRole('button', { name: /研究助手/ }))
+    await user.clear(screen.getByLabelText('最大步数'))
+    await user.type(screen.getByLabelText('最大步数'), '5')
+    await user.click(screen.getByRole('button', { name: '保存修改' }))
+
+    expect(updateAgent).toHaveBeenCalledWith(
+      'agent-1',
+      expect.objectContaining({ max_steps: 5 }),
+    )
+    expect(await screen.findByRole('status')).toHaveTextContent('Agent 已更新')
+
+    await user.click(screen.getByRole('button', { name: '删除' }))
+    expect(deleteAgent).toHaveBeenCalledWith('agent-1')
+  })
+})
+
+describe('ToolCenter', () => {
+  it('lists tools, expands the schema, and toggles enablement', async () => {
+    const user = userEvent.setup()
+    const listTools = vi.fn(async () => [
+      {
+        name: 'calculator',
+        description: 'Evaluate arithmetic expressions.',
+        parameters_schema: { type: 'object', properties: { expression: { type: 'string' } } },
+        enabled_by_default: true,
+        owner: 'builtin',
+        enabled: true,
+      },
+    ])
+    const setToolEnabled = vi.fn(async () => ({
+      name: 'calculator',
+      description: 'Evaluate arithmetic expressions.',
+      parameters_schema: { type: 'object' },
+      enabled_by_default: true,
+      owner: 'builtin',
+      enabled: false,
+    }))
+    render(<ToolCenter client={createConfigClient({ listTools, setToolEnabled })} />)
+
+    await screen.findByText('calculator')
+    await user.click(screen.getByRole('button', { name: '展开 Schema' }))
+    expect(screen.getByText(/"expression"/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox'))
+    expect(setToolEnabled).toHaveBeenCalledWith('calculator', false)
+    expect(await screen.findByRole('status')).toHaveTextContent('已禁用')
   })
 })
 

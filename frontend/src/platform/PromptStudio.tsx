@@ -1,144 +1,178 @@
 import { useEffect, useMemo, useState, type JSX } from 'react'
 
-import { defaultTemplates, STORAGE_KEY, type PromptTemplate } from './prompt-data.ts'
+import { ConfigApiError, type ConfigClient, type PromptSummary } from './config-client.ts'
 
 type PromptStudioProps = {
+  client: ConfigClient
   onUsePrompt: (prompt: string) => void
 }
 
-const readTemplates = (): PromptTemplate[] => {
-  if (typeof window === 'undefined') return defaultTemplates
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY)
-    if (!stored) return defaultTemplates
-    const parsed: unknown = JSON.parse(stored)
-    return Array.isArray(parsed) && parsed.length > 0
-      ? (parsed as PromptTemplate[])
-      : defaultTemplates
-  } catch {
-    return defaultTemplates
+export function PromptStudio({ client, onUsePrompt }: PromptStudioProps): JSX.Element {
+  const [prompts, setPrompts] = useState<PromptSummary[]>([])
+  const [selectedName, setSelectedName] = useState<string | null>(null)
+  const [versions, setVersions] = useState<
+    Array<{ version: number; content: string; is_active: boolean }>
+  >([])
+  const [draft, setDraft] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const loadPrompts = async (): Promise<void> => {
+    setLoading(true)
+    setError(null)
+    try {
+      const items = await client.listPrompts()
+      setPrompts(items)
+      if (selectedName === null && items.length > 0) {
+        setSelectedName(items[0].name)
+      }
+    } catch (caught) {
+      setError(caught instanceof ConfigApiError ? caught.message : 'Prompt 列表加载失败。')
+    } finally {
+      setLoading(false)
+    }
   }
-}
 
-export function PromptStudio({ onUsePrompt }: PromptStudioProps): JSX.Element {
-  const [templates, setTemplates] = useState<PromptTemplate[]>(readTemplates)
-  const [selectedId, setSelectedId] = useState(defaultTemplates[0].id)
-  const [saved, setSaved] = useState(false)
-
-  const selected = useMemo(
-    () => templates.find((template) => template.id === selectedId) ?? templates[0],
-    [selectedId, templates],
-  )
+  const loadVersions = async (name: string): Promise<void> => {
+    setError(null)
+    try {
+      const items = await client.getPromptVersions(name)
+      setVersions(items)
+      const active = items.find((item) => item.is_active)
+      setDraft(active?.content ?? items[0]?.content ?? '')
+    } catch (caught) {
+      setVersions([])
+      setDraft('')
+      setError(caught instanceof ConfigApiError ? caught.message : '版本列表加载失败。')
+    }
+  }
 
   useEffect(() => {
-    if (!selected && templates.length > 0) setSelectedId(templates[0].id)
-  }, [selected, templates])
+    void loadPrompts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client])
 
-  const updateSelected = (patch: Partial<PromptTemplate>): void => {
-    setTemplates((current) =>
-      current.map((template) =>
-        template.id === selected?.id ? { ...template, ...patch } : template,
-      ),
-    )
-    setSaved(false)
+  useEffect(() => {
+    if (selectedName !== null) {
+      void loadVersions(selectedName)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedName])
+
+  const selected = useMemo(
+    () => prompts.find((prompt) => prompt.name === selectedName) ?? null,
+    [prompts, selectedName],
+  )
+
+  const saveVersion = async (): Promise<void> => {
+    if (selectedName === null || !draft.trim()) return
+    setNotice(null)
+    setError(null)
+    try {
+      await client.createPromptVersion(selectedName, draft)
+      setNotice('新版本已保存。')
+      await loadVersions(selectedName)
+      await loadPrompts()
+    } catch (caught) {
+      setError(caught instanceof ConfigApiError ? caught.message : '保存失败。')
+    }
   }
 
-  const saveTemplates = (): void => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(templates))
-    setSaved(true)
+  const activateVersion = async (version: number): Promise<void> => {
+    if (selectedName === null) return
+    setError(null)
+    try {
+      await client.activatePrompt(selectedName, version)
+      setNotice(`版本 v${version} 已设为当前版本。`)
+      await loadVersions(selectedName)
+      await loadPrompts()
+    } catch (caught) {
+      setError(caught instanceof ConfigApiError ? caught.message : '激活失败。')
+    }
   }
 
-  const restoreSelected = (): void => {
-    const original = defaultTemplates.find((template) => template.id === selected?.id)
-    if (original)
-      setTemplates((current) => current.map((item) => (item.id === original.id ? original : item)))
-    setSaved(false)
-  }
-
-  if (!selected) {
-    return <section className="platformPage">暂无可用 Prompt 模板。</section>
+  const useActivePrompt = (): void => {
+    if (selectedName === null) return
+    const content = versions.find((item) => item.is_active)?.content ?? draft
+    if (content) onUsePrompt(content)
   }
 
   return (
-    <section className="platformPage" aria-labelledby="prompt-studio-title">
-      <div className="pageIntro compactPageIntro">
-        <div>
-          <p className="pageKicker">PROMPT STUDIO · TEMPLATES</p>
-          <h1 id="prompt-studio-title">Prompt Studio</h1>
-          <p className="pageLead">
-            把一次性的提示词整理成可复用的工作流入口，保存后可以直接带入真实对话。
-          </p>
-        </div>
-        <span className="studioSavedState" role="status">
-          {saved ? '已保存到本地' : '本地草稿'}
-        </span>
+    <section className="platformPage">
+      <div className="pageHeader">
+        <h2>Prompt Studio</h2>
+        <p>服务端模板版本管理：保存即新版本，"设为当前版本"即回滚/切换。</p>
       </div>
 
-      <div className="promptStudioLayout">
-        <aside className="promptLibrary" aria-label="Prompt 模板列表">
-          <div className="promptLibraryHeader">
-            <span className="sectionKicker">LIBRARY</span>
-            <strong>{templates.length} templates</strong>
-          </div>
-          <div className="promptTemplateList">
-            {templates.map((template) => (
+      {loading && <p>加载中…</p>}
+      {error !== null && <p className="inlineError" role="alert">{error}</p>}
+      {notice !== null && <p className="inlineNotice" role="status">{notice}</p>}
+
+      {!loading && prompts.length === 0 && error === null && (
+        <p>暂无 Prompt 模板。请先在后端 seed 内置模板（应用启动时自动完成）。</p>
+      )}
+
+      {prompts.length > 0 && (
+        <div className="studioLayout">
+          <aside className="promptList" aria-label="Prompt 模板列表">
+            {prompts.map((prompt) => (
               <button
+                key={prompt.name}
                 type="button"
-                className={
-                  template.id === selected.id
-                    ? 'promptTemplate promptTemplateActive'
-                    : 'promptTemplate'
-                }
-                key={template.id}
-                onClick={() => {
-                  setSelectedId(template.id)
-                  setSaved(false)
-                }}
-                aria-pressed={template.id === selected.id}
+                className={prompt.name === selectedName ? 'active' : ''}
+                onClick={() => setSelectedName(prompt.name)}
               >
-                <span>{template.name}</span>
-                <small>{template.category}</small>
+                <strong>{prompt.name}</strong>
+                <span>
+                  {prompt.active_version === null
+                    ? '未激活'
+                    : `当前 v${prompt.active_version}`}
+                </span>
               </button>
             ))}
-          </div>
-        </aside>
+          </aside>
 
-        <article className="promptEditorCard">
-          <div className="promptEditorHeader">
-            <div>
-              <span className="sectionKicker">EDIT TEMPLATE</span>
-              <h2>{selected.name}</h2>
-              <p>{selected.description}</p>
+          {selected !== null && (
+            <div className="promptEditor">
+              <h3>{selected.name}</h3>
+              <textarea
+                aria-label="Prompt 内容"
+                value={draft}
+                rows={12}
+                onChange={(event) => setDraft(event.target.value)}
+              />
+              <div className="buttonRow">
+                <button type="button" onClick={() => void saveVersion()}>
+                  保存为新版本
+                </button>
+                <button type="button" onClick={useActivePrompt}>
+                  使用当前版本
+                </button>
+              </div>
+
+              <h4>版本历史</h4>
+              <ul className="versionList">
+                {versions.map((item) => (
+                  <li key={item.version}>
+                    <span>
+                      v{item.version}
+                      {item.is_active ? '（当前）' : ''}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={item.is_active}
+                      onClick={() => void activateVersion(item.version)}
+                    >
+                      设为当前版本
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
-            <span className="promptCategory">{selected.category}</span>
-          </div>
-          <label htmlFor="prompt-content">系统提示词</label>
-          <textarea
-            id="prompt-content"
-            value={selected.prompt}
-            onChange={(event) => updateSelected({ prompt: event.target.value })}
-            rows={8}
-          />
-          <label htmlFor="prompt-example">演示问题</label>
-          <textarea
-            id="prompt-example"
-            value={selected.example}
-            onChange={(event) => updateSelected({ example: event.target.value })}
-            rows={3}
-          />
-          <div className="promptEditorActions">
-            <button type="button" onClick={() => onUsePrompt(selected.example)}>
-              带入对话工作台 →
-            </button>
-            <button type="button" className="secondaryButton" onClick={restoreSelected}>
-              恢复默认
-            </button>
-            <button type="button" className="secondaryButton" onClick={saveTemplates}>
-              保存模板
-            </button>
-          </div>
-        </article>
-      </div>
+          )}
+        </div>
+      )}
     </section>
   )
 }
