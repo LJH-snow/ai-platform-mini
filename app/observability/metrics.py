@@ -12,6 +12,7 @@ from opentelemetry.sdk.metrics.export import (
 )
 
 from app.core.settings import Settings
+from app.observability.tracing import _normalize_otlp_base
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +61,10 @@ def setup_metrics(
 
 
 def _otlp_metrics_endpoint(settings: Settings) -> str:
-    """Return the OTLP metrics endpoint, appending the path when missing."""
+    """Return the OTLP metrics endpoint, normalizing the base first."""
 
-    endpoint = settings.telemetry_otlp_endpoint
-    if endpoint.endswith(_METRICS_PATH):
-        return endpoint
-    return f"{endpoint.rstrip('/')}{_METRICS_PATH}"
+    base = _normalize_otlp_base(settings.telemetry_otlp_endpoint)
+    return f"{base}{_METRICS_PATH}"
 
 
 def shutdown_metrics() -> None:

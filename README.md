@@ -237,7 +237,7 @@ Ollama 请求增加可配置的上下文窗口，并确保 Agent/RAG 提示词�
 
 ## Evaluation Foundation
 
-Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序执行 runner：评测用例通过 JSONL 保存，runner 接受可注入的异步 `run_case`，不会调用真实 LLM 或外网。单用例结果记录状态、成功与否、答案/工具判定、工具序列、步骤、延迟、Token 用量和错误；汇总提供任务成功率、声明工具期望用例的 tool selection accuracy、平均步骤、p95 延迟和 Token 总量/均值。`tests/fixtures/evals/agent_golden.jsonl` 是 30 条本地契约 fixture，覆盖 direct-answer、calculator 和 knowledge_search，它明确不是线上模型结果，也不包含密钥。当前尚未接入真实模型 CI 或数据库报表；RAG 离线评测入口与指标已实现，见下方 RAG 评估。
+Evaluation Foundation 提供离线、确定性的 golden data contract 与顺序执行 runner：评测用例通过 JSONL 保存，runner 接受可注入的异步 `run_case`，不会调用真实 LLM 或外网。单用例结果记录状态、成功与否、答案/工具判定、工具序列、步骤、延迟、Token 用量和错误；汇总提供任务成功率、声明工具期望用例的 tool selection accuracy、平均步骤、p95 延迟和 Token 总量/均值。`tests/fixtures/evals/agent_golden.jsonl` 是 30 条本地契约 fixture，覆盖 direct-answer、calculator 和 knowledge_search，它明确不是线上模型结果，也不包含密钥。RAG 离线评测入口与指标已实现（见下方 RAG 评估），RAG 评估已支持 CI 回归阈值断言和 `rag_evaluation_runs` 数据库持久化报告（Sprint 15）；Agent 评估的 CI 回归和数据库报表待后续实现。
 
 ### RAG 评估
 
@@ -259,7 +259,7 @@ python scripts/evaluate_rag.py tests/fixtures/evals/rag_golden.jsonl \
 
 需要 `RAG_ENABLED=true`、PostgreSQL/pgvector 与 Ollama。`--retriever embedding` 直接注入生产 `Embedder` + `VectorStore`，评估原始检索质量；`--retriever service` 复用 `RAGService.prepare` 路径，保留生产环境的分块/上下文截断语义。脚本输出 `.json` 和 `.md` 报告。离线测试使用 `tests/fixtures/evals/rag_golden.jsonl` 与 fake retriever，不调用真实模型。
 
-当前覆盖指标：`context_recall_at_k`、`document_recall_at_k`、`chunk_recall_at_k`、检索成功率、平均检索分块数、p95 延迟，以及可选 answer fragment 正确率。后续可扩展：`precision@k`/MRR/nDCG、LLM-as-judge 的 faithfulness/answer correctness、CI 报告和数据库报表。
+当前覆盖指标：`context_recall_at_k`、`document_recall_at_k`、`chunk_recall_at_k`、检索成功率、平均检索分块数、p95 延迟，以及可选 answer fragment 正确率；CI 回归阈值断言和数据库持久化报告已实现（Sprint 15）。后续可扩展：`precision@k`/MRR/nDCG、LLM-as-judge 的 faithfulness/answer correctness、Agent 评估的 CI 回归和数据库报表。
 
 默认不引入 RAGAS：当前指标都是确定性、离线可复现的检索召回指标；RAGAS 的 LLM-as-judge 指标需要真实模型调用、对模型版本敏感且结果不可完全复现，适合后续作为可选扩展而不是基础依赖。
 

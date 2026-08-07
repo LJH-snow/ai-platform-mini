@@ -945,3 +945,59 @@ def test_request_id_correlates_agent_span(
     for span in spans:
         assert _attributes(span)["app.request_id"] == "req-agent-1"
     assert _attributes(spans[0])["app.request_id"] == "req-agent-1"
+
+
+# ── OTLP endpoint construction ──────────────────────────────────────────
+
+
+def test_otlp_traces_endpoint_plain_base() -> None:
+    from app.observability.tracing import _otlp_traces_endpoint
+
+    settings = _make_telemetry_settings(otlp_endpoint="http://localhost:4318")
+    assert _otlp_traces_endpoint(settings) == "http://localhost:4318/v1/traces"
+
+
+def test_otlp_traces_endpoint_already_has_traces_path() -> None:
+    from app.observability.tracing import _otlp_traces_endpoint
+
+    settings = _make_telemetry_settings(otlp_endpoint="http://localhost:4318/v1/traces")
+    assert _otlp_traces_endpoint(settings) == "http://localhost:4318/v1/traces"
+
+
+def test_otlp_traces_endpoint_has_metrics_path() -> None:
+    from app.observability.tracing import _otlp_traces_endpoint
+
+    settings = _make_telemetry_settings(
+        otlp_endpoint="http://localhost:4318/v1/metrics"
+    )
+    assert _otlp_traces_endpoint(settings) == "http://localhost:4318/v1/traces"
+
+
+def test_otlp_metrics_endpoint_plain_base() -> None:
+    from app.observability.metrics import _otlp_metrics_endpoint
+
+    settings = _make_telemetry_settings(otlp_endpoint="http://localhost:4318")
+    assert _otlp_metrics_endpoint(settings) == "http://localhost:4318/v1/metrics"
+
+
+def test_otlp_metrics_endpoint_already_has_metrics_path() -> None:
+    from app.observability.metrics import _otlp_metrics_endpoint
+
+    settings = _make_telemetry_settings(
+        otlp_endpoint="http://localhost:4318/v1/metrics"
+    )
+    assert _otlp_metrics_endpoint(settings) == "http://localhost:4318/v1/metrics"
+
+
+def test_otlp_metrics_endpoint_has_traces_path() -> None:
+    from app.observability.metrics import _otlp_metrics_endpoint
+
+    settings = _make_telemetry_settings(otlp_endpoint="http://localhost:4318/v1/traces")
+    assert _otlp_metrics_endpoint(settings) == "http://localhost:4318/v1/metrics"
+
+
+def _make_telemetry_settings(otlp_endpoint: str) -> Settings:
+    return Settings(
+        telemetry_enabled=True,
+        telemetry_otlp_endpoint=otlp_endpoint,  # type: ignore[call-arg]
+    )
