@@ -1,12 +1,18 @@
 import logging
 from collections.abc import Iterable
-from datetime import date
+from datetime import date, timedelta
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import DailyUsageTable
-from app.usage.models import UsageAggregation, UsageRecord, UsageSummary
+from app.usage.models import (
+    UsageAggregation,
+    UsageRanking,
+    UsageRecord,
+    UsageSummary,
+    WorkspaceUsagePoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +106,94 @@ class PostgresUsageRepository:
             stmt = select(DailyUsageTable)
             rows = await session.scalars(stmt)
             return self._summarize(rows)
+
+    async def get_workspace_trend(
+        self, owner_scope: str, days: int
+    ) -> list[WorkspaceUsagePoint]:
+        """Aggregate total tokens and requests per day for one tenant scope."""
+        start = date.today() - timedelta(days=days - 1)
+        async with self._session_factory() as session:
+            stmt = (
+                select(
+                    DailyUsageTable.usage_date,
+                    func.sum(DailyUsageTable.total_tokens).label("total_tokens"),
+                    func.sum(DailyUsageTable.request_count).label("request_count"),
+                )
+                .where(
+                    or_(
+                        DailyUsageTable.workspace_id == owner_scope,
+                        and_(
+                            DailyUsageTable.workspace_id.is_(None),
+                            DailyUsageTable.api_key_hash == owner_scope,
+                        ),
+                    ),
+                    DailyUsageTable.usage_date >= start,
+                )
+                .group_by(DailyUsageTable.usage_date)
+                .order_by(DailyUsageTable.usage_date)
+            )
+            rows = await session.execute(stmt)
+            return [
+                WorkspaceUsagePoint(
+                    usage_date=row.usage_date.isoformat(),
+                    total_tokens=int(row.total_tokens or 0),
+                    request_count=int(row.request_count or 0),
+                )
+                for row in rows.all()
+            ]
+
+    async def get_workspace_model_ranking(
+        self, owner_scope: str, days: int
+    ) -> list[UsageRanking]:
+        return await self._workspace_ranking(owner_scope, days, "model")
+
+    async def get_workspace_key_ranking(
+        self, owner_scope: str, days: int
+    ) -> list[UsageRanking]:
+        return await self._workspace_ranking(owner_scope, days, "key")
+
+    async def _workspace_ranking(
+        self, owner_scope: str, days: int, dimension: str
+    ) -> list[UsageRanking]:
+        start = date.today() - timedelta(days=days - 1)
+        column = (
+            DailyUsageTable.model
+            if dimension == "model"
+            else DailyUsageTable.api_key_hash
+        )
+        async with self._session_factory() as session:
+            stmt = (
+                select(
+                    column.label("name"),
+                    func.sum(DailyUsageTable.total_tokens).label("total_tokens"),
+                    func.sum(DailyUsageTable.request_count).label("request_count"),
+                )
+                .where(
+                    or_(
+                        DailyUsageTable.workspace_id == owner_scope,
+                        and_(
+                            DailyUsageTable.workspace_id.is_(None),
+                            DailyUsageTable.api_key_hash == owner_scope,
+                        ),
+                    ),
+                    DailyUsageTable.usage_date >= start,
+                )
+                .group_by(column)
+                .order_by(func.sum(DailyUsageTable.total_tokens).desc())
+            )
+            rows = await session.execute(stmt)
+            rankings = [
+                UsageRanking(
+                    name=str(row.name),
+                    total_tokens=int(row.total_tokens or 0),
+                    request_count=int(row.request_count or 0),
+                )
+                for row in rows.all()
+            ]
+            if dimension == "key":
+                for ranking in rankings:
+                    ranking.name = ranking.name[:8]
+            return rankings
 
     async def get_summary_for_key(self, api_key_hash: str) -> UsageSummary:
         async with self._session_factory() as session:

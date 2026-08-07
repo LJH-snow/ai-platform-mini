@@ -11,6 +11,12 @@ from app.usage.service import UsageService
 logger = logging.getLogger(__name__)
 
 
+def _workspace_id(context: RequestContext) -> str | None:
+    """Resolve the run's workspace id for usage tenant scoping."""
+    identity = context.identity
+    return identity.workspace_id if identity else None
+
+
 class UsageCollector:
     def __init__(self, usage_service: UsageService) -> None:
         self._service = usage_service
@@ -32,6 +38,7 @@ class UsageCollector:
             latency_ms=latency_ms,
             api_key_name=context.api_key_name,
             api_key_hash=context.api_key,
+            workspace_id=_workspace_id(context),
         )
         await self._service.record(record)
 
@@ -59,6 +66,7 @@ class UsageCollector:
             latency_ms = (time.monotonic() - start) * 1000
             record = UsageRecord(
                 request_id=context.request_id,
+                workspace_id=_workspace_id(context),
                 model=actual_model,
                 prompt_tokens=prompt_tokens or 0,
                 completion_tokens=completion_tokens or 0,

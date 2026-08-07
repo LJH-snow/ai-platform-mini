@@ -213,6 +213,33 @@ async def migrate_benchmark_schema(engine: AsyncEngine) -> None:
         logger.info("migrate_benchmark_schema: added workspace_id column")
 
 
+async def migrate_usage_schema(engine: AsyncEngine) -> None:
+    """Idempotent migration adding workspace scoping to daily usage rows."""
+    async with engine.begin() as conn:
+        if not await _table_exists(conn, "daily_usage"):
+            return
+        result = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'daily_usage' "
+                "AND column_name = 'workspace_id' "
+                "AND table_schema = current_schema()"
+            )
+        )
+        if result.first() is not None:
+            return
+        await conn.execute(
+            text("ALTER TABLE daily_usage ADD COLUMN workspace_id VARCHAR(64)")
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_daily_usage_workspace_id "
+                "ON daily_usage (workspace_id)"
+            )
+        )
+        logger.info("migrate_usage_schema: added workspace_id column")
+
+
 async def migrate_run_records_schema(engine: AsyncEngine) -> None:
     """Idempotent migration adding workspace scoping to agent run records."""
     async with engine.begin() as conn:
@@ -302,6 +329,8 @@ async def init_db(
         await migrate_benchmark_schema(_engine)
         # Upgrade pre-existing run records that predate workspace scoping.
         await migrate_run_records_schema(_engine)
+        # Upgrade pre-existing usage rows that predate workspace scoping.
+        await migrate_usage_schema(_engine)
     except BaseException:
         # Engine was created but schema init failed — dispose to
         # prevent leaking the connection pool.  Re-raise so the

@@ -12,6 +12,7 @@ import type { ConfigClient } from './config-client.ts'
 import { PromptStudio } from './PromptStudio.tsx'
 import { RunDetail } from './RunDetail.tsx'
 import { ToolCenter } from './ToolCenter.tsx'
+import { UsageDashboardPage } from './UsageDashboard.tsx'
 import type { PlatformClient } from './client.ts'
 
 const createClient = (listModels: PlatformClient['listModels']): PlatformClient => ({
@@ -137,6 +138,11 @@ const createConfigClient = (overrides: Partial<ConfigClient> = {}): ConfigClient
   })),
   deleteAgent: vi.fn(async () => null),
   listRuns: vi.fn(async () => []),
+  getUsageDashboard: vi.fn(async () => ({
+    trend: [],
+    model_ranking: [],
+    key_ranking: [],
+  })),
   getRun: vi.fn(async () => ({
     run_id: 'run-1',
     model: 'm',
@@ -364,6 +370,56 @@ describe('RunDetail', () => {
 
     await userEvent.setup().click(screen.getByRole('button', { name: '← 返回' }))
     expect(onBack).toHaveBeenCalled()
+  })
+})
+
+describe('UsageDashboard', () => {
+  it('renders the token trend and both rankings', async () => {
+    const getUsageDashboard = vi.fn(async () => ({
+      trend: [
+        { usage_date: '2026-08-01', total_tokens: 1000, request_count: 5 },
+        { usage_date: '2026-08-02', total_tokens: 2500, request_count: 8 },
+      ],
+      model_ranking: [
+        { name: 'qwen3:4b', total_tokens: 3000, request_count: 10 },
+        { name: 'gpt-4o-mini', total_tokens: 500, request_count: 3 },
+      ],
+      key_ranking: [
+        { name: 'abcd1234', total_tokens: 3000, request_count: 10 },
+      ],
+    }))
+    render(
+      <UsageDashboardPage
+        client={createConfigClient({ getUsageDashboard })}
+      />,
+    )
+
+    expect(await screen.findByText('每日 Token 用量')).toBeInTheDocument()
+    expect(screen.getByText('按模型')).toBeInTheDocument()
+    expect(screen.getByText('qwen3:4b')).toBeInTheDocument()
+    expect(screen.getByText('按 Key')).toBeInTheDocument()
+    expect(screen.getByText('abcd1234')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '每日 Token 用量趋势' })).toBeInTheDocument()
+
+    const progress = screen.getAllByRole('progressbar')
+    expect(progress.length).toBe(3)
+  })
+
+  it('switches the time range', async () => {
+    const user = userEvent.setup()
+    const getUsageDashboard = vi.fn(async () => ({
+      trend: [],
+      model_ranking: [],
+      key_ranking: [],
+    }))
+    render(
+      <UsageDashboardPage client={createConfigClient({ getUsageDashboard })} />,
+    )
+    await screen.findByText('每日 Token 用量')
+
+    await user.selectOptions(screen.getByRole('combobox'), '30')
+
+    expect(getUsageDashboard).toHaveBeenLastCalledWith(30)
   })
 })
 

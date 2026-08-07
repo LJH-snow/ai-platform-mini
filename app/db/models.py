@@ -58,6 +58,11 @@ class DailyUsageTable(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     api_key_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # F1 tenant scoping: workspace-bound usage carries the workspace id;
+    # legacy rows keep NULL and match by key hash (same semantics as runs).
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     usage_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     request_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

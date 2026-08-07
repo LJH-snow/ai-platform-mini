@@ -20,6 +20,7 @@ from app.api.prompts import router as prompts_router
 from app.api.rag import router as rag_router
 from app.api.runs import router as runs_router
 from app.api.tools import router as tools_router
+from app.api.usage import router as usage_router
 from app.api.workflows import router as workflows_router
 from app.api.workspaces import router as workspaces_router
 from app.core.container import (
@@ -279,6 +280,7 @@ def create_app() -> FastAPI:
     app.include_router(prompts_router)
     app.include_router(agents_router)
     app.include_router(tools_router)
+    app.include_router(usage_router)
     app.include_router(benchmarks_router)
     app.include_router(models_router)
     app.include_router(chat_router)

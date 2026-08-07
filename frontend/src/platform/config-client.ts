@@ -56,6 +56,24 @@ export type RunRecordDetail = RunRecordSummary & {
   response: Record<string, unknown>
 }
 
+export type UsageTrendPoint = {
+  usage_date: string
+  total_tokens: number
+  request_count: number
+}
+
+export type UsageRankingEntry = {
+  name: string
+  total_tokens: number
+  request_count: number
+}
+
+export type UsageDashboard = {
+  trend: UsageTrendPoint[]
+  model_ranking: UsageRankingEntry[]
+  key_ranking: UsageRankingEntry[]
+}
+
 export type AgentDraft = {
   name: string
   model: string
@@ -185,6 +203,32 @@ const normalizeRunSummaries = (payload: unknown): RunRecordSummary[] =>
     }
   })
 
+const normalizeUsageDashboard = (payload: unknown): UsageDashboard => {
+  const item = asObject(payload)
+  const trend = asArray(item.trend).map((entry): UsageTrendPoint => {
+    const point = asObject(entry)
+    return {
+      usage_date: asString(point.usage_date, ''),
+      total_tokens: asNumber(point.total_tokens, 0),
+      request_count: asNumber(point.request_count, 0),
+    }
+  })
+  const ranking = (value: unknown): UsageRankingEntry[] =>
+    asArray(value).map((entry): UsageRankingEntry => {
+      const item2 = asObject(entry)
+      return {
+        name: asString(item2.name, ''),
+        total_tokens: asNumber(item2.total_tokens, 0),
+        request_count: asNumber(item2.request_count, 0),
+      }
+    })
+  return {
+    trend,
+    model_ranking: ranking(item.model_ranking),
+    key_ranking: ranking(item.key_ranking),
+  }
+}
+
 const normalizeRunDetail = (payload: unknown): RunRecordDetail => {
   const item = asObject(payload)
   const summary = normalizeRunSummaries([payload])[0]
@@ -308,6 +352,13 @@ export const createConfigClient = (options: ConfigClientOptions = {}) => {
       ),
     getRun: (runId: string) =>
       request('GET', `/api/v1/runs/${encodeURIComponent(runId)}`, null, normalizeRunDetail),
+    getUsageDashboard: (days = 7) =>
+      request(
+        'GET',
+        `/api/v1/usage/dashboard?days=${days}`,
+        null,
+        normalizeUsageDashboard,
+      ),
   }
 }
 

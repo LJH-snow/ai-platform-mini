@@ -42,6 +42,7 @@ import { createConfigClient } from './platform/config-client.ts'
 import { PromptStudio } from './platform/PromptStudio.tsx'
 import { RunDetail } from './platform/RunDetail.tsx'
 import { ToolCenter } from './platform/ToolCenter.tsx'
+import { UsageDashboardPage } from './platform/UsageDashboard.tsx'
 import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
 import { createWorkflowClient } from './workflow/client.ts'
@@ -50,7 +51,7 @@ import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
-type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members' | 'agents' | 'tools' | 'run'
+type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members' | 'agents' | 'tools' | 'run' | 'usage'
 type RequestStatus =
   | 'idle'
   | 'sending'
@@ -1261,6 +1262,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
       { id: 'agents', label: 'Agent Studio', shortLabel: 'Agent' },
       { id: 'tools', label: 'Tool Center', shortLabel: '工具' },
+      { id: 'usage', label: '用量仪表盘', shortLabel: '用量' },
       { id: 'models', label: '模型目录', shortLabel: '模型' },
     ]
 
@@ -1460,6 +1462,9 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   }
   if (page === 'tools') {
     return renderPlatformShell(<ToolCenter client={configClient} />)
+  }
+  if (page === 'usage') {
+    return renderPlatformShell(<UsageDashboardPage client={configClient} />)
   }
   if (page === 'run' && replayRunId !== null) {
     return renderPlatformShell(

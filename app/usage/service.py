@@ -1,7 +1,13 @@
 import logging
 from datetime import UTC, datetime
 
-from app.usage.models import UsageAggregation, UsageRecord, UsageSummary
+from app.usage.models import (
+    UsageAggregation,
+    UsageRanking,
+    UsageRecord,
+    UsageSummary,
+    WorkspaceUsagePoint,
+)
 from app.usage.repository import UsageRepository
 
 logger = logging.getLogger(__name__)
@@ -42,6 +48,21 @@ class UsageService:
         self, api_key_hash: str, year_month: str
     ) -> list[UsageAggregation]:
         return await self._repository.get_monthly_usage(api_key_hash, year_month)
+
+    async def get_workspace_trend(
+        self, owner_scope: str, days: int
+    ) -> list[WorkspaceUsagePoint]:
+        return await self._repository.get_workspace_trend(owner_scope, days)
+
+    async def get_workspace_model_ranking(
+        self, owner_scope: str, days: int
+    ) -> list[UsageRanking]:
+        return await self._repository.get_workspace_model_ranking(owner_scope, days)
+
+    async def get_workspace_key_ranking(
+        self, owner_scope: str, days: int
+    ) -> list[UsageRanking]:
+        return await self._repository.get_workspace_key_ranking(owner_scope, days)
 
     async def get_daily_tokens(self, api_key_hash: str, usage_date: str) -> int:
         return await self._repository.get_total_tokens_for_key(api_key_hash, usage_date)

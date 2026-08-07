@@ -1,9 +1,15 @@
 import logging
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 
-from app.usage.models import UsageAggregation, UsageRecord, UsageSummary
+from app.usage.models import (
+    UsageAggregation,
+    UsageRanking,
+    UsageRecord,
+    UsageSummary,
+    WorkspaceUsagePoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +74,35 @@ class InMemoryUsageRepository:
     async def get_all_summary(self) -> UsageSummary:
         return self._summarize(self._records)
 
+    async def get_workspace_trend(
+        self, owner_scope: str, days: int
+    ) -> list[WorkspaceUsagePoint]:
+        start = _window_start(days)
+        points: dict[str, WorkspaceUsagePoint] = {}
+        for record in self._records:
+            if not _in_scope(record, owner_scope):
+                continue
+            if record.usage_date is None or record.usage_date < start:
+                continue
+            point = points.setdefault(
+                record.usage_date, WorkspaceUsagePoint(usage_date=record.usage_date)
+            )
+            point.total_tokens += record.total_tokens
+            point.request_count += 1
+        return [points[day] for day in sorted(points)]
+
+    async def get_workspace_model_ranking(
+        self, owner_scope: str, days: int
+    ) -> list[UsageRanking]:
+        return _rank(self._records, owner_scope, days, key=lambda r: r.model)
+
+    async def get_workspace_key_ranking(
+        self, owner_scope: str, days: int
+    ) -> list[UsageRanking]:
+        return _rank(
+            self._records, owner_scope, days, key=lambda r: (r.api_key_hash or "")[:8]
+        )
+
     async def get_summary_for_key(self, api_key_hash: str) -> UsageSummary:
         return self._summarize(
             record for record in self._records if record.api_key_hash == api_key_hash
@@ -95,3 +130,37 @@ class InMemoryUsageRepository:
         stale_keys = [k for k in self._daily if k.split(":")[1] < cutoff]
         for k in stale_keys:
             del self._daily[k]
+
+
+def _in_scope(record: UsageRecord, owner_scope: str) -> bool:
+    """D1-compatible scope matching: workspace id or legacy key hash."""
+    if record.workspace_id == owner_scope:
+        return True
+    return record.workspace_id is None and record.api_key_hash == owner_scope
+
+
+def _window_start(days: int) -> str:
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC) - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+
+
+def _rank(
+    records: Iterable[UsageRecord],
+    owner_scope: str,
+    days: int,
+    *,
+    key: Callable[[UsageRecord], str],
+) -> list[UsageRanking]:
+    start = _window_start(days)
+    totals: dict[str, UsageRanking] = {}
+    for record in records:
+        if not _in_scope(record, owner_scope):
+            continue
+        if record.usage_date is None or record.usage_date < start:
+            continue
+        name = key(record)
+        ranking = totals.setdefault(name, UsageRanking(name=name))
+        ranking.total_tokens += record.total_tokens
+        ranking.request_count += 1
+    return sorted(totals.values(), key=lambda r: r.total_tokens, reverse=True)

@@ -11,6 +11,7 @@ class UsageRecord:
     latency_ms: float = 0.0
     api_key_name: str | None = None
     api_key_hash: str | None = None
+    workspace_id: str | None = None
     usage_date: str | None = None
 
 
@@ -21,6 +22,24 @@ class UsageAggregation:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+
+
+@dataclass
+class WorkspaceUsagePoint:
+    """One day of aggregated usage for the workspace trend."""
+
+    usage_date: str
+    total_tokens: int = 0
+    request_count: int = 0
+
+
+@dataclass
+class UsageRanking:
+    """One ranked dimension (model or key) for the dashboard."""
+
+    name: str
+    total_tokens: int = 0
+    request_count: int = 0
 
 
 @dataclass
