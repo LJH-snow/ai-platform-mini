@@ -34,3 +34,13 @@ class ToolRecord:
     enabled_by_default: bool = False
     owner: str = "builtin"
     created_at: datetime | None = None
+
+
+@dataclass
+class WorkspaceToolRecord:
+    """One workspace-level tool enablement override."""
+
+    workspace_id: str = ""
+    tool_name: str = ""
+    enabled: bool = True
+    id: int = 0

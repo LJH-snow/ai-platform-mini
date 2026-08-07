@@ -79,3 +79,30 @@ class AgentToolTable(Base):
     tool_name: Mapped[str] = mapped_column(
         String(128), ForeignKey("tools.name", ondelete="CASCADE"), nullable=False
     )
+
+
+class WorkspaceToolTable(Base):
+    """Per-workspace tool enablement overrides (Sprint B Tool Center).
+
+    Absent rows mean the workspace inherits ``ToolTable.enabled_by_default``;
+    present rows override it for exactly one workspace.
+    """
+
+    __tablename__ = "workspace_tools"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "tool_name", name="uq_workspace_tool"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tool_name: Mapped[str] = mapped_column(
+        String(128), ForeignKey("tools.name", ondelete="CASCADE"), nullable=False
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

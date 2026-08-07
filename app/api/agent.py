@@ -12,6 +12,7 @@ from typing import Annotated, Literal, cast
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 
+from app.agent_config.service import AgentDefinitionService
 from app.agents.models import (
     AgentDecision,
     AgentEvent,
@@ -355,11 +356,40 @@ async def _persist_agent_run(
     context: RequestContext,
     api_key: APIKey,
     model: str | None = None,
+    definition_service: AgentDefinitionService | None = None,
 ) -> None:
     if record_service is None:
         return
     try:
-        await record_service.save(response, request, context, api_key, model=model)
+        # Resolve the Agent definition audit trail before persisting
+        # (roadmap B5: record prompt name/version in the audit payload).
+        prompt_ref: str | None = None
+        if request.agent_id:
+            identity = context.identity
+            workspace_id = identity.workspace_id if identity else None
+            if workspace_id is not None:
+                try:
+                    if definition_service is None:
+                        from app.core.container import (
+                            provide_agent_definition_service,
+                        )
+
+                        definition_service = provide_agent_definition_service()
+                    agent = await definition_service.get_agent(
+                        request.agent_id, workspace_id=workspace_id
+                    )
+                    prompt_ref = agent.prompt_ref if agent is not None else None
+                except Exception:
+                    prompt_ref = None
+        await record_service.save(
+            response,
+            request,
+            context,
+            api_key,
+            model=model,
+            agent_id=request.agent_id,
+            prompt_ref=prompt_ref,
+        )
     except Exception:
         # Audit persistence must never break the model response.
         logger.exception(

@@ -3,7 +3,12 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from app.db.agent_models import AgentTable, AgentToolTable, ToolTable
+from app.db.agent_models import (
+    AgentTable,
+    AgentToolTable,
+    ToolTable,
+    WorkspaceToolTable,
+)
 from app.db.benchmark_models import AgentBenchmarkRunTable
 from app.db.conversation_models import (
     ConversationMessageTable,
@@ -36,6 +41,7 @@ _CORE_TABLES = [
     ToolTable,
     AgentTable,
     AgentToolTable,
+    WorkspaceToolTable,
     AgentBenchmarkRunTable,
     DailyUsageTable,
     QuotaReservationTable,

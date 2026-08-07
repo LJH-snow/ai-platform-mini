@@ -7,8 +7,18 @@ from typing import Protocol, runtime_checkable
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent_config.models import AgentRecord, AgentToolRecord, ToolRecord
-from app.db.agent_models import AgentTable, AgentToolTable, ToolTable
+from app.agent_config.models import (
+    AgentRecord,
+    AgentToolRecord,
+    ToolRecord,
+    WorkspaceToolRecord,
+)
+from app.db.agent_models import (
+    AgentTable,
+    AgentToolTable,
+    ToolTable,
+    WorkspaceToolTable,
+)
 
 
 @runtime_checkable
@@ -27,6 +37,16 @@ class AgentDefinitionRepository(Protocol):
     # ── Tools (registry) ─────────────────────────────────────────────────
     async def seed_tool(self, record: ToolRecord) -> ToolRecord: ...
     async def list_tools(self) -> list[ToolRecord]: ...
+    # ── Workspace tool enablement ────────────────────────────────────────
+    async def set_workspace_tool(
+        self, workspace_id: str, tool_name: str, enabled: bool
+    ) -> WorkspaceToolRecord: ...
+    async def list_workspace_tools(
+        self, workspace_id: str
+    ) -> list[WorkspaceToolRecord]: ...
+    async def get_workspace_tool(
+        self, workspace_id: str, tool_name: str
+    ) -> WorkspaceToolRecord | None: ...
 
 
 # ── In-memory ────────────────────────────────────────────────────────────────
@@ -37,6 +57,7 @@ class InMemoryAgentDefinitionRepository:
         self._agents: dict[str, AgentRecord] = {}
         self._agent_tools: list[AgentToolRecord] = []
         self._tools: dict[str, ToolRecord] = {}
+        self._workspace_tools: list[WorkspaceToolRecord] = []
         self._tool_id_seq = 0
 
     async def create_agent(self, record: AgentRecord) -> AgentRecord:
@@ -82,6 +103,31 @@ class InMemoryAgentDefinitionRepository:
 
     async def list_tools(self) -> list[ToolRecord]:
         return list(self._tools.values())
+
+    async def set_workspace_tool(
+        self, workspace_id: str, tool_name: str, enabled: bool
+    ) -> WorkspaceToolRecord:
+        self._workspace_tools = [
+            t for t in self._workspace_tools if t.tool_name != tool_name
+        ]
+        record = WorkspaceToolRecord(
+            workspace_id=workspace_id, tool_name=tool_name, enabled=enabled
+        )
+        self._workspace_tools.append(record)
+        return record
+
+    async def list_workspace_tools(
+        self, workspace_id: str
+    ) -> list[WorkspaceToolRecord]:
+        return [t for t in self._workspace_tools if t.workspace_id == workspace_id]
+
+    async def get_workspace_tool(
+        self, workspace_id: str, tool_name: str
+    ) -> WorkspaceToolRecord | None:
+        for t in self._workspace_tools:
+            if t.workspace_id == workspace_id and t.tool_name == tool_name:
+                return t
+        return None
 
 
 # ── Postgres ─────────────────────────────────────────────────────────────────
@@ -197,6 +243,67 @@ class PostgresAgentDefinitionRepository:
             stmt = select(ToolTable)
             result = await session.scalars(stmt)
             return [_tool_row_to_record(row) for row in result]
+
+    async def set_workspace_tool(
+        self, workspace_id: str, tool_name: str, enabled: bool
+    ) -> WorkspaceToolRecord:
+        async with self._session_factory() as session:
+            row = await session.scalar(
+                select(WorkspaceToolTable).where(
+                    WorkspaceToolTable.workspace_id == workspace_id,
+                    WorkspaceToolTable.tool_name == tool_name,
+                )
+            )
+            if row is None:
+                row = WorkspaceToolTable(
+                    workspace_id=workspace_id,
+                    tool_name=tool_name,
+                    enabled=enabled,
+                )
+                session.add(row)
+            else:
+                row.enabled = enabled
+            await session.commit()
+            return WorkspaceToolRecord(
+                workspace_id=workspace_id,
+                tool_name=tool_name,
+                enabled=row.enabled,
+            )
+
+    async def list_workspace_tools(
+        self, workspace_id: str
+    ) -> list[WorkspaceToolRecord]:
+        async with self._session_factory() as session:
+            stmt = select(WorkspaceToolTable).where(
+                WorkspaceToolTable.workspace_id == workspace_id
+            )
+            result = await session.scalars(stmt)
+            return [
+                WorkspaceToolRecord(
+                    workspace_id=row.workspace_id,
+                    tool_name=row.tool_name,
+                    enabled=row.enabled,
+                )
+                for row in result
+            ]
+
+    async def get_workspace_tool(
+        self, workspace_id: str, tool_name: str
+    ) -> WorkspaceToolRecord | None:
+        async with self._session_factory() as session:
+            row = await session.scalar(
+                select(WorkspaceToolTable).where(
+                    WorkspaceToolTable.workspace_id == workspace_id,
+                    WorkspaceToolTable.tool_name == tool_name,
+                )
+            )
+            if row is None:
+                return None
+            return WorkspaceToolRecord(
+                workspace_id=row.workspace_id,
+                tool_name=row.tool_name,
+                enabled=row.enabled,
+            )
 
 
 def _agent_row_to_record(row: AgentTable) -> AgentRecord:

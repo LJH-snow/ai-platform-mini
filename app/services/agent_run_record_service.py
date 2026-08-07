@@ -25,8 +25,15 @@ class AgentRunRecordService:
         context: RequestContext,
         api_key: APIKey,
         model: str | None = None,
+        *,
+        agent_id: str | None = None,
+        prompt_ref: str | None = None,
     ) -> None:
         payload: dict[str, object] = response.model_dump(mode="json")
+        # Audit trail for the Agent definition that produced this run
+        # (roadmap B5: record prompt name/version in the audit payload).
+        payload["agent_id"] = agent_id
+        payload["prompt_ref"] = prompt_ref
         row = AgentRunRecordTable(
             run_id=response.run_id,
             request_id=context.request_id,
