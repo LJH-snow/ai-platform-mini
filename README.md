@@ -13,6 +13,7 @@
 - Storage: Memory 或 PostgreSQL
 - Conversation memory: Chat/Agent/OpenAI 端点按 `thread_id` 维护服务端会话记忆（`conversation_thread` / `conversation_message`），支持 `CONVERSATION_STORAGE=memory|postgres`
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）
+- LangGraph PDF Workflow：`POST /api/v1/workflows/pdf-report` 上传 PDF 创建人工审批任务，支持 PostgreSQL checkpoint 持久化和跨重启恢复，按 API Key 租户隔离
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
 - 前端 Agent Console：[阶段 6 已接入 Agent SSE、实时 Trace、Tool/RAG 状态和错误边界；开发期 Vite proxy 已用于真实浏览器流式验证](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md)
@@ -60,6 +61,7 @@
 - Tool Registry/Executor：Schema 参数校验、超时、异常安全归一化、输出截断和工具 Schema 导出
 - RAG Tool：`knowledge_search` 复用 RAG prepare 阶段，返回带来源、距离和安全提示的结构化检索结果；Agent 可在回答前自主调用知识库
 - Agent Run RAG 公开响应：来源只包含稳定标识、分块索引、已截断片段和真实 distance；无来源、空知识库、RAG 不可用、Embedding 失败、截断或畸形输出均返回稳定状态，不生成假引用
+- LangGraph PDF Workflow API：`PDFReportWorkflowService` 封装构建、执行、resume 和状态读取；`POST /api/v1/workflows/pdf-report`、`GET /api/v1/workflows/{thread_id}`、`POST .../approve`、`POST .../reject`
 - MCP foundation：提供 stdio JSON-RPC Client、工具发现、allowlist、`MCPToolAdapter`、生命周期 health/readiness 查询，以及运行时调用失败/断线的确定性测试；不接入默认生产配置
 - Calculator：基于 AST 白名单的受限算术执行，不使用 `eval()`/`exec()`
 - JSON 结构化日志、完整 UUID4 Request ID、敏感配置脱敏和多资源 Readiness
@@ -140,20 +142,42 @@ RAG 来源仍是不可信参考材料，不等同于回答中的精确引用。�
 
 项目新增了一个**参考实现**的 LangGraph 工作流，用于演示 low-level stateful
 orchestration：解析 PDF → RAG 检索 → 模型分析 → 人工审批（human-in-the-loop）
-→ 生成 Markdown 报告。它**不替换、不修改**现有 `AgentRuntime` 主链路，也
-**没有接入主 API 路由**；主 Agent 链路仍由自研 `AgentRuntime` 负责。
+→ 生成 Markdown 报告。它**不替换、不修改**现有 `AgentRuntime`、Chat/Agent/OpenAI
+API 与 SSE 契约；主 Agent 链路仍由自研 `AgentRuntime` 负责。
 
 - 工作流模块：`app/workflows/pdf_report.py`
+- 工作流服务：`app/services/workflow_service.py`
+- HTTP 路由：`app/api/workflows.py`
 - CLI 入口：`scripts/run_pdf_workflow.py`
 - Graph：`parse_pdf → retrieve_context → analyze → request_approval`
   （条件边：approved → `generate_report`；rejected → 带反馈重新 `analyze`；
   超过 `max_revisions` 后结束）
-- Checkpointer：默认使用 `InMemorySaver` 演示中断后状态恢复与
-  `Command(resume=...)` 续跑；生产多实例场景应替换为 PostgreSQL checkpointer，
-  以支持跨进程/跨实例的持久化线程状态，取舍是引入额外的数据库表与序列化契约。
+- Checkpointer：默认使用内存（`InMemorySaver`），无需 PostgreSQL；设置
+  `WORKFLOW_STORAGE=postgres` 可切换为 `langgraph-checkpoint-postgres` 持久化
+  checkpoint，并持久化 `workflow_runs` 运行元数据，用于跨重启恢复和多 worker
+  部署。
 - 复用现有组件：PDF 解析走 `app/rag/pdf_extractor.py`，检索走
   `RAGService.prepare`（不修改其行为），模型调用走 `ProviderRouter` 边界，
   报告写入只使用标准库。
+
+### HTTP API
+
+- `POST /api/v1/workflows/pdf-report`：multipart 上传 PDF + 可选 `topic`，同步执行
+  到第一个 interrupt 或完成，返回 `thread_id`、当前阶段和报告摘要。
+- `GET /api/v1/workflows/{thread_id}`：返回安全字段状态（阶段、草稿摘要、报告、
+  token 用量、错误码和错误信息）。
+- `POST /api/v1/workflows/{thread_id}/approve`：resume 并批准生成报告。
+- `POST /api/v1/workflows/{thread_id}/reject`：resume 并携带 `feedback` 重新分析；
+  达到 `max_revisions` 后以 `rejected` 结束。
+
+所有 workflow 查询与审批按 `owner_key_hash` 隔离；缺失、跨租户和非法 thread id
+统一返回 `404 WORKFLOW_NOT_FOUND`。上传 PDF 写入 `output/workflows/{thread_id}/`
+临时目录并在执行后删除，生成的 `report.md` 保留在同目录。失败运行记录为
+`failed`，只向调用方暴露安全错误码与有限错误信息。
+
+`WORKFLOW_STORAGE=postgres` 时，lifespan 会初始化 `workflow_runs` 表并打开
+PostgreSQL checkpointer；服务重启后可用同一 `thread_id` 继续审批或生成。当前
+不做任务队列、SSE 进度推送和历史任务列表，属于后续切片。
 
 CLI 需要 `RAG_ENABLED=true`、PostgreSQL/pgvector、Ollama Embedding 和可用的
 LLM Provider：
@@ -171,19 +195,20 @@ interrupt 时以该反馈拒绝当前草稿，CLI 自动循环处理，直到达
 模式下输入 `{"decision":"approved"}`。不加这两个参数时 CLI 会在 interrupt
 处等待 JSON 决策（`{"decision":"approved"}` 或
 `{"decision":"rejected","feedback":"..."}`）；输入空行则暂停并保留 checkpoint，
-输出 `status: "pending_approval"` 和 `thread_id`。默认 `InMemorySaver` 只在
-进程生命周期内有效，跨进程恢复需要替换为 PostgreSQL checkpointer。
+输出 `status: "pending_approval"` 和 `thread_id`。CLI 与 HTTP API 默认均使用内存存储（`WORKFLOW_STORAGE=memory`）；需要跨进程
+恢复时，在 `.env` 中显式设置 `WORKFLOW_STORAGE=postgres`。
 
 可通过 `--max-document-characters`、`--max-reference-characters` 和
 `--max-reference-total-characters` 控制喂给模型的 PDF 文本和引用区大小；
 单条引用先按 content 上限截断，引用区再按总上限截断。成功或暂停时输出 JSON
 运行摘要，包含报告路径、页数、引用数、模型、token 用量和 `thread_id`。
 
-离线测试使用 fake extractor / fake retriever / fake model，覆盖 graph
-compile、节点执行、interrupt 后 resume、rejected 后带反馈重跑和 max revisions
-终止，不访问外网、不调用真实 LLM。该 workflow 是参考实现，生产默认路径仍然
-是 `AgentRuntime`；后续如果需要把它接进 API，应统一走 `ChatService` 服务边界
-（响应校验、错误转换、usage 收集），并单独评审线程模型、配额和租户边界。
+离线测试使用 fake extractor / fake retriever / fake model，覆盖 graph compile、
+节点执行、interrupt 后 resume、rejected 后带反馈重跑、max revisions 终止、
+service 跨实例恢复、API 鉴权/租户隔离和 PostgreSQL checkpoint 跨“重启”恢复，
+不访问外网、不调用真实 LLM。该 workflow 是参考实现，生产默认路径仍然是
+`AgentRuntime`；HTTP 层通过独立 `PDFReportWorkflowService` 边界执行，不改动
+Chat/Agent/OpenAI 路由与 SSE 契约。
 
 ## Agent token budget 与 RAG 回填
 
@@ -530,6 +555,7 @@ AUTH_STORAGE=memory
 INITIAL_API_KEY=
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform
 CONVERSATION_STORAGE=postgres
+WORKFLOW_STORAGE=postgres
 
 # Rate limiting
 RATE_LIMIT_ENABLED=true
@@ -1046,3 +1072,51 @@ Run Trace 应该从 Runtime 已有事件和终态结果派生，而不是复制�
 #### 本阶段学习总结
 
 本阶段定位并修复了 RAG 检索成功但最终回答未生成的预算问题，同时没有通过删除预算检查来“修好”页面。通过显式请求参数、前后端边界校验、真实 SSE usage 和有界工具输出，解决了可用性问题并保留了 Agent 的失败真实性。后续仍可独立优化多轮预算语义和 Ollama `num_ctx`，不把它们隐藏成已完成能力。
+
+### Sprint 13（LangGraph PDF Workflow API 化）
+
+- 新增 `PDFReportWorkflowService`，封装 `PDFReportWorkflow` 的构建、执行、resume
+  和状态读取；复用 `RAGService.prepare`、`ProviderRouter` 和
+  `app/rag/pdf_extractor.py`，不复制业务逻辑。
+- 新增 workflow API：上传创建、状态查询、approve、reject 四个端点；上传同步执行
+  到第一个 interrupt 或完成，返回 `thread_id`、阶段、草稿摘要/报告与安全错误信息。
+- 新增 PostgreSQL checkpointer（`langgraph-checkpoint-postgres`）和
+  `workflow_runs` 运行元数据表；默认 `WORKFLOW_STORAGE=memory`，单进程本地开发
+  无需 PostgreSQL；显式设置 `WORKFLOW_STORAGE=postgres` 后服务重启可恢复同一
+  `thread_id` 并继续审批/生成。
+- 鉴权与隔离：所有查询/审批沿用 Bearer API Key，按 `owner_key_hash` 隔离，
+  缺失、跨租户、非法 id 统一返回 `404 WORKFLOW_NOT_FOUND`。
+- 测试覆盖 service interrupt/approve/reject/max revisions、同一 store 新实例
+  resume、API 鉴权与跨租户 404，以及 Testcontainers 真实 PostgreSQL 跨“重启”
+  恢复；测试不调用真实 LLM、不访问外网。
+- 本轮不改动 `AgentRuntime`、现有 Chat/Agent/OpenAI API 与 SSE 契约；任务队列、
+  SSE 进度推送和历史任务列表留待后续。
+
+#### Sprint 13 学习总结
+
+把 LangGraph 工作流接成 API 的关键是把 checkpointer、运行元数据和服务边界拆开：
+LangGraph 负责线程状态恢复，`workflow_runs` 负责租户归属与安全状态投影，Service
+统一处理失败记录和 404 语义。PostgreSQL checkpointer 使用独立 psycopg 连接池，
+避免与 SQLAlchemy 引擎生命周期混在一起，并通过 serde 定制解决
+`RAGReference` 的 msgpack 序列化警告。同步执行到 interrupt 的模型让前端可以先
+拿到 `thread_id` 再异步审批，同时把任务队列和 SSE 留给后续切片。
+
+#### Sprint 13 Review 修复
+
+- 默认 `WORKFLOW_STORAGE` 从 `postgres` 改为 `memory`，与 README Quick Start
+  的“无需 PostgreSQL”保持一致；无 DB 环境可直接启动，不再卡在连接重试。
+- `topic` 超过 `VARCHAR(1024)` 时先截断到 1000 字符，避免 DB 插入 500。
+- `start()` 的 PDF 写入和 `repository.create()` 纳入同一个 `try/finally`，
+  任何一步失败都会清理磁盘临时文件。
+- `approve`/`reject` 引入 CAS 原子状态迁移（`pending_approval → running` 条件
+  `UPDATE`），防止并发竞争导致重复生成或决策覆盖；已完成后再审批返回 409。
+- README 四处默认值表述同步更新，新增 3 个自动化测试覆盖截断、清理和 CAS 路径。
+
+#### Sprint 13 Review 学习总结
+
+默认配置与文档不一致会让新用户直接踩坑，这是最容易被忽视但影响最大的 P1。
+引入 CAS 原子状态迁移替代先读后写，是因为并发 approve/reject 会导致同一
+checkpoint 被重复消费；PostgreSQL `UPDATE ... WHERE status = expected RETURNING`
+天然支持这一点，内存实现也做了同样检查。PDF 清理必须和业务逻辑在同一个
+`try/finally` 中，否则部分失败会留下磁盘垃圾。测试命名必须精确反映行为，
+`concurrent` 和 `double` 在 async 代码里语义完全不同。

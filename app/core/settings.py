@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     auth_storage: Literal["memory", "postgres"] = "memory"
     conversation_storage: Literal["memory", "postgres"] = "memory"
+    workflow_storage: Literal["memory", "postgres"] = "memory"
     initial_api_key: SecretStr = SecretStr("")
 
     rate_limit_enabled: bool = True
@@ -111,6 +112,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"conversation_storage must be one of {allowed}, got '{v}'"
             )
+        return v
+
+    @field_validator("workflow_storage")
+    @classmethod
+    def validate_workflow_storage(cls, v: str) -> str:
+        allowed = {"memory", "postgres"}
+        if v not in allowed:
+            raise ValueError(f"workflow_storage must be one of {allowed}, got '{v}'")
         return v
 
     @field_validator("quota_reservation_renewal_seconds")
