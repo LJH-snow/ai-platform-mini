@@ -175,9 +175,45 @@ async def test_task_level_failure_does_not_abort_set() -> None:
     assert record.task_count == 3
     assert record.completed_count == 2
     assert record.task_completion_rate == 2 / 3
+    # Step/latency averages only count completed tasks; the failed first
+    # task must not drag them toward zero.
+    assert record.average_steps == 1.0
+    assert record.average_latency_ms is not None
+    assert record.average_latency_ms > 0
     outcomes = record.metric_payload["task_outcomes"]
     assert isinstance(outcomes, list) and len(outcomes) == 3
     assert outcomes[0]["status"] == "error"
+    assert outcomes[0]["error"].startswith("RuntimeError:")
+
+
+async def test_max_steps_optional_does_not_override_definition() -> None:
+    """Omitted max_steps keeps definition semantics; explicit value passes through."""
+    def_service = _definition_service()
+    agent_id = await _create_agent(def_service)
+    fake = _FakeAgentService()
+    runner = _make_runner(fake, def_service)
+    context = RequestContext(request_id="req-1")
+    api_key = _api_key()
+
+    await runner.run(
+        agent_id, "default", workspace_id="ws-1", context=context, api_key=api_key
+    )
+    await runner.run(
+        agent_id,
+        "default",
+        workspace_id="ws-1",
+        context=context,
+        api_key=api_key,
+        max_steps=3,
+    )
+
+    # First run (calls 0-2): no explicit max_steps → schema default 4
+    # (definition wins because model_fields_set does not contain it).
+    # Second run (calls 3-5): explicit 3 passes through.
+    assert fake.calls[0].max_steps == 4
+    assert "max_steps" not in fake.calls[0].model_fields_set
+    assert fake.calls[3].max_steps == 3
+    assert "max_steps" in fake.calls[3].model_fields_set
 
 
 async def test_unknown_task_set_raises() -> None:
@@ -270,8 +306,11 @@ def _setup_auth() -> tuple[InMemoryUserRepository, InMemoryAPIKeyRepository]:
 
 
 def _teardown() -> None:
+    from app.core.container import clear_container_cache
+
     app.dependency_overrides.clear()
     _clear_auth_service_caches()
+    clear_container_cache()
 
 
 def _register(email: str) -> tuple[str, str, str]:

@@ -13,6 +13,7 @@ from app.auth.models import APIKey
 from app.core.container import provide_agent_benchmark_runner
 from app.evals.agent_benchmark import AgentBenchmarkRunner
 from app.evals.benchmark_repository import BenchmarkRunRecord
+from app.schemas.agent import MAX_AGENT_MAX_STEPS
 
 router = APIRouter(prefix="/api/v1/benchmarks", tags=["benchmarks"])
 
@@ -20,6 +21,15 @@ router = APIRouter(prefix="/api/v1/benchmarks", tags=["benchmarks"])
 class BenchmarkRunRequest(BaseModel):
     agent_id: str = Field(..., min_length=1, max_length=128)
     task_set: str = Field(default="default", min_length=1, max_length=64)
+    max_steps: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_AGENT_MAX_STEPS,
+        description=(
+            "Optional uniform step limit for every task; when omitted the "
+            "agent definition's max_steps applies (production semantics)."
+        ),
+    )
 
 
 class BenchmarkRunResponse(BaseModel):
@@ -74,6 +84,7 @@ async def run_benchmark(
             workspace_id=ws_id,
             context=request.state.context,
             api_key=_api_key,
+            max_steps=body.max_steps,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

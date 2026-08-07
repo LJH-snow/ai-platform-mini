@@ -7,8 +7,9 @@ from the real run results:
 * Tool Call Accuracy — share of tasks whose actual tool call set
   contains every expected tool (empty expectations always match)
 * Task Completion Rate — share of tasks that finished COMPLETED
-* Average Steps — mean agent steps across tasks
-* Average Latency — mean wall-clock duration across tasks (ms)
+* Average Steps — mean agent steps across **completed** tasks
+* Average Latency — mean wall-clock duration across **completed**
+  tasks (ms)
 
 Results are persisted to ``agent_benchmark_runs`` scoped by workspace.
 """
@@ -17,7 +18,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from app.agent_config.service import AgentDefinitionService
 from app.agents.models import RunStatus
@@ -32,6 +35,8 @@ from app.services.agent_service import AgentService
 
 logger = logging.getLogger(__name__)
 
+_MAX_ERROR_MESSAGE_CHARS = 200
+
 
 @dataclass(frozen=True)
 class BenchmarkTask:
@@ -41,24 +46,26 @@ class BenchmarkTask:
     expected_tool_calls: list[str] = field(default_factory=list)
 
 
-# Built-in golden task sets.  Extendable via JSON files in a later
-# sprint; the default set exercises both built-in tools.
-GOLDEN_TASKS: dict[str, list[BenchmarkTask]] = {
-    "default": [
-        BenchmarkTask(
-            message="Calculate 2+2",
-            expected_tool_calls=["calculator"],
-        ),
-        BenchmarkTask(
-            message="What is the square root of 144?",
-            expected_tool_calls=["calculator"],
-        ),
-        BenchmarkTask(
-            message="Search the knowledge base for the latest report",
-            expected_tool_calls=["knowledge_search"],
-        ),
-    ],
-}
+# Built-in golden task sets.  Frozen so tests and callers cannot mutate
+# the shared definition; extend by adding a named set here.
+GOLDEN_TASKS: Mapping[str, list[BenchmarkTask]] = MappingProxyType(
+    {
+        "default": [
+            BenchmarkTask(
+                message="Calculate 2+2",
+                expected_tool_calls=["calculator"],
+            ),
+            BenchmarkTask(
+                message="What is the square root of 144?",
+                expected_tool_calls=["calculator"],
+            ),
+            BenchmarkTask(
+                message="Search the knowledge base for the latest report",
+                expected_tool_calls=["knowledge_search"],
+            ),
+        ],
+    }
+)
 
 
 @dataclass
@@ -94,8 +101,14 @@ class AgentBenchmarkRunner:
         workspace_id: str,
         context: RequestContext,
         api_key: APIKey,
+        max_steps: int | None = None,
     ) -> BenchmarkRunRecord:
-        """Execute every task of the set and persist the aggregated metrics."""
+        """Execute every task of the set and persist the aggregated metrics.
+
+        ``max_steps`` is optional: when omitted the agent definition's
+        configured step limit is used (identical to production requests);
+        pass an explicit value to bound evaluation cost uniformly.
+        """
         tasks = GOLDEN_TASKS.get(task_set)
         if tasks is None:
             raise ValueError(f"Unknown task set: {task_set}")
@@ -111,13 +124,15 @@ class AgentBenchmarkRunner:
         for task in tasks:
             start = time.monotonic()
             try:
+                request = AgentRunRequest(
+                    message=task.message,
+                    agent_id=agent_id,
+                    timeout_seconds=60.0,
+                )
+                if max_steps is not None:
+                    request = request.model_copy(update={"max_steps": max_steps})
                 result = await self._agent_service.run(
-                    AgentRunRequest(
-                        message=task.message,
-                        agent_id=agent_id,
-                        max_steps=5,
-                        timeout_seconds=60.0,
-                    ),
+                    request,
                     context=context,
                     api_key=api_key,
                 )
@@ -137,7 +152,7 @@ class AgentBenchmarkRunner:
                     message=task.message,
                     status="error",
                     duration_ms=(time.monotonic() - start) * 1000,
-                    error=str(exc),
+                    error=_bounded_error(exc),
                 )
             outcomes.append(outcome)
 
@@ -172,20 +187,32 @@ def _aggregate(
     tasks: list[BenchmarkTask],
     outcomes: list[TaskOutcome],
 ) -> BenchmarkRunRecord:
-    """Derive the four metrics from real per-task outcomes."""
+    """Derive the four metrics from real per-task outcomes.
+
+    Step/latency averages only count completed tasks so early failures
+    cannot drag the means toward zero; tool call accuracy spans all
+    tasks (failed tasks simply recorded no tool calls).
+    """
     task_count = len(tasks)
-    completed_count = sum(
-        1 for outcome in outcomes if outcome.status == RunStatus.COMPLETED.value
-    )
+    completed_outcomes = [
+        outcome for outcome in outcomes if outcome.status == RunStatus.COMPLETED.value
+    ]
+    completed_count = len(completed_outcomes)
     matched_count = sum(
         1
         for task, outcome in zip(tasks, outcomes, strict=True)
         if set(task.expected_tool_calls).issubset(set(outcome.tool_calls))
     )
-    step_counts = [outcome.steps for outcome in outcomes]
-    durations = [outcome.duration_ms for outcome in outcomes]
-    average_steps = sum(step_counts) / len(step_counts) if step_counts else 0.0
-    average_latency_ms = sum(durations) / len(durations) if durations else 0.0
+    average_steps = (
+        sum(outcome.steps for outcome in completed_outcomes) / completed_count
+        if completed_outcomes
+        else None
+    )
+    average_latency_ms = (
+        sum(outcome.duration_ms for outcome in completed_outcomes) / completed_count
+        if completed_outcomes
+        else None
+    )
     return BenchmarkRunRecord(
         agent_id=agent_id,
         workspace_id=workspace_id,
@@ -200,3 +227,11 @@ def _aggregate(
             "task_outcomes": [outcome.__dict__ for outcome in outcomes],
         },
     )
+
+
+def _bounded_error(exc: Exception) -> str:
+    """Persist a bounded, type-prefixed error summary instead of raw text."""
+    message = str(exc)
+    if len(message) > _MAX_ERROR_MESSAGE_CHARS:
+        message = message[:_MAX_ERROR_MESSAGE_CHARS] + "..."
+    return f"{type(exc).__name__}: {message}"
