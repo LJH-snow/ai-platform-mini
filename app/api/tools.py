@@ -11,6 +11,7 @@ from app.agent_config.service import AgentDefinitionService
 from app.auth.dependencies import require_api_key
 from app.auth.models import APIKey
 from app.core.container import provide_agent_definition_service
+from app.exceptions.base import ValidationError
 
 router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
 
@@ -73,7 +74,9 @@ async def set_tool_enabled(
         raise HTTPException(status_code=404, detail="Tool not found or not accessible.")
     try:
         override = await service.set_tool_enabled(ws_id, tool_name, body.enabled)
-    except Exception as exc:
+    except ValidationError as exc:
+        # Only domain validation failures map to 404; storage errors fall
+        # through to the global handler without leaking internals.
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     rows = await service.list_tools_with_state(ws_id)
     for row in rows:

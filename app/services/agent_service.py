@@ -51,7 +51,7 @@ from app.runs.protocols import AgentEventObserver, RunTraceRecorderFactory
 from app.schemas.agent import AgentRunRequest
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
-from app.tools import CalculatorTool, ToolExecutor, ToolRegistry
+from app.tools import CalculatorTool, Tool, ToolExecutor, ToolRegistry
 from app.usage.collector import UsageCollector
 
 logger = logging.getLogger(__name__)
@@ -517,11 +517,17 @@ class AgentService:
                 agent_def.id
             )
             if bound_tools:
-                available = {
-                    tool.name: tool
-                    for tool in self._tool_registry.list_tools()
-                    if tool.name in bound_tools
-                }
+                # Workspace-disablement takes effect immediately: a tool
+                # turned off in Tool Center is removed from every bound
+                # agent's run-time whitelist, not just future bindings.
+                available: dict[str, Tool] = {}
+                for tool in self._tool_registry.list_tools():
+                    if tool.name not in bound_tools:
+                        continue
+                    if await self._agent_definition_service.is_tool_enabled(
+                        workspace_id, tool.name
+                    ):
+                        available[tool.name] = tool
                 run_registry = ToolRegistry(available.values())
                 run_executor = ToolExecutor(
                     run_registry, granted_permissions=self._granted_permissions

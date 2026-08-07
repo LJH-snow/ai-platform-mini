@@ -519,3 +519,35 @@ async def test_create_agent_rejects_missing_prompt_ref() -> None:
         prompt_ref="existing",
     )
     assert record.prompt_ref == "existing"
+
+
+async def test_workspace_disabled_tool_removed_from_run_whitelist() -> None:
+    """Tool Center disablement takes effect on existing agents immediately."""
+    agent_svc = await _make_agent_svc()
+    await agent_svc.create_agent(
+        workspace_id=_WS_ID,
+        name="calc-agent",
+        model="m",
+        prompt_ref="",
+        tool_names=["calculator"],
+    )
+    agent_id = (await agent_svc.list_agents(_WS_ID))[0].id
+    service, chat, _ = await _make_service(agent_svc=agent_svc)
+    api_key = _api_key()
+    context = _context()
+
+    await service.run(
+        AgentRunRequest(message="hello", agent_id=agent_id),
+        context=context,
+        api_key=api_key,
+    )
+    assert "calculator" in (chat.requests[0].system_prompt or "")
+
+    await agent_svc.set_tool_enabled(_WS_ID, "calculator", False)
+
+    await service.run(
+        AgentRunRequest(message="hello", agent_id=agent_id),
+        context=context,
+        api_key=api_key,
+    )
+    assert "calculator" not in (chat.requests[-1].system_prompt or "")
