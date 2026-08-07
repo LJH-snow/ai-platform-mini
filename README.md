@@ -295,7 +295,7 @@ Sprint C 实测分数（`tests/fixtures/evals/rag_golden_ci.jsonl`，4 case）�
 | 本地（Ollama nomic-embed-text, 默认阈值） | vector-only | 100% | 75% |
 | 本地（Ollama nomic-embed-text, 默认阈值） | hybrid | 100% | 75% |
 
-说明：mock 随机投影向量的绝对相似度低，真实 `RAG_MAX_DISTANCE=0.35` 下 vector 路会全部过滤（此时 hybrid 100%——keyword 路的**熔断救回**属性）；CI 因此用 `--max-distance 1.0` 让 vector 基线保持非零，配合 `_run_compare` 的 sanity check（vector 基率为 0 时门禁直接失败，防止平凡真），保证门禁真正对比双路。本地真实 embedding 下 hybrid 与 vector 持平（无提升亦无回退），按 roadmap 规则维持默认 `RAG_SEARCH_MODE=vector`，待真实语料证明提升后再切换。
+说明：mock 随机投影向量的绝对相似度低，真实 `RAG_MAX_DISTANCE=0.35` 下 vector 路会全部过滤（此时 hybrid 100%——keyword 路的**熔断救回**属性）；CI 因此用 `--max-distance 1.0` 让 vector 基线保持非零，配合 `_run_compare` 的 sanity check（vector 基率为 0 时门禁直接失败，防止平凡真），保证门禁真正对比双路。本地真实 embedding 下 hybrid 与 vector 持平（无提升亦无回退；两模式均在 `ci-expense` 上未命中——报销段语义向量不足，keyword 亦未救回），按 roadmap 规则维持默认 `RAG_SEARCH_MODE=vector`，待真实语料证明提升后再切换。以上分数基于当前 fixture（语料 v2 + `ci-error-code top_k=1`）实测，`evaluate_rag.py --compare` 可复现。
 
 默认不引入 RAGAS：当前指标都是确定性、离线可复现的检索召回指标；RAGAS 的 LLM-as-judge 指标需要真实模型调用、对模型版本敏感且结果不可完全复现，适合后续作为可选扩展而不是基础依赖。
 
