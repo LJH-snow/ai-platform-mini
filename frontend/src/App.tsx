@@ -35,11 +35,13 @@ import { ModelCatalog } from './platform/ModelCatalog.tsx'
 import { PromptStudio } from './platform/PromptStudio.tsx'
 import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
+import { createWorkflowClient } from './workflow/client.ts'
+import { WorkflowPanel } from './workflow/WorkflowPanel.tsx'
 import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
-type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'admin'
+type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin'
 type RequestStatus =
   | 'idle'
   | 'sending'
@@ -542,6 +544,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const knowledgeClient = useMemo(
     () =>
       createKnowledgeClient({
+        apiBaseUrl: runtimeConfig.apiBaseUrl,
+        apiKey: effectiveApiKey,
+      }),
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
+  )
+  const workflowClient = useMemo(
+    () =>
+      createWorkflowClient({
         apiBaseUrl: runtimeConfig.apiBaseUrl,
         apiKey: effectiveApiKey,
       }),
@@ -1177,6 +1187,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     const navigation: Array<{ id: AppPage; label: string; shortLabel: string }> = [
       { id: 'dashboard', label: '平台概览', shortLabel: '概览' },
       { id: 'console', label: '对话工作台', shortLabel: '对话' },
+      { id: 'workflow', label: 'PDF 工作流', shortLabel: '工作流' },
       { id: 'knowledge', label: '知识库', shortLabel: 'RAG' },
       { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
       { id: 'models', label: '模型目录', shortLabel: '模型' },
@@ -1344,6 +1355,11 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   if (page === 'models') {
     return renderPlatformShell(
       <ModelCatalog apiKeyConfigured={Boolean(effectiveApiKey)} client={platformClient} />,
+    )
+  }
+  if (page === 'workflow') {
+    return renderPlatformShell(
+      <WorkflowPanel apiKeyConfigured={Boolean(effectiveApiKey)} client={workflowClient} />,
     )
   }
 

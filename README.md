@@ -1120,3 +1120,29 @@ checkpoint 被重复消费；PostgreSQL `UPDATE ... WHERE status = expected RETU
 天然支持这一点，内存实现也做了同样检查。PDF 清理必须和业务逻辑在同一个
 `try/finally` 中，否则部分失败会留下磁盘垃圾。测试命名必须精确反映行为，
 `concurrent` 和 `double` 在 async 代码里语义完全不同。
+
+### Sprint 14（Workflow 前端面板）
+
+- 新增 `frontend/src/workflow/client.ts`：封装 workflow API 调用，支持
+  `AbortSignal` 以在面板卸载/重置时取消 in-flight 请求；错误处理覆盖
+  401/403/404/409/413/429/5xx，统一 safeErrorMessage 不暴露内部字段。
+- 新增 `frontend/src/workflow/WorkflowPanel.tsx`：PDF 上传、状态轮询、
+  pending_approval 审批/拒绝、报告展示；轮询使用 setTimeout 链式调用 +
+  `isFetchingRef` 锁避免重叠请求；可访问性包含 `aria-live`、`role=alert`、
+  `aria-label`、`aria-describedby`。
+- 接入 `App.tsx` 导航：复用现有 `effectiveApiKey` 与运行时配置，新增
+  `'workflow'` 页面，与 dashboard/console/knowledge 等风格一致。
+- 响应式样式：`900px` 以下双栏变单栏，`560px` 以下 meta 单列；状态标签
+  颜色+文字并存，不依赖颜色作为唯一信息源。
+- 新增 20 个前端自动化测试（8 client + 12 component），覆盖上传解析、
+  状态流转、审批/拒绝/失败/网络错误/鉴权错误、轮询、重置面板；
+  不访问真实后端和真实 LLM。
+
+#### Sprint 14 学习总结
+
+前端 client 必须支持 `AbortSignal`，否则组件卸载时的轮询请求会继续执行并
+触发已卸载组件的 setState。`setTimeout` 链式调用比 `setInterval` 更适合
+后端请求轮询，因为它天然防止重叠：上次响应回来后才排下次。可访问性不能
+事后补，要从设计阶段就纳入：屏幕阅读器区域 (`aria-live`)、错误提示
+(`role="alert"`) 和按钮语义 (`aria-label`) 缺一不可。测试命名要精确，
+`concurrent` 和 `double` 在 async 代码里语义完全不同。
