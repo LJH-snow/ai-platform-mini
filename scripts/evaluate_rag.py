@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,9 +29,12 @@ from app.core.container import (
 from app.core.settings import get_settings
 from app.db.init import dispose_db, init_db
 from app.evals.jsonl import GoldenDatasetError
+from app.evals.memory_repository import InMemoryRAGEvaluationRepository
+from app.evals.postgres_repository import PostgresRAGEvaluationRepository
 from app.evals.rag_jsonl import read_rag_golden_dataset
 from app.evals.rag_models import RAGReport
 from app.evals.rag_runner import RAGEvaluationRunner
+from app.evals.repository import RAGEvaluationRun
 from app.evals.retrievers import (
     EmbeddingVectorStoreRetriever,
     RAGServiceRetriever,
@@ -137,6 +141,9 @@ async def _run_evaluation(args: argparse.Namespace) -> int:
                 ),
                 encoding="utf-8",
             )
+
+            await _persist_run(report, args)
+
             _print_summary(report, json_path, markdown_path)
             return 0
         finally:
@@ -273,6 +280,41 @@ def _escape_markdown(value: str) -> str:
         .replace("\r", "\\r")
         .replace("\n", "\\n")
     )
+
+
+async def _persist_run(report: RAGReport, args: argparse.Namespace) -> None:
+    """Write an evaluation run record when PostgreSQL is available."""
+
+    try:
+        from app.core.container import provide_session_factory
+
+        session_factory = provide_session_factory()
+        repository: (
+            PostgresRAGEvaluationRepository | InMemoryRAGEvaluationRepository
+        ) = PostgresRAGEvaluationRepository(session_factory)
+    except Exception:
+        repository = InMemoryRAGEvaluationRepository()
+
+    summary = report.summary
+    run = RAGEvaluationRun(
+        id=str(uuid.uuid4()),
+        dataset=str(Path(args.dataset)),
+        retriever=args.retriever,
+        model=None,
+        case_count=summary.case_count,
+        retrieval_success_rate=summary.retrieval_success_rate,
+        context_recall_at_k=summary.context_recall_at_k,
+        document_recall_at_k=summary.document_recall_at_k,
+        chunk_recall_at_k=summary.chunk_recall_at_k,
+        answer_correctness_accuracy=summary.answer_correctness_accuracy,
+        answer_correctness_case_count=summary.answer_correctness_case_count,
+        average_retrieved_chunks=summary.average_retrieved_chunks,
+        p95_latency_ms=summary.p95_latency_ms,
+    )
+    try:
+        await repository.save(run)
+    except Exception:
+        pass
 
 
 def _print_summary(

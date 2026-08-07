@@ -6,6 +6,7 @@ from app.db.conversation_models import (
     ConversationMessageTable,
     ConversationThreadTable,
 )
+from app.db.eval_models import RAGEvaluationRunTable
 from app.db.models import (
     AgentRunRecordTable,
     APIKeyTable,
@@ -13,6 +14,7 @@ from app.db.models import (
     DailyUsageTable,
     QuotaReservationTable,
 )
+from app.db.workflow_models import WorkflowRunTable
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,8 @@ _CORE_TABLES = [
     AgentRunRecordTable,
     ConversationThreadTable,
     ConversationMessageTable,
+    WorkflowRunTable,
+    RAGEvaluationRunTable,
 ]
 
 _engine: AsyncEngine | None = None
