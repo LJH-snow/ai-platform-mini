@@ -22,6 +22,7 @@ from app.exceptions.base import (
     RAGUnavailableError,
     RateLimitError,
     ValidationError,
+    WorkflowNotFoundError,
 )
 from app.schemas.error import ErrorCode, ErrorResponse
 
@@ -161,6 +162,17 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=404,
             content=_error_payload(request, ErrorCode.CONVERSATION_NOT_FOUND, str(exc)),
+        )
+
+    @app.exception_handler(WorkflowNotFoundError)
+    async def handle_workflow_not_found(
+        request: Request, exc: WorkflowNotFoundError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s workflow_not_found %s", request_id, exc)
+        return JSONResponse(
+            status_code=404,
+            content=_error_payload(request, ErrorCode.WORKFLOW_NOT_FOUND, str(exc)),
         )
 
     @app.exception_handler(ProviderUnavailableError)

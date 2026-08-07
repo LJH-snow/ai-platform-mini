@@ -14,12 +14,14 @@ from app.api.health import router as health_router
 from app.api.models import router as models_router
 from app.api.openai import router as openai_router
 from app.api.rag import router as rag_router
+from app.api.workflows import router as workflows_router
 from app.core.container import (
     clear_container_cache,
     provide_embedder,
     provide_llm_provider,
     provide_mcp_manager,
     provide_rag_ingestion_queue,
+    provide_workflow_checkpointer,
 )
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import RequestLoggingMiddleware, setup_logging
@@ -31,6 +33,7 @@ if TYPE_CHECKING:
     from app.providers.base import LLMProvider
     from app.rag.ollama_embedder import OllamaEmbedder
     from app.rag.queue import RAGIngestionQueue
+    from app.workflows.checkpointer import PostgresWorkflowCheckpointer
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     embedder: OllamaEmbedder | None = None
     mcp_manager = None
     ingestion_queue: RAGIngestionQueue | None = None
+    workflow_checkpointer: PostgresWorkflowCheckpointer | None = None
     db_initialized = False
 
     try:
@@ -58,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings.auth_storage == "postgres"
             or settings.conversation_storage == "postgres"
             or settings.rag_enabled
+            or settings.workflow_storage == "postgres"
         ):
             from app.db.init import init_db
 
@@ -81,6 +86,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             if ingestion_queue is not None:
                 await ingestion_queue.start()
                 logger.info("RAG ingestion worker started.")
+
+        if settings.workflow_storage == "postgres":
+            workflow_checkpointer = provide_workflow_checkpointer()
+            await workflow_checkpointer.open()
+            logger.info("Workflow checkpointer initialized.")
 
         if settings.mcp_enabled:
             mcp_manager = provide_mcp_manager()
@@ -144,6 +154,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     logger.warning("MCP manager close was cancelled.")
                 except Exception:
                     logger.exception("Failed to close MCP manager.")
+            if workflow_checkpointer is not None:
+                try:
+                    await workflow_checkpointer.close()
+                except asyncio.CancelledError as exc:
+                    cancellation = cancellation or exc
+                    logger.warning("Workflow checkpointer close was cancelled.")
+                except Exception:
+                    logger.exception("Failed to close workflow checkpointer.")
         finally:
             clear_container_cache()
         shutdown_telemetry()
@@ -193,6 +211,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_router)
     app.include_router(openai_router)
     app.include_router(rag_router)
+    app.include_router(workflows_router)
     app.include_router(admin_router)
     return app
 

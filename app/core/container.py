@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,6 +23,7 @@ from app.usage.collector import UsageCollector
 from app.usage.memory_repository import InMemoryUsageRepository
 from app.usage.repository import UsageRepository
 from app.usage.service import UsageService
+from app.workflows.repository import WorkflowRunRepository
 
 if TYPE_CHECKING:
     from app.mcp.manager import MCPToolManager
@@ -33,6 +35,8 @@ if TYPE_CHECKING:
     from app.services.agent_run_record_service import AgentRunRecordService
     from app.services.agent_service import AgentService
     from app.services.chat_service import ChatService
+    from app.services.workflow_service import PDFReportWorkflowService
+    from app.workflows.checkpointer import PostgresWorkflowCheckpointer
 
 
 @lru_cache
@@ -218,6 +222,69 @@ def provide_rag_ingestion_queue() -> RAGIngestionQueue | None:
 
 
 @lru_cache
+def provide_workflow_checkpointer() -> PostgresWorkflowCheckpointer:
+    from app.workflows.checkpointer import PostgresWorkflowCheckpointer
+
+    return PostgresWorkflowCheckpointer(get_settings().database_url.get_secret_value())
+
+
+@lru_cache
+def provide_workflow_run_repository() -> WorkflowRunRepository:
+    settings = get_settings()
+    if settings.workflow_storage == "postgres":
+        from app.workflows.postgres_repository import PostgresWorkflowRunRepository
+
+        return PostgresWorkflowRunRepository(provide_session_factory())
+    from app.workflows.memory_repository import InMemoryWorkflowRunRepository
+
+    return InMemoryWorkflowRunRepository()
+
+
+@lru_cache
+def provide_workflow_service() -> PDFReportWorkflowService | None:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
+    from app.services.workflow_service import PDFReportWorkflowService
+    from app.workflows.pdf_report import (
+        PdfFileExtractor,
+        PDFReportWorkflow,
+        ProviderRouterReportModel,
+        RagServiceReportRetriever,
+    )
+
+    settings = get_settings()
+    rag_service = provide_rag_service()
+    if rag_service is None:
+        return None
+
+    if settings.workflow_storage == "postgres":
+        checkpointer: BaseCheckpointSaver = provide_workflow_checkpointer().saver
+    else:
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        from app.workflows.serde import create_workflow_serde
+
+        checkpointer = InMemorySaver(serde=create_workflow_serde())
+
+    workflow = PDFReportWorkflow(
+        extractor=PdfFileExtractor(
+            max_pages=settings.rag_max_pdf_pages,
+            max_text_characters=settings.rag_max_document_characters,
+        ),
+        retriever=RagServiceReportRetriever(rag_service),
+        model=ProviderRouterReportModel(provide_llm_provider()),
+        checkpointer=checkpointer,
+    )
+    return PDFReportWorkflowService(
+        workflow=workflow,
+        checkpointer=checkpointer,
+        run_repository=provide_workflow_run_repository(),
+        work_dir=Path("output/workflows"),
+        max_upload_bytes=settings.rag_max_upload_bytes,
+    )
+
+
+@lru_cache
 def provide_mcp_manager() -> MCPToolManager:
     """Build the MCP manager from the explicit application allowlist."""
 
@@ -280,6 +347,9 @@ def clear_container_cache() -> None:
     # Clear in reverse dependency order: dependents before their deps.
     provide_agent_service.cache_clear()
     provide_agent_run_record_service.cache_clear()
+    provide_workflow_service.cache_clear()
+    provide_workflow_run_repository.cache_clear()
+    provide_workflow_checkpointer.cache_clear()
     provide_mcp_manager.cache_clear()
     provide_rag_service.cache_clear()
     provide_rag_ingestion_queue.cache_clear()

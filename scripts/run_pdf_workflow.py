@@ -4,8 +4,9 @@ Usage:
     python scripts/run_pdf_workflow.py report.pdf \
         --owner-key-hash <sha256-hex> --topic "Quarterly review"
 
-The workflow is a reference implementation and is not wired into the main
-API routes. It requires ``RAG_ENABLED=true`` plus a configured LLM provider.
+The workflow is a reference implementation and the CLI is an independent
+runner. It requires ``RAG_ENABLED=true`` plus a configured LLM provider; the
+stateful HTTP API is available under ``/api/v1/workflows``.
 """
 
 import argparse
