@@ -606,7 +606,8 @@ RAG_EMBEDDING_TIMEOUT_SECONDS=60
 RAG_SEARCH_MODE=vector
 RAG_RRF_K=60
 # Reranker: set RERANKER_API_KEY in .env to enable Jina reranking; without
-# it (or on any reranker failure) results pass through unchanged.
+# it (or on any reranker failure) results pass through unchanged. Rerank
+# re-ranks the top 15 fused candidates, then truncates to RAG_TOP_K.
 RERANKER_MODEL=jina-reranker-v2-base-multilingual
 RERANKER_TIMEOUT_SECONDS=10
 

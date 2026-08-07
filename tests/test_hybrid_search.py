@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import cast
 
 from app.rag.hybrid import HybridRetriever
@@ -154,6 +155,75 @@ async def test_keyword_mode_skips_semantic_path() -> None:
     assert store.semantic_calls == 0
     # Single-path normalization: keyword rank 1 is the best possible.
     assert results[0].distance == 0.0
+
+
+class _RecordingReranker:
+    """Fake reranker that reverses the candidate order and records calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.closed = False
+
+    async def rerank(
+        self, query: str, results: Sequence[SearchResult]
+    ) -> list[SearchResult]:
+        self.calls.append(query)
+        return list(reversed(results))
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_hybrid_reranks_candidates_then_truncates() -> None:
+    """Rerank sees candidates beyond the final top_k and output is truncated."""
+    from app.rag.reranker import Reranker
+
+    semantic = [_result(f"s{i}", i) for i in range(20)]
+    keyword = [_keyword(f"k{i}", i, 1.0) for i in range(20)]
+    store = _FakeVectorStore(semantic, keyword)
+    reranker = _RecordingReranker()
+    retriever = HybridRetriever(
+        cast(PgVectorStore, store),
+        reranker=cast(Reranker, reranker),
+        rerank_candidate_k=15,
+    )
+
+    results = await retriever.search([], top_k=3, query="x")
+
+    assert reranker.calls == ["x"]
+    assert len(results) == 3
+    # Fused top-15 (stable sort): s0,k0,s1,k1,...,s7; the reranker reversed
+    # the candidates so the tail of the candidate window leads the output.
+    assert results[0].chunk_id == "s7"
+
+
+async def test_hybrid_skips_rerank_without_query() -> None:
+    from app.rag.reranker import Reranker
+
+    reranker = _RecordingReranker()
+    retriever = HybridRetriever(
+        cast(PgVectorStore, _FakeVectorStore([_result("a", 0)], [])),
+        reranker=cast(Reranker, reranker),
+    )
+
+    results = await retriever.search([], top_k=3, query=None)
+
+    assert reranker.calls == []
+    assert [r.chunk_id for r in results] == ["a"]
+
+
+async def test_hybrid_close_delegates_to_reranker() -> None:
+    from app.rag.reranker import Reranker
+
+    reranker = _RecordingReranker()
+    retriever = HybridRetriever(
+        cast(PgVectorStore, _FakeVectorStore([], [])),
+        reranker=cast(Reranker, reranker),
+    )
+
+    await retriever.close()
+
+    assert reranker.closed
 
 
 async def test_empty_results_yield_empty_fusion() -> None:

@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_RRF_K = 60
 _DEFAULT_CANDIDATE_K = 25
+_DEFAULT_RERANK_CANDIDATE_K = 15
 
 
 class HybridRetriever:
@@ -49,6 +50,12 @@ class HybridRetriever:
     ``mode`` selects the active composition: ``hybrid`` runs both paths
     and fuses them; ``keyword`` skips the semantic path entirely so the
     ranking is purely keyword-based (diagnostics/golden comparison).
+
+    When a reranker is configured it re-ranks the top
+    ``rerank_candidate_k`` fused candidates (default 15) and the final
+    ``top_k`` is truncated afterwards — reranking can therefore rescue
+    documents that RRF ranked below the final cut, at a bounded per-query
+    HTTP cost.  Without ``query`` text the reranker is skipped.
     """
 
     def __init__(
@@ -59,12 +66,14 @@ class HybridRetriever:
         candidate_k: int = _DEFAULT_CANDIDATE_K,
         mode: Literal["hybrid", "keyword"] = "hybrid",
         reranker: Reranker | None = None,
+        rerank_candidate_k: int = _DEFAULT_RERANK_CANDIDATE_K,
     ) -> None:
         self._vector_store = vector_store
         self._rrf_k = rrf_k
         self._candidate_k = candidate_k
         self._mode = mode
         self._reranker = reranker
+        self._rerank_candidate_k = rerank_candidate_k
 
     async def add_document(
         self,
@@ -118,7 +127,14 @@ class HybridRetriever:
             )
         fused = _fuse(semantic, keyword, top_k=top_k, rrf_k=self._rrf_k)
         if self._reranker is not None and query:
-            fused = await self._reranker.rerank(query, fused)
+            candidates = _fuse(
+                semantic,
+                keyword,
+                top_k=max(top_k, self._rerank_candidate_k),
+                rrf_k=self._rrf_k,
+            )
+            reranked = await self._reranker.rerank(query, candidates)
+            return reranked[:top_k]
         return fused
 
     async def close(self) -> None:
