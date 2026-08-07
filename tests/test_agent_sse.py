@@ -27,6 +27,7 @@ from app.api.agent import (
     stream_agent_run,
 )
 from app.auth.hash import hash_api_key
+from app.auth.identity import IdentityContext
 from app.auth.models import APIKey
 from app.conversations.memory_repository import InMemoryConversationRepository
 from app.conversations.service import ConversationService
@@ -617,9 +618,17 @@ async def test_stream_persists_final_answer_and_carries_thread_id() -> None:
 
 
 class _RateLimitedRequest:
-    def __init__(self) -> None:
+    def __init__(self, *, identity: IdentityContext | None = None) -> None:
+        if identity is None:
+            identity = IdentityContext(
+                user_id=None,
+                workspace_id=None,
+                api_key_id=None,
+                api_key_hash=_TEST_OWNER,
+                role=None,
+            )
         self.state = SimpleNamespace(
-            context=RequestContext(request_id="request-1"),
+            context=RequestContext(request_id="request-1", identity=identity),
             rate_limit_limit=60,
             rate_limit_remaining=59,
             rate_limit_reset_after=42,

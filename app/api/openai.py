@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.auth.models import APIKey
+from app.auth.tenant import resolve_tenant_scope
 from app.conversations.memory import (
-    conversation_owner,
     persist_turn,
     prepare_thread,
 )
@@ -109,7 +109,8 @@ async def create_chat_completions(
     quota_service: Annotated[QuotaService, Depends(provide_quota_service)],
 ) -> OpenAIChatResponse | StreamingResponse:
     context: RequestContext = http_request.state.context
-    owner_key_hash = conversation_owner(_api_key)
+    identity = context.identity
+    owner_key_hash = resolve_tenant_scope(identity)
     thread_id: str | None = None
     if conversation_service is not None:
         client_system_messages = [

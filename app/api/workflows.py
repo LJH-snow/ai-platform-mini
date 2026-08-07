@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
 from app.auth.models import APIKey
+from app.auth.tenant import resolve_tenant_scope
 from app.core.container import provide_workflow_service
 from app.core.settings import get_settings
 from app.exceptions.base import RAGDocumentTooLargeError, RAGUnavailableError
@@ -37,6 +38,7 @@ def get_workflow_service() -> PDFReportWorkflowService:
 )
 async def create_pdf_report_workflow(
     file: Annotated[UploadFile, File(description="PDF document")],
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     service: Annotated[PDFReportWorkflowService, Depends(get_workflow_service)],
     topic: Annotated[str | None, Form(description="Optional report topic")] = None,
@@ -50,10 +52,11 @@ async def create_pdf_report_workflow(
         raise RAGDocumentTooLargeError(
             f"PDF 文件超过限制（最多 {settings.rag_max_upload_bytes} 字节）。"
         )
+    identity = request.state.context.identity
     view = await service.start(
         pdf_bytes=content,
         filename=file.filename,
-        owner_key_hash=api_key.key,
+        owner_key_hash=resolve_tenant_scope(identity),
         topic=topic,
     )
     return WorkflowStatusResponse.from_view(view)
@@ -66,10 +69,14 @@ async def create_pdf_report_workflow(
 )
 async def get_workflow_status(
     thread_id: str,
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     service: Annotated[PDFReportWorkflowService, Depends(get_workflow_service)],
 ) -> WorkflowStatusResponse:
-    view = await service.get_status(thread_id, owner_key_hash=api_key.key)
+    identity = request.state.context.identity
+    view = await service.get_status(
+        thread_id, owner_key_hash=resolve_tenant_scope(identity)
+    )
     return WorkflowStatusResponse.from_view(view)
 
 
@@ -80,10 +87,14 @@ async def get_workflow_status(
 )
 async def approve_workflow(
     thread_id: str,
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     service: Annotated[PDFReportWorkflowService, Depends(get_workflow_service)],
 ) -> WorkflowStatusResponse:
-    view = await service.approve(thread_id, owner_key_hash=api_key.key)
+    identity = request.state.context.identity
+    view = await service.approve(
+        thread_id, owner_key_hash=resolve_tenant_scope(identity)
+    )
     return WorkflowStatusResponse.from_view(view)
 
 
@@ -94,13 +105,15 @@ async def approve_workflow(
 )
 async def reject_workflow(
     thread_id: str,
-    request: WorkflowRejectRequest,
+    req: WorkflowRejectRequest,
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     service: Annotated[PDFReportWorkflowService, Depends(get_workflow_service)],
 ) -> WorkflowStatusResponse:
+    identity = request.state.context.identity
     view = await service.reject(
         thread_id,
-        owner_key_hash=api_key.key,
-        feedback=request.feedback,
+        owner_key_hash=resolve_tenant_scope(identity),
+        feedback=req.feedback,
     )
     return WorkflowStatusResponse.from_view(view)

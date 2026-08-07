@@ -4,8 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response
 
 from app.auth.models import APIKey
+from app.auth.tenant import resolve_tenant_scope
 from app.conversations.memory import (
-    conversation_owner,
     persist_turn,
     prepare_thread,
 )
@@ -51,7 +51,8 @@ async def create_chat_completion(
     quota_service: Annotated[QuotaService, Depends(provide_quota_service)],
 ) -> ChatResponse:
     context: RequestContext = http_request.state.context
-    owner_key_hash = conversation_owner(_api_key)
+    identity = context.identity
+    owner_key_hash = resolve_tenant_scope(identity)
     thread_id, merged_history = await prepare_thread(
         conversation_service,
         owner_key_hash=owner_key_hash,

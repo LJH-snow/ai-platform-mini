@@ -27,8 +27,8 @@ from app.agents.stream import (
     AgentStreamSetupError,
 )
 from app.auth.models import APIKey
+from app.auth.tenant import resolve_tenant_scope
 from app.conversations.memory import (
-    conversation_owner,
     persist_turn,
     prepare_thread,
 )
@@ -146,7 +146,8 @@ async def create_agent_run(
     thread_id: str | None = None
     owner_key_hash: str | None = None
     if conversation_service is not None:
-        owner_key_hash = conversation_owner(api_key)
+        identity = context.identity
+        owner_key_hash = resolve_tenant_scope(identity)
         thread_id, merged_history = await prepare_thread(
             conversation_service,
             owner_key_hash=owner_key_hash,
@@ -203,7 +204,8 @@ async def stream_agent_run(
     thread_id: str | None = None
     owner_key_hash: str | None = None
     if conversation_service is not None:
-        owner_key_hash = conversation_owner(api_key)
+        identity = context.identity
+        owner_key_hash = resolve_tenant_scope(identity)
         thread_id, merged_history = await prepare_thread(
             conversation_service,
             owner_key_hash=owner_key_hash,

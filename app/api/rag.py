@@ -14,6 +14,7 @@ from fastapi import (
 )
 
 from app.auth.models import APIKey
+from app.auth.tenant import resolve_tenant_scope
 from app.core.container import (
     provide_quota_service,
     provide_rag_ingestion_queue,
@@ -92,12 +93,14 @@ def get_rag_service() -> RAGService:
 )
 async def upload_rag_document(
     file: Annotated[UploadFile, File(description="PDF document")],
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     ingestion_queue: Annotated[RAGIngestionQueue, Depends(get_rag_ingestion_queue)],
 ) -> RAGIngestionTaskResponse:
     from app.core.settings import get_settings
 
     settings = get_settings()
+    identity = request.state.context.identity
     try:
         content = await file.read(settings.rag_max_upload_bytes + 1)
         if len(content) > settings.rag_max_upload_bytes:
@@ -108,7 +111,7 @@ async def upload_rag_document(
             task = await ingestion_queue.submit(
                 content,
                 filename=file.filename,
-                owner_key_hash=api_key.key,
+                owner_key_hash=resolve_tenant_scope(identity),
             )
         except asyncio.QueueFull as exc:
             raise RAGUnavailableError(
@@ -128,10 +131,14 @@ async def upload_rag_document(
 )
 async def get_rag_ingestion_task(
     task_id: str,
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     ingestion_queue: Annotated[RAGIngestionQueue, Depends(get_rag_ingestion_queue)],
 ) -> RAGIngestionTaskResponse:
-    task = ingestion_queue.get_task(task_id, owner_key_hash=api_key.key)
+    identity = request.state.context.identity
+    task = ingestion_queue.get_task(
+        task_id, owner_key_hash=resolve_tenant_scope(identity)
+    )
     if task is None:
         raise HTTPException(status_code=404, detail="Ingestion task not found")
     return _to_task_response(task)
@@ -143,12 +150,16 @@ async def get_rag_ingestion_task(
     summary="List indexed PDF documents",
 )
 async def list_rag_documents(
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     ingestion_service: Annotated[
         RAGIngestionService, Depends(get_rag_ingestion_service)
     ],
 ) -> RAGDocumentListResponse:
-    documents = await ingestion_service.list_documents(owner_key_hash=api_key.key)
+    identity = request.state.context.identity
+    documents = await ingestion_service.list_documents(
+        owner_key_hash=resolve_tenant_scope(identity)
+    )
     return RAGDocumentListResponse(
         data=[_to_document_response(document) for document in documents]
     )
@@ -161,13 +172,15 @@ async def list_rag_documents(
 )
 async def delete_rag_document(
     document_id: UUID,
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     ingestion_service: Annotated[
         RAGIngestionService, Depends(get_rag_ingestion_service)
     ],
 ) -> Response:
+    identity = request.state.context.identity
     deleted = await ingestion_service.delete_document(
-        owner_key_hash=api_key.key,
+        owner_key_hash=resolve_tenant_scope(identity),
         document_id=str(document_id),
     )
     if not deleted:
@@ -182,13 +195,15 @@ async def delete_rag_document(
 )
 async def preview_rag_document(
     document_id: UUID,
+    request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     ingestion_service: Annotated[
         RAGIngestionService, Depends(get_rag_ingestion_service)
     ],
 ) -> RAGDocumentPreviewResponse:
+    identity = request.state.context.identity
     preview = await ingestion_service.get_document_preview(
-        owner_key_hash=api_key.key,
+        owner_key_hash=resolve_tenant_scope(identity),
         document_id=str(document_id),
     )
     if preview is None:
@@ -226,12 +241,15 @@ async def create_rag_chat_completion(
     context: RequestContext = http_request.state.context
 
     # Phase 1: prepare — retrieve context and build enhanced prompt.
+    identity = context.identity
     prepared: PreparedRAGRequest = await rag_service.prepare(
-        request, owner_key_hash=api_key.key
+        request, owner_key_hash=resolve_tenant_scope(identity)
     )
 
     # Phase 2: quota reservation using the FINAL messages
     # (including RAG context) so that retrieval content is accounted for.
+    # Note: api_key.key (the presented key hash) is used for quota audit,
+    # NOT identity.tenant_scope — per F5 audit-granularity design.
     reservation: QuotaReservation | None = await quota_service.reserve(
         api_key.key,
         max_tokens=request.max_tokens,

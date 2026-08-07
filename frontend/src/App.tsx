@@ -26,6 +26,11 @@ import { AgentStreamFormatError } from './agent/stream.ts'
 import { compactAgentTraceEvents } from './agent/trace.ts'
 import { isKnownTool, localizeToolName } from './agent/tool-name.ts'
 import { AdminDashboard, USER_KEY_STORAGE } from './admin/AdminDashboard.tsx'
+import { createAuthClient } from './auth/client.ts'
+import { LoginPage } from './auth/LoginPage.tsx'
+import { RegisterPage } from './auth/RegisterPage.tsx'
+import { WorkspaceSwitcher } from './auth/WorkspaceSwitcher.tsx'
+import { MemberManagement } from './auth/MemberManagement.tsx'
 import { formatAgentTimestamp } from './agent/time.ts'
 import { Dashboard } from './platform/Dashboard.tsx'
 import { createKnowledgeClient } from './platform/knowledge.ts'
@@ -41,7 +46,7 @@ import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
-type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin'
+type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members'
 type RequestStatus =
   | 'idle'
   | 'sending'
@@ -532,7 +537,19 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const [userApiKeyInput, setUserApiKeyInput] = useState(
     () => sessionStorage.getItem(USER_KEY_STORAGE) ?? '',
   )
+  // Auth page switching
+  const [authPage, setAuthPage] = useState<'login' | 'register' | null>(null)
+  // Workspace selection
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
+  // activeWorkspaceRole will be set by WorkspaceSwitcher in Sprint A5 X-Workspace-Id integration
+  const [activeWorkspaceRole, setActiveWorkspaceRole] = useState<string | null>(null)
+  void setActiveWorkspaceRole // referenced for future use
   const effectiveApiKey = userApiKey.trim() || runtimeConfig.apiKey
+  // Auth client (recreated when apiKey changes)
+  const authClient = useMemo(
+    () => createAuthClient({ apiBaseUrl: runtimeConfig.apiBaseUrl }),
+    [runtimeConfig.apiBaseUrl],
+  )
   const platformClient = useMemo(
     () =>
       createPlatformClient({
@@ -1164,6 +1181,44 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
     }
   }
 
+  const handleLogin = (apiKey: string) => {
+    sessionStorage.setItem(USER_KEY_STORAGE, apiKey)
+    setUserApiKey(apiKey)
+    setUserApiKeyInput(apiKey)
+    setAuthPage(null)
+    setAnnouncement('登录成功。')
+  }
+
+  const handleRegister = (apiKey: string) => {
+    sessionStorage.setItem(USER_KEY_STORAGE, apiKey)
+    setUserApiKey(apiKey)
+    setUserApiKeyInput(apiKey)
+    setAuthPage(null)
+    setAnnouncement('注册成功，已自动登录。')
+  }
+
+  // ── Auth page rendering ──────────────────────────────────────────
+  // When user explicitly chose to log in/register, show auth pages.
+  // Legacy key entry via sidebar still works as before.
+  if (authPage === 'login') {
+    return (
+      <LoginPage
+        client={authClient}
+        onLogin={handleLogin}
+        onSwitchToRegister={() => setAuthPage('register')}
+      />
+    )
+  }
+  if (authPage === 'register') {
+    return (
+      <RegisterPage
+        client={authClient}
+        onRegister={handleRegister}
+        onSwitchToLogin={() => setAuthPage('login')}
+      />
+    )
+  }
+
   const navigateToConsole = (nextDraft?: string): void => {
     if (nextDraft) setDraft(nextDraft)
     setPage('console')
@@ -1206,7 +1261,16 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             </div>
           </div>
           <nav className="platformNav" aria-label="主导航">
-            <span className="navSectionLabel">WORKSPACE</span>
+            <WorkspaceSwitcher
+              client={authClient}
+              apiKey={effectiveApiKey ?? ''}
+              currentWorkspaceId={activeWorkspaceId}
+              onWorkspaceChange={(id) => {
+                setActiveWorkspaceId(id)
+                // TODO(Sprint A5): set X-Workspace-Id header for API calls
+              }}
+            />
+            <span className="navSectionLabel">PAGES</span>
             {navigation.map((item) => (
               <button
                 type="button"
@@ -1268,6 +1332,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
             <button type="button" className="newSessionButton" onClick={handleNewSession}>
               新建会话
             </button>
+            <button
+              type="button"
+              className="secondaryButton"
+              style={{ marginTop: 8, width: '100%' }}
+              onClick={() => setAuthPage('login')}
+            >
+              登录 / 注册
+            </button>
             <span className="navSectionLabel conversationHistoryLabel">会话记录</span>
             <nav className="conversationHistoryList" aria-label="会话记录">
               {conversationsStatus === 'loading' && conversations.length === 0 ? (
@@ -1309,8 +1381,21 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
               className={effectiveApiKey ? 'sidebarStatus sidebarStatusOnline' : 'sidebarStatus'}
             >
               <span aria-hidden="true" />
-              {effectiveApiKey ? 'API Key ready' : '需要 API Key'}
+              {effectiveApiKey ? '已登录' : '需要 API Key'}
             </span>
+            <button
+              type="button"
+              className="secondaryButton"
+              onClick={() => {
+                sessionStorage.removeItem(USER_KEY_STORAGE)
+                setUserApiKey('')
+                setUserApiKeyInput('')
+                setAnnouncement('已退出登录。')
+              }}
+              style={{ marginTop: 8, width: '100%' }}
+            >
+              退出登录
+            </button>
             <span className="sidebarVersion">FastAPI · Ollama · React</span>
           </div>
         </aside>
@@ -1360,6 +1445,16 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   if (page === 'workflow') {
     return renderPlatformShell(
       <WorkflowPanel apiKeyConfigured={Boolean(effectiveApiKey)} client={workflowClient} />,
+    )
+  }
+  if (page === 'members') {
+    return renderPlatformShell(
+      <MemberManagement
+        client={authClient}
+        apiKey={effectiveApiKey ?? ''}
+        workspaceId={activeWorkspaceId ?? ''}
+        currentUserRole={activeWorkspaceRole ?? 'member'}
+      />,
     )
   }
 

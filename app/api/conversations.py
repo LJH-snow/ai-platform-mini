@@ -2,10 +2,10 @@
 
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.auth.models import APIKey
-from app.conversations.memory import conversation_owner
+from app.auth.tenant import resolve_tenant_scope
 from app.conversations.service import ConversationService
 from app.core.container import provide_conversation_service
 from app.ratelimit.dependencies import require_rate_limit
@@ -28,12 +28,14 @@ router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
     ),
 )
 async def list_conversations(
+    request: Request,
     _api_key: Annotated[APIKey, Depends(require_rate_limit)],
     conversation_service: Annotated[
         ConversationService, Depends(provide_conversation_service)
     ],
 ) -> list[ConversationSummaryResponse]:
-    owner_key_hash = conversation_owner(_api_key)
+    identity = request.state.context.identity
+    owner_key_hash = resolve_tenant_scope(identity)
     threads = await conversation_service.list_threads(owner_key_hash)
     return [
         ConversationSummaryResponse(
@@ -58,12 +60,14 @@ async def list_conversations(
 )
 async def list_thread_messages(
     thread_id: str,
+    request: Request,
     _api_key: Annotated[APIKey, Depends(require_rate_limit)],
     conversation_service: Annotated[
         ConversationService, Depends(provide_conversation_service)
     ],
 ) -> list[ConversationMessageResponse]:
-    owner_key_hash = conversation_owner(_api_key)
+    identity = request.state.context.identity
+    owner_key_hash = resolve_tenant_scope(identity)
     history = await conversation_service.load_history(owner_key_hash, thread_id)
     return [
         ConversationMessageResponse(
