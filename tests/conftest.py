@@ -15,6 +15,7 @@ from app.core.settings import get_settings
 # replace variables that are already present in the environment.
 os.environ.setdefault("AUTH_STORAGE", "memory")
 os.environ.setdefault("CONVERSATION_STORAGE", "memory")
+os.environ.setdefault("WORKFLOW_STORAGE", "memory")
 os.environ.setdefault("RAG_ENABLED", "false")
 get_settings.cache_clear()
 

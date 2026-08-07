@@ -1016,6 +1016,27 @@ describe('App', () => {
     expect(controlled.getRequest(0).threadId).toBe('thread-failed')
   })
 
+  it.each([
+    ['HTTP 500', new ChatBackendError('服务暂时不可用', 500, 'PROVIDER_ERROR', 'req-500')],
+    ['HTTP 429', new ChatBackendError('请求过于频繁', 429, 'RATE_LIMITED', 'req-429')],
+  ])('keeps the thread id when history restore fails with %s', async (_label, error) => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-transient')
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    controlled.listThreadMessages.mockRejectedValueOnce(error)
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('会话历史恢复失败，可继续提问。'),
+    )
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBe('thread-transient')
+
+    await user.type(screen.getByLabelText('输入消息'), '还能提问')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).threadId).toBe('thread-transient')
+  })
+
   it('clears an expired thread id when history restore returns CONVERSATION_NOT_FOUND', async () => {
     sessionStorage.setItem('ai-platform-thread-id', 'thread-expired')
     const user = userEvent.setup()
@@ -1034,6 +1055,69 @@ describe('App', () => {
     await user.click(screen.getByRole('button', { name: '发送消息' }))
     await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
     expect(controlled.getRequest(0).threadId).toBeNull()
+  })
+
+  it('clears an expired thread id when history restore returns a plain 404', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-expired-404')
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    controlled.listThreadMessages.mockRejectedValueOnce(
+      new ChatBackendError('会话不存在', 404, null, 'req-history-404'),
+    )
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await waitFor(() => expect(sessionStorage.getItem('ai-platform-thread-id')).toBeNull())
+    expect(screen.getByRole('status')).toHaveTextContent('原会话已失效，已准备好新会话。')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('输入消息'), '新会话问题')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).threadId).toBeNull()
+  })
+
+  it('clears an expired thread id when history restore reports CONVERSATION_NOT_FOUND without 404', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-expired-code')
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    controlled.listThreadMessages.mockRejectedValueOnce(
+      new ChatBackendError('会话不存在', 500, 'CONVERSATION_NOT_FOUND', 'req-history-code'),
+    )
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await waitFor(() => expect(sessionStorage.getItem('ai-platform-thread-id')).toBeNull())
+    expect(screen.getByRole('status')).toHaveTextContent('原会话已失效，已准备好新会话。')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('输入消息'), '新会话问题')
+    await user.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(controlled.getRequestCount()).toBe(1))
+    expect(controlled.getRequest(0).threadId).toBeNull()
+  })
+
+  it('aborts a pending history restore when starting a new session', async () => {
+    sessionStorage.setItem('ai-platform-thread-id', 'thread-pending')
+    const user = userEvent.setup()
+    const controlled = createControlledClient()
+    let resolveHistory: (messages: ChatMessage[]) => void = () => {}
+    controlled.listThreadMessages.mockImplementation(
+      (_threadId: string, signal?: AbortSignal) =>
+        new Promise<ChatMessage[]>((resolve) => {
+          signal?.addEventListener('abort', () => resolve([]))
+          resolveHistory = resolve
+        }),
+    )
+    renderConsole(<App chatClient={controlled.client} />)
+
+    await waitFor(() => expect(controlled.listThreadMessages).toHaveBeenCalled())
+    await user.click(screen.getByRole('button', { name: '新建会话' }))
+
+    expect(sessionStorage.getItem('ai-platform-thread-id')).toBeNull()
+    expect(controlled.listThreadMessages.mock.calls[0]?.[1]?.aborted).toBe(true)
+
+    resolveHistory([])
+    await waitFor(() => expect(screen.queryByText('已恢复会话历史。')).not.toBeInTheDocument())
+    expect(screen.queryByText('会话历史恢复失败，可继续提问。')).not.toBeInTheDocument()
   })
 
   it('lists older conversations and restores the selected thread', async () => {

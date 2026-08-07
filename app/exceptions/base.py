@@ -26,6 +26,10 @@ class ConversationNotFoundError(AppError):
     """Raised when a conversation thread is missing or not owned by the caller."""
 
 
+class WorkflowNotFoundError(AppError):
+    """Raised when a workflow thread is missing or not owned by the caller."""
+
+
 class RateLimitError(AppError):
     """Raised when the request rate exceeds the configured limit."""
 
