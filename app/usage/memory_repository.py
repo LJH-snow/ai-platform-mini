@@ -99,9 +99,12 @@ class InMemoryUsageRepository:
     async def get_workspace_key_ranking(
         self, owner_scope: str, days: int
     ) -> list[UsageRanking]:
-        return _rank(
-            self._records, owner_scope, days, key=lambda r: (r.api_key_hash or "")[:8]
+        rankings = _rank(
+            self._records, owner_scope, days, key=lambda r: r.api_key_hash or ""
         )
+        for ranking in rankings:
+            ranking.name = ranking.name[:8]
+        return rankings
 
     async def get_summary_for_key(self, api_key_hash: str) -> UsageSummary:
         return self._summarize(

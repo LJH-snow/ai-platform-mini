@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Iterable
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -30,17 +30,21 @@ class PostgresUsageRepository:
             await session.execute(
                 text(
                     "INSERT INTO daily_usage "
-                    "(api_key_hash, usage_date, model, request_count, "
-                    "prompt_tokens, completion_tokens, total_tokens) "
-                    "VALUES (:hash, :date, :model, 1, :prompt, :completion, :total) "
+                    "(api_key_hash, workspace_id, usage_date, model, "
+                    "request_count, prompt_tokens, completion_tokens, "
+                    "total_tokens) "
+                    "VALUES (:hash, :workspace_id, :date, :model, 1, "
+                    ":prompt, :completion, :total) "
                     "ON CONFLICT (api_key_hash, usage_date, model) DO UPDATE SET "
                     "request_count = daily_usage.request_count + 1, "
                     "prompt_tokens = daily_usage.prompt_tokens + :prompt, "
-                    "completion_tokens = daily_usage.completion_tokens + :completion, "
+                    "completion_tokens = daily_usage.completion_tokens + "
+                    ":completion, "
                     "total_tokens = daily_usage.total_tokens + :total"
                 ),
                 {
                     "hash": record.api_key_hash,
+                    "workspace_id": record.workspace_id,
                     "date": date.fromisoformat(record.usage_date),
                     "model": record.model,
                     "prompt": record.prompt_tokens,
@@ -111,7 +115,7 @@ class PostgresUsageRepository:
         self, owner_scope: str, days: int
     ) -> list[WorkspaceUsagePoint]:
         """Aggregate total tokens and requests per day for one tenant scope."""
-        start = date.today() - timedelta(days=days - 1)
+        start = _utc_today() - timedelta(days=days - 1)
         async with self._session_factory() as session:
             stmt = (
                 select(
@@ -155,7 +159,7 @@ class PostgresUsageRepository:
     async def _workspace_ranking(
         self, owner_scope: str, days: int, dimension: str
     ) -> list[UsageRanking]:
-        start = date.today() - timedelta(days=days - 1)
+        start = _utc_today() - timedelta(days=days - 1)
         column = (
             DailyUsageTable.model
             if dimension == "model"
@@ -227,3 +231,8 @@ def _row_to_agg(row: DailyUsageTable) -> UsageAggregation:
         completion_tokens=row.completion_tokens,
         total_tokens=row.total_tokens,
     )
+
+
+def _utc_today() -> date:
+    """UTC calendar day — the write path records usage_date in UTC."""
+    return datetime.now(UTC).date()

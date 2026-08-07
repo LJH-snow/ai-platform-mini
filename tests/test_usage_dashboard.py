@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from fastapi.testclient import TestClient
 
@@ -164,3 +165,60 @@ def test_days_parameter_is_bounded() -> None:
         assert resp.status_code == 422
     finally:
         _teardown()
+
+
+async def test_postgres_record_usage_writes_workspace_id() -> None:
+    """Lock the Postgres INSERT contract: workspace_id must be persisted.
+
+    Guards against InMemory-vs-Postgres storage drift where the in-memory
+    path stores the scope but the SQL path silently drops it (dashboard
+    would be empty for workspace users in production).
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.usage.models import UsageRecord
+    from app.usage.postgres_repository import PostgresUsageRepository
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, dict[str, object]]] = []
+
+        async def __aenter__(self) -> _FakeSession:
+            return self
+
+        async def __aexit__(self, *args: object) -> bool:
+            return False
+
+        async def execute(
+            self, statement: object, params: object | None = None
+        ) -> None:
+            self.executed.append((str(statement), dict(params or {})))  # type: ignore[call-overload]
+
+        async def commit(self) -> None:
+            return None
+
+    class _FakeFactory:
+        def __init__(self) -> None:
+            self.session = _FakeSession()
+
+        def __call__(self) -> _FakeSession:
+            return self.session
+
+    factory = _FakeFactory()
+    repository = PostgresUsageRepository(
+        cast(async_sessionmaker[AsyncSession], factory)
+    )
+    record = UsageRecord(
+        request_id="req-1",
+        model="qwen3:4b",
+        total_tokens=10,
+        api_key_hash="hash-1",
+        workspace_id="ws-1",
+        usage_date="2026-08-07",
+    )
+
+    await repository.record_usage(record)
+
+    sql, params = factory.session.executed[0]
+    assert "workspace_id" in sql
+    assert params["workspace_id"] == "ws-1"
