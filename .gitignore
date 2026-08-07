@@ -7,3 +7,10 @@ __pycache__/
 *.egg-info/
 .DS_Store
 .env
+
+# Local tool state and generated artifacts
+.headroom/
+.tokensave/
+output/
+demo/
+CLAUDE.md
