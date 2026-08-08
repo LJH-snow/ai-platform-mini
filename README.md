@@ -81,11 +81,11 @@
 - **运行时解析**：`POST /api/v1/agent/runs` 传 `{agent_id}` 时，`AgentService` 从定义解析 `model`/`max_steps`/工具白名单/`prompt_ref`；未传时行为与现状完全一致。显式请求字段（Pydantic `model_fields_set`）覆盖定义，未显式设置则用定义值——无魔法默认值比较。
 - **Prompt Registry**：`GET/POST /api/v1/prompts`、`POST /api/v1/prompts/{name}/activate {version}`；模板按 `(workspace_id, name)` 隔离，每名至多一个 active 版本，激活旧版本即回滚。渲染层级：agent `prompt_ref` 模板 → RAG preset → 决策协议（内置常量回退，registry 空/停用时 Agent 仍可运行）。`prompt_ref` 支持 `name@version` **版本钉扎**——钉扎的 agent 不受后续激活影响（激活 v5 不会改变引用 v2 的 agent），创建时校验钉扎版本存在。
 - **Tool seeds**：启动时把内置常量与工具 schema 写入 `prompt_templates`/`tools` 表；schema 从工具类导出（`CalculatorTool()`/`KnowledgeSearchTool`），seed 与运行时注册表零漂移。MCP 工具同样注册进定义校验注册表，Agent 白名单可绑定 MCP 工具。
-- **Workspace 级工具启用**：`PUT /api/v1/tools/{name}` 开关（`workspace_tools` 表，缺省继承 `enabled_by_default`）；Agent 创建/更新时白名单按 workspace 生效状态校验（禁用工具绑定被拒）。
+- **Workspace 级工具启用**：`PUT /api/v1/tools/{name}` 开关（`workspace_tools` 表，缺省继承 `enabled_by_default`）；Agent 创建/更新时白名单按 workspace 生效状态校验（禁用工具绑定被拒）；工具列表接口批量加载 workspace 覆盖（无 N+1）。
 - **run 审计**：`agent_run_records.payload` 记录 `agent_id` + `prompt_ref` + `prompt_version`（钉扎版本或运行时 active 版本，roadmap B5）。
 - **历史归属回填**：`python scripts/backfill_workspace_ownership.py` 把 Sprint A 之前的 run/usage 行按 `api_keys` 绑定反查回填 `workspace_id`（幂等，一次性执行，查不到 key 的行保持 legacy 口径）。
 - **流式一致性**：SSE 流式最终答案复用与 `decide()` 相同的 system prompt 构建（含 prompt_ref/RAG/协议层与工具段），token 预留估算同步修正。
-- **Agent Benchmark**：`POST /api/v1/benchmarks/run {agent_id, task_set}` 通过真实 AgentService 逐任务执行 golden 任务集（default 集含 calculator/knowledge_search 场景），产出四项指标（Tool Call Accuracy / Task Completion Rate / Average Steps / Latency）落 `agent_benchmark_runs` 表；`GET /api/v1/benchmarks/runs` 按 workspace 读取（可传 `agent_id` 过滤）。任务级失败不中断整个集合并计入 completion rate；`max_steps` 可选——省略时使用 agent 定义的步数上限（与生产请求语义一致），显式传值可统一/限制评估成本；Average Steps/Latency 只统计 completed 任务，避免早期失败拉低均值。benchmark 与 agent CRUD 共用同一 IDOR 边界（无 workspace 的 Key 统一 404，跨 workspace agent 拒绝执行）。
+- **Agent Benchmark 前端**（R1）：Agent Studio 选中 agent 后可运行 Benchmark，结果表格展示四项指标与历史 runs（`GET /api/v1/benchmarks/runs?agent_id=`）；`POST /api/v1/benchmarks/run {agent_id, task_set}` 通过真实 AgentService 逐任务执行 golden 任务集（default 集含 calculator/knowledge_search 场景），产出四项指标（Tool Call Accuracy / Task Completion Rate / Average Steps / Latency）落 `agent_benchmark_runs` 表；`GET /api/v1/benchmarks/runs` 按 workspace 读取（可传 `agent_id` 过滤）。任务级失败不中断整个集合并计入 completion rate；`max_steps` 可选——省略时使用 agent 定义的步数上限（与生产请求语义一致），显式传值可统一/限制评估成本；Average Steps/Latency 只统计 completed 任务，避免早期失败拉低均值。benchmark 与 agent CRUD 共用同一 IDOR 边界（无 workspace 的 Key 统一 404，跨 workspace agent 拒绝执行）。
 
 ## Conversation memory
 

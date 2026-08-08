@@ -245,10 +245,23 @@ class AgentDefinitionService:
         return True
 
     async def list_tools_with_state(self, workspace_id: str) -> list[dict[str, object]]:
-        """Registry tools enriched with the workspace-effective enabled flag."""
+        """Registry tools enriched with the workspace-effective enabled flag.
+
+        Batches the workspace overrides and the seeded records into
+        in-memory maps so the per-tool effective state is O(1) lookups
+        instead of per-tool repository round trips.
+        """
         records = await self._repo.list_tools()
+        overrides = {
+            override.tool_name: override.enabled
+            for override in await self._repo.list_workspace_tools(workspace_id)
+        }
+        defaults = {record.name: record.enabled_by_default for record in records}
         result: list[dict[str, object]] = []
         for record in records:
+            enabled = overrides.get(record.name)
+            if enabled is None:
+                enabled = defaults.get(record.name, True)
             result.append(
                 {
                     "name": record.name,
@@ -256,7 +269,7 @@ class AgentDefinitionService:
                     "parameters_schema": record.parameters_schema,
                     "owner": record.owner,
                     "enabled_by_default": record.enabled_by_default,
-                    "enabled": await self.is_tool_enabled(workspace_id, record.name),
+                    "enabled": enabled,
                 }
             )
         return result

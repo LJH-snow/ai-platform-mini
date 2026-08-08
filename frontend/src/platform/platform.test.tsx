@@ -143,6 +143,19 @@ const createConfigClient = (overrides: Partial<ConfigClient> = {}): ConfigClient
     model_ranking: [],
     key_ranking: [],
   })),
+  runBenchmark: vi.fn(async () => ({
+    id: 1,
+    agent_id: 'agent-1',
+    task_set: 'default',
+    tool_call_accuracy: 1.0,
+    task_completion_rate: 1.0,
+    average_steps: 1.0,
+    average_latency_ms: 12.0,
+    task_count: 3,
+    completed_count: 3,
+    created_at: null,
+  })),
+  listBenchmarkRuns: vi.fn(async () => []),
   getRun: vi.fn(async () => ({
     run_id: 'run-1',
     model: 'm',
@@ -420,6 +433,65 @@ describe('UsageDashboard', () => {
     await user.selectOptions(screen.getByRole('combobox'), '30')
 
     expect(getUsageDashboard).toHaveBeenLastCalledWith(30)
+  })
+})
+
+describe('AgentStudio benchmark', () => {
+  it('runs a benchmark for the selected agent and shows the results table', async () => {
+    const user = userEvent.setup()
+    const listAgents = vi.fn(async () => [
+      {
+        id: 'agent-1',
+        workspace_id: 'ws-1',
+        name: '研究助手',
+        model: 'qwen3:4b',
+        prompt_ref: '',
+        temperature: 0.7,
+        max_steps: 10,
+        enabled: true,
+        tool_names: [],
+      },
+    ])
+    const runBenchmark = vi.fn(async () => ({
+      id: 7,
+      agent_id: 'agent-1',
+      task_set: 'default',
+      tool_call_accuracy: 0.67,
+      task_completion_rate: 1.0,
+      average_steps: 1.0,
+      average_latency_ms: 25.0,
+      task_count: 3,
+      completed_count: 3,
+      created_at: '2026-08-08T00:00:00Z',
+    }))
+    const listBenchmarkRuns = vi.fn(async () => [
+      {
+        id: 7,
+        agent_id: 'agent-1',
+        task_set: 'default',
+        tool_call_accuracy: 0.67,
+        task_completion_rate: 1.0,
+        average_steps: 1.0,
+        average_latency_ms: 25.0,
+        task_count: 3,
+        completed_count: 3,
+        created_at: '2026-08-08T00:00:00Z',
+      },
+    ])
+    render(
+      <AgentStudio
+        client={createConfigClient({ listAgents, runBenchmark, listBenchmarkRuns })}
+      />,
+    )
+
+    await screen.findByText('研究助手')
+    await user.click(screen.getByRole('button', { name: /研究助手/ }))
+    await user.click(screen.getByRole('button', { name: '运行 Benchmark' }))
+
+    expect(runBenchmark).toHaveBeenCalledWith('agent-1')
+    expect(await screen.findByText('0.67')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Benchmark 完成')
+    expect(listBenchmarkRuns).toHaveBeenCalledWith('agent-1')
   })
 })
 

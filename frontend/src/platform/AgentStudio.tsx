@@ -4,6 +4,7 @@ import {
   ConfigApiError,
   type AgentDraft,
   type AgentSummary,
+  type BenchmarkRun,
   type ConfigClient,
   type PromptSummary,
   type ToolInfo,
@@ -31,6 +32,34 @@ export function AgentStudio({ client }: AgentStudioProps): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [benchmarkRuns, setBenchmarkRuns] = useState<BenchmarkRun[]>([])
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false)
+
+  const loadBenchmarkRuns = async (agentId: string): Promise<void> => {
+    try {
+      setBenchmarkRuns(await client.listBenchmarkRuns(agentId))
+    } catch {
+      setBenchmarkRuns([])
+    }
+  }
+
+  const runBenchmark = async (agent: AgentSummary): Promise<void> => {
+    setError(null)
+    setNotice(null)
+    setBenchmarkLoading(true)
+    try {
+      const run = await client.runBenchmark(agent.id)
+      setNotice(
+        `Benchmark 完成：工具准确率 ${(run.tool_call_accuracy ?? 0).toFixed(2)}，` +
+          `完成率 ${(run.task_completion_rate ?? 0).toFixed(2)}。`,
+      )
+      await loadBenchmarkRuns(agent.id)
+    } catch (caught) {
+      setError(caught instanceof ConfigApiError ? caught.message : 'Benchmark 运行失败。')
+    } finally {
+      setBenchmarkLoading(false)
+    }
+  }
 
   const loadAll = async (): Promise<void> => {
     setLoading(true)
@@ -62,6 +91,7 @@ export function AgentStudio({ client }: AgentStudioProps): JSX.Element {
 
   const startEdit = (agent: AgentSummary): void => {
     setEditingId(agent.id)
+    void loadBenchmarkRuns(agent.id)
     setDraft({
       name: agent.name,
       model: agent.model,
@@ -251,6 +281,68 @@ export function AgentStudio({ client }: AgentStudioProps): JSX.Element {
               </div>
             </div>
           </div>
+
+          {editingId !== null && (
+            <div className="benchmarkPanel">
+              <h3>Benchmark</h3>
+              <p>
+                对当前 Agent 运行 golden 任务集（真实执行），输出工具准确率、完成率、
+                平均步数与延迟。
+              </p>
+              <button
+                type="button"
+                disabled={benchmarkLoading}
+                onClick={() => {
+                  const agent = agents.find((item) => item.id === editingId)
+                  if (agent !== undefined) void runBenchmark(agent)
+                }}
+              >
+                {benchmarkLoading ? '运行中…' : '运行 Benchmark'}
+              </button>
+              {benchmarkRuns.length > 0 && (
+                <table className="benchmarkTable">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>任务集</th>
+                      <th>工具准确率</th>
+                      <th>完成率</th>
+                      <th>平均步数</th>
+                      <th>平均延迟</th>
+                      <th>时间</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {benchmarkRuns.map((run) => (
+                      <tr key={run.id}>
+                        <td>{run.id}</td>
+                        <td>{run.task_set}</td>
+                        <td>
+                          {run.tool_call_accuracy === null
+                            ? '--'
+                            : run.tool_call_accuracy.toFixed(2)}
+                        </td>
+                        <td>
+                          {run.task_completion_rate === null
+                            ? '--'
+                            : run.task_completion_rate.toFixed(2)}
+                        </td>
+                        <td>
+                          {run.average_steps === null ? '--' : run.average_steps.toFixed(2)}
+                        </td>
+                        <td>
+                          {run.average_latency_ms === null
+                            ? '--'
+                            : `${Math.round(run.average_latency_ms)} ms`}
+                        </td>
+                        <td>{run.created_at === null ? '--' : run.created_at.slice(0, 19)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
         </>
       )}
     </section>

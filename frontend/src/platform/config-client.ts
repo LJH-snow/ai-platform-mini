@@ -68,6 +68,19 @@ export type UsageRankingEntry = {
   request_count: number
 }
 
+export type BenchmarkRun = {
+  id: number
+  agent_id: string
+  task_set: string
+  tool_call_accuracy: number | null
+  task_completion_rate: number | null
+  average_steps: number | null
+  average_latency_ms: number | null
+  task_count: number
+  completed_count: number
+  created_at: string | null
+}
+
 export type UsageDashboard = {
   trend: UsageTrendPoint[]
   model_ranking: UsageRankingEntry[]
@@ -202,6 +215,45 @@ const normalizeRunSummaries = (payload: unknown): RunRecordSummary[] =>
       rag_reference_count: asNumber(item.rag_reference_count, 0),
     }
   })
+
+const normalizeBenchmarkRuns = (payload: unknown): BenchmarkRun[] =>
+  asArray(payload).map((entry): BenchmarkRun => {
+    const item = asObject(entry)
+    return {
+      id: asNumber(item.id, 0),
+      agent_id: asString(item.agent_id, ''),
+      task_set: asString(item.task_set, ''),
+      tool_call_accuracy:
+        typeof item.tool_call_accuracy === 'number' ? item.tool_call_accuracy : null,
+      task_completion_rate:
+        typeof item.task_completion_rate === 'number'
+          ? item.task_completion_rate
+          : null,
+      average_steps:
+        typeof item.average_steps === 'number' ? item.average_steps : null,
+      average_latency_ms:
+        typeof item.average_latency_ms === 'number' ? item.average_latency_ms : null,
+      task_count: asNumber(item.task_count, 0),
+      completed_count: asNumber(item.completed_count, 0),
+      created_at: typeof item.created_at === 'string' ? item.created_at : null,
+    }
+  })
+
+const normalizeBenchmarkRun = (payload: unknown): BenchmarkRun => {
+  const runs = normalizeBenchmarkRuns([payload])
+  return runs[0] ?? {
+    id: 0,
+    agent_id: '',
+    task_set: '',
+    tool_call_accuracy: null,
+    task_completion_rate: null,
+    average_steps: null,
+    average_latency_ms: null,
+    task_count: 0,
+    completed_count: 0,
+    created_at: null,
+  }
+}
 
 const normalizeUsageDashboard = (payload: unknown): UsageDashboard => {
   const item = asObject(payload)
@@ -358,6 +410,22 @@ export const createConfigClient = (options: ConfigClientOptions = {}) => {
         `/api/v1/usage/dashboard?days=${days}`,
         null,
         normalizeUsageDashboard,
+      ),
+    runBenchmark: (agentId: string, taskSet = 'default') =>
+      request(
+        'POST',
+        '/api/v1/benchmarks/run',
+        { agent_id: agentId, task_set: taskSet },
+        normalizeBenchmarkRun,
+      ),
+    listBenchmarkRuns: (agentId?: string) =>
+      request(
+        'GET',
+        agentId
+          ? `/api/v1/benchmarks/runs?agent_id=${encodeURIComponent(agentId)}`
+          : '/api/v1/benchmarks/runs',
+        null,
+        normalizeBenchmarkRuns,
       ),
   }
 }
