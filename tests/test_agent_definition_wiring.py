@@ -551,3 +551,46 @@ async def test_workspace_disabled_tool_removed_from_run_whitelist() -> None:
         api_key=api_key,
     )
     assert "calculator" not in (chat.requests[-1].system_prompt or "")
+
+
+async def test_pinned_prompt_ref_renders_exact_version() -> None:
+    """Agent prompt_ref 'name@version' pins the version against activation."""
+    registry = PromptRegistryService(repository=InMemoryPromptRepository())
+    await registry.seed(name="custom_prompt", content="V1 CONTENT")
+    await registry.create_version("custom_prompt", "V2 CONTENT")
+    await registry.activate("custom_prompt", 2)
+    agent_svc = await _make_agent_svc(prompt_registry=registry)
+    record, _ = await agent_svc.create_agent(
+        workspace_id=_WS_ID,
+        name="a",
+        model="m",
+        prompt_ref="custom_prompt@1",
+    )
+    service, chat, _ = await _make_service(
+        agent_svc=agent_svc, prompt_registry=registry
+    )
+
+    await service.run(
+        AgentRunRequest(message="hello", agent_id=record.id),
+        context=_context(),
+        api_key=_api_key(),
+    )
+
+    system_prompt = chat.requests[0].system_prompt or ""
+    # v2 is active but the agent is pinned to v1.
+    assert "V1 CONTENT" in system_prompt
+    assert "V2 CONTENT" not in system_prompt
+
+
+async def test_pinned_prompt_ref_with_missing_version_is_rejected() -> None:
+    registry = PromptRegistryService(repository=InMemoryPromptRepository())
+    await registry.seed(name="custom_prompt", content="V1 CONTENT")
+    agent_svc = await _make_agent_svc(prompt_registry=registry)
+
+    with pytest.raises(ValidationError):
+        await agent_svc.create_agent(
+            workspace_id=_WS_ID,
+            name="a",
+            model="m",
+            prompt_ref="custom_prompt@99",
+        )

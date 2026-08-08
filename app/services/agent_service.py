@@ -42,7 +42,7 @@ from app.prompts.builtins import (
     BUILTIN_AGENT_PROTOCOL_PROMPT,
     BUILTIN_RAG_PRESET_PROMPT,
 )
-from app.prompts.service import PromptRegistryService
+from app.prompts.service import PromptRegistryService, split_prompt_ref
 from app.providers.results import ProviderChatResult
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.service import QuotaService
@@ -735,16 +735,27 @@ class AgentService:
     async def _render_prompt_ref(
         self, prompt_ref: str, *, workspace_id: str | None
     ) -> str:
-        """Render a custom prompt template, failing loudly when it is missing."""
+        """Render a custom prompt template, failing loudly when it is missing.
+
+        Plain names render the active version; "name@version" renders the
+        pinned version exactly (activation of a newer version does not
+        change this agent's behaviour).
+        """
 
         if self._prompt_registry is None:
             raise ValidationError(
                 f"Prompt template '{prompt_ref}' cannot be resolved "
                 "(prompt registry unavailable)."
             )
-        rendered = await self._prompt_registry.render(
-            prompt_ref, fallback="", workspace_id=workspace_id
-        )
+        name, pinned = split_prompt_ref(prompt_ref)
+        if pinned is None:
+            rendered = await self._prompt_registry.render(
+                prompt_ref, fallback="", workspace_id=workspace_id
+            )
+        else:
+            rendered = await self._prompt_registry.render_version(
+                name, pinned, fallback="", workspace_id=workspace_id
+            )
         if not rendered:
             raise ValidationError(f"Prompt template '{prompt_ref}' not found.")
         return rendered

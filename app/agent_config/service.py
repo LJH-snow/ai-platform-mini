@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from app.agent_config.models import AgentRecord, ToolRecord, WorkspaceToolRecord
 from app.agent_config.repository import AgentDefinitionRepository
 from app.exceptions.base import ValidationError
-from app.prompts.service import PromptRegistryService
+from app.prompts.service import PromptRegistryService, split_prompt_ref
 
 if TYPE_CHECKING:
     from app.tools.registry import ToolRegistry
@@ -173,16 +173,23 @@ class AgentDefinitionService:
         """Reject agent definitions that reference a missing prompt template.
 
         Empty references are allowed (the runtime falls back to the built-in
-        decision protocol).  Non-empty references must resolve to an active
-        template (workspace-scoped or global), otherwise the agent would
-        silently degrade to the default protocol prompt at run time.
+        decision protocol).  Non-empty references must resolve — either to
+        the active template (plain name) or to an existing pinned version
+        ("name@version") — otherwise the agent would silently degrade to
+        the default protocol prompt at run time.
         """
 
         if not prompt_ref or self._prompt_registry is None:
             return
-        rendered = await self._prompt_registry.render(
-            prompt_ref, fallback="", workspace_id=workspace_id
-        )
+        name, pinned = split_prompt_ref(prompt_ref)
+        if pinned is None:
+            rendered = await self._prompt_registry.render(
+                prompt_ref, fallback="", workspace_id=workspace_id
+            )
+        else:
+            rendered = await self._prompt_registry.render_version(
+                name, pinned, fallback="", workspace_id=workspace_id
+            )
         if not rendered:
             raise ValidationError(
                 f"Prompt template '{prompt_ref}' not found in the registry."

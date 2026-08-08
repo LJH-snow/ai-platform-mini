@@ -39,6 +39,7 @@ from app.core.container import (
     provide_conversation_service,
 )
 from app.core.context import RequestContext
+from app.prompts.service import PromptRegistryService, split_prompt_ref
 from app.ratelimit.dependencies import require_rate_limit
 from app.schemas.agent import (
     AgentEventSummary,
@@ -357,6 +358,7 @@ async def _persist_agent_run(
     api_key: APIKey,
     model: str | None = None,
     definition_service: AgentDefinitionService | None = None,
+    prompt_registry: PromptRegistryService | None = None,
 ) -> None:
     if record_service is None:
         return
@@ -364,6 +366,7 @@ async def _persist_agent_run(
         # Resolve the Agent definition audit trail before persisting
         # (roadmap B5: record prompt name/version in the audit payload).
         prompt_ref: str | None = None
+        prompt_version: int | None = None
         if request.agent_id:
             identity = context.identity
             workspace_id = identity.workspace_id if identity else None
@@ -379,6 +382,20 @@ async def _persist_agent_run(
                         request.agent_id, workspace_id=workspace_id
                     )
                     prompt_ref = agent.prompt_ref if agent is not None else None
+                    if prompt_ref:
+                        name, pinned = split_prompt_ref(prompt_ref)
+                        if pinned is not None:
+                            prompt_version = pinned
+                        else:
+                            if prompt_registry is None:
+                                from app.core.container import (
+                                    provide_prompt_registry,
+                                )
+
+                                prompt_registry = provide_prompt_registry()
+                            prompt_version = await prompt_registry.resolve_version(
+                                name, workspace_id=workspace_id
+                            )
                 except Exception:
                     prompt_ref = None
         await record_service.save(
@@ -389,6 +406,7 @@ async def _persist_agent_run(
             model=model,
             agent_id=request.agent_id,
             prompt_ref=prompt_ref,
+            prompt_version=prompt_version,
         )
     except Exception:
         # Audit persistence must never break the model response.

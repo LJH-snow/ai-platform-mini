@@ -47,9 +47,16 @@ class _FakeRecordService:
         *,
         agent_id: str | None = None,
         prompt_ref: str | None = None,
+        prompt_version: int | None = None,
     ) -> None:
         del response, request, context, api_key, model
-        self.saved.append({"agent_id": agent_id, "prompt_ref": prompt_ref})
+        self.saved.append(
+            {
+                "agent_id": agent_id,
+                "prompt_ref": prompt_ref,
+                "prompt_version": prompt_version,
+            }
+        )
 
 
 def _definition_service() -> AgentDefinitionService:
@@ -258,16 +265,9 @@ def test_agent_run_persists_agent_id_and_prompt_ref() -> None:
         from app.prompts.service import PromptRegistryService
 
         registry = PromptRegistryService(repository=InMemoryPromptRepository())
-        await_registry = None
-        del await_registry
         import asyncio
 
         asyncio.run(registry.seed(name="custom_prompt", content="CUSTOM"))
-
-        # Patch the definition service's prompt registry to resolve refs.
-        from app.core.container import provide_prompt_registry
-
-        app.dependency_overrides[provide_prompt_registry] = lambda: registry
 
         asyncio.run(
             _persist_agent_run(
@@ -286,11 +286,13 @@ def test_agent_run_persists_agent_id_and_prompt_ref() -> None:
                 ),
                 api_key=cast(APIKey, _dummy_api_key()),
                 definition_service=def_service,
+                prompt_registry=registry,
             )
         )
 
         assert record_service.saved[-1]["agent_id"] == agent_id
         assert record_service.saved[-1]["prompt_ref"] == "custom_prompt"
+        assert record_service.saved[-1]["prompt_version"] == 1
         assert ws_id
     finally:
         _teardown()

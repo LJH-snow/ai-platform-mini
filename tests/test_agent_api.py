@@ -94,8 +94,9 @@ class FakeAgentRunRecordService:
         *,
         agent_id: str | None = None,
         prompt_ref: str | None = None,
+        prompt_version: int | None = None,
     ) -> None:
-        del response, request, context, api_key, agent_id, prompt_ref
+        del response, request, context, api_key, agent_id, prompt_ref, prompt_version
         self.saved_models.append(model)
 
 

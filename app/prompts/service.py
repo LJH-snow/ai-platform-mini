@@ -3,12 +3,26 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 
 from app.prompts.models import PromptRecord, PromptVersionSummary
 from app.prompts.repository import PromptRepository
 
 logger = logging.getLogger(__name__)
+
+# Prompt references may pin a version: "name@3" renders version 3 of
+# "name" regardless of the currently active version; plain names always
+# render the active version.
+_PROMPT_REF_PIN_RE = re.compile(r"^(.+)@(\d+)$")
+
+
+def split_prompt_ref(prompt_ref: str) -> tuple[str, int | None]:
+    """Split a prompt reference into (name, pinned version or None)."""
+    match = _PROMPT_REF_PIN_RE.match(prompt_ref)
+    if match:
+        return match.group(1), int(match.group(2))
+    return prompt_ref, None
 
 
 class PromptRegistryService:
@@ -104,6 +118,48 @@ class PromptRegistryService:
     ) -> bool:
         """Set a specific version as active (also serves as rollback)."""
         return await self._repo.set_active(workspace_id, name, version)
+
+    async def resolve_version(
+        self, name: str, *, workspace_id: str | None = None
+    ) -> int | None:
+        """Return the active version number of a template.
+
+        Workspace-scoped template wins, global is the fallback; None when
+        no template exists.  Used by the run audit to record the exact
+        prompt version an agent executed with.
+        """
+        template = await self._repo.find_active(workspace_id, name)
+        if template is None and workspace_id is not None:
+            template = await self._repo.find_active(None, name)
+        return template.version if template is not None else None
+
+    async def render_version(
+        self,
+        name: str,
+        version: int,
+        variables: dict[str, str] | None = None,
+        fallback: str = "",
+        *,
+        workspace_id: str | None = None,
+    ) -> str:
+        """Render a pinned version ("name@version") of a template.
+
+        Same resolution order as ``render`` (workspace first, then global)
+        but for an exact version; returns *fallback* when absent.
+        """
+        template = await self._repo.find_by_name_and_version(
+            workspace_id, name, version
+        )
+        if template is None and workspace_id is not None:
+            template = await self._repo.find_by_name_and_version(None, name, version)
+        if template is None:
+            return fallback
+        content = template.content
+        if variables:
+            for key, val in variables.items():
+                placeholder = "{" + key + "}"
+                content = content.replace(placeholder, val)
+        return content
 
     async def list_versions(
         self, name: str, *, workspace_id: str | None = None
