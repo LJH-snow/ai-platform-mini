@@ -222,3 +222,17 @@ async def test_postgres_record_usage_writes_workspace_id() -> None:
     sql, params = factory.session.executed[0]
     assert "workspace_id" in sql
     assert params["workspace_id"] == "ws-1"
+
+
+def test_backfill_statements_are_idempotent_by_construction() -> None:
+    """Lock the backfill SQL contract: NULL-only update via api_keys join."""
+    from scripts.backfill_workspace_ownership import (
+        _BACKFILL_STATEMENT,
+        _BACKFILL_USAGE_STATEMENT,
+    )
+
+    for statement in (_BACKFILL_STATEMENT, _BACKFILL_USAGE_STATEMENT):
+        assert "workspace_id IS NULL" in statement
+        assert "api_keys" in statement
+        assert "key_hash" in statement
+        assert "UPDATE" in statement
