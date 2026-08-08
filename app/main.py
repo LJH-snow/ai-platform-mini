@@ -262,6 +262,7 @@ async def _bootstrap_seeds() -> None:
             enabled_by_default=True,
             owner="builtin",
         )
+        await _seed_billing_plans()
         logger.info("Seeds bootstrap complete.")
     except Exception:
         logger.error(
@@ -269,6 +270,14 @@ async def _bootstrap_seeds() -> None:
             "constants until a successful restart seeds the DB.",
             exc_info=True,
         )
+
+
+async def _seed_billing_plans() -> None:
+    """Idempotently seed the three built-in plans (free/pro/enterprise)."""
+    from app.billing.seeds import seed_billing_plans
+    from app.core.container import provide_billing_repository
+
+    await seed_billing_plans(provide_billing_repository())
 
 
 def create_app() -> FastAPI:
