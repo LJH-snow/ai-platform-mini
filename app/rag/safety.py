@@ -85,9 +85,16 @@ SAFETY_RULES: tuple[SafetyRule, ...] = (
     ),
     SafetyRule(
         "you_are_now_zh",
-        r"从现在起你是|扮演一个(?:没有限制|不受约束)|你现在是",
+        r"从现在起你是(?:一个)?(?:没有限制|不受约束|无所不能|万能的|全能的)",
         "high",
         "Chinese persona override",
+    ),
+    SafetyRule(
+        "you_are_now_capability_zh",
+        r"你现在是(?:一个)?(?:没有限制|不受约束|无所不能|万能的|全能的)(?:的)?"
+        r"(?:模型|助手|AI|机器人|智能体)?",
+        "high",
+        "Chinese capability-override persona",
     ),
     SafetyRule(
         "you_are_now_en",
@@ -118,6 +125,19 @@ SAFETY_RULES: tuple[SafetyRule, ...] = (
         r"无视(?:上面|以上)?的?(?:规则|指令|要求)",
         "medium",
         "Chinese ignore-rules override",
+    ),
+    SafetyRule(
+        "ignore_rules_en",
+        r"ignore (?:the |all )?(?:rules|instructions|guidelines) "
+        r"(?:above|below|given)",
+        "medium",
+        "English ignore-rules override",
+    ),
+    SafetyRule(
+        "do_not_follow_en",
+        r"do not follow (?:the )?(?:rules|instructions|guidelines)",
+        "medium",
+        "English do-not-follow override",
     ),
 )
 
