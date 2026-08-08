@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import and_, desc, or_, select
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth.models import APIKey
 from app.core.context import RequestContext
 from app.db.models import AgentRunRecordTable
-from app.schemas.admin import AgentRunRecordSummary
+from app.schemas.admin import AgentRunRecordResponse, AgentRunRecordSummary
 from app.schemas.agent import AgentRunRequest, AgentRunResponse
 
 
@@ -168,3 +169,109 @@ def public_run_summary(payload: Mapping[str, Any]) -> AgentRunRecordSummary:
         tool_count=tool_count,
         rag_reference_count=rag_reference_count,
     )
+
+
+# Public projection allowlists — mirrors app/schemas/agent.py's
+# AgentStepSummary / AgentToolCallSummary.  Anything outside these keys
+# (raw tool arguments, results, provider payloads) is dropped at the
+# user-facing boundary even if it ever leaks into stored payloads.
+_STEP_ALLOWED_KEYS = frozenset(
+    {
+        "index",
+        "decision_kind",
+        "tool_names",
+        "tool_count",
+        "summary",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "tool_succeeded",
+        "tool_calls",
+    }
+)
+_TOOL_ALLOWED_KEYS = frozenset(
+    {
+        "call_id",
+        "name",
+        "succeeded",
+        "truncated",
+        "cached",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "argument_count",
+        "input_summary",
+        "output_summary",
+        "result_chars",
+        "error_code",
+        "error_message",
+        "rag",
+    }
+)
+
+
+def project_run_response(
+    payload: Mapping[str, object],
+) -> AgentRunRecordResponse:
+    """Project a stored run payload onto the public step/tool allowlists.
+
+    The user-facing replay endpoint must never expose raw tool arguments,
+    results, or provider responses even if they exist in the stored
+    payload; this boundary enforces the same safe projection the schema
+    guarantees at construction time.
+    """
+    response = payload.get("response")
+    projected_response: dict[str, object] = {}
+    if isinstance(response, dict):
+        steps = response.get("steps")
+        if isinstance(steps, list):
+            projected_response = {
+                **response,
+                "steps": [
+                    _project_step(step) for step in steps if isinstance(step, dict)
+                ],
+            }
+        else:
+            projected_response = dict(response)
+    return AgentRunRecordResponse(
+        run_id=str(payload["run_id"]),
+        request_id=str(payload["request_id"]),
+        api_key_prefix=str(payload["api_key_prefix"]),
+        api_key_name=str(payload["api_key_name"]),
+        model=str(payload["model"]),
+        status=str(payload["status"]),
+        stop_reason=str(payload["stop_reason"]),
+        started_at=_optional_datetime(payload.get("started_at")),
+        completed_at=_optional_datetime(payload.get("completed_at")),
+        duration_ms=_optional_float(payload.get("duration_ms")),
+        total_tokens=_optional_int(payload.get("total_tokens")),
+        response=projected_response,
+    )
+
+
+def _project_step(step: dict[str, object]) -> dict[str, object]:
+    projected = {key: value for key, value in step.items() if key in _STEP_ALLOWED_KEYS}
+    calls = step.get("tool_calls")
+    if isinstance(calls, list):
+        projected["tool_calls"] = [
+            {key: value for key, value in call.items() if key in _TOOL_ALLOWED_KEYS}
+            for call in calls
+            if isinstance(call, dict)
+        ]
+    return projected
+
+
+def _optional_datetime(value: object) -> datetime | None:
+    return value if isinstance(value, datetime) else None
+
+
+def _optional_float(value: object) -> float | None:
+    return (
+        value
+        if isinstance(value, int | float) and not isinstance(value, bool)
+        else None
+    )
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None

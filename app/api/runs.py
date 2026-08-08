@@ -13,6 +13,7 @@ from app.ratelimit.dependencies import require_rate_limit
 from app.schemas.admin import AgentRunRecordResponse, AgentRunRecordSummary
 from app.services.agent_run_record_service import (
     AgentRunRecordService,
+    project_run_response,
     public_run_payload,
     public_run_summary,
 )
@@ -77,5 +78,4 @@ async def get_my_run(
     row = await service.get_run(run_id, owner_scope=scope)
     if row is None:
         raise HTTPException(status_code=404, detail="Agent Run record not found.")
-    payload = public_run_payload(row)
-    return AgentRunRecordResponse(**payload)
+    return project_run_response(public_run_payload(row))

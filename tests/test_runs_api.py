@@ -35,6 +35,7 @@ class _FakeRecordService:
     """In-memory stand-in for AgentRunRecordService with scope filtering."""
 
     records: list[dict[str, object]] = field(default_factory=list)
+    polluted_payload: dict[str, object] | None = None
 
     async def save(
         self,
@@ -61,11 +62,14 @@ class _FakeRecordService:
     def _to_row(self, record: dict[str, object]) -> object:
         from types import SimpleNamespace
 
-        payload: dict[str, object] = {
-            "run_id": record["run_id"],
-            "status": record["status"],
-            "steps": [],
-        }
+        if self.polluted_payload is not None:
+            payload = self.polluted_payload
+        else:
+            payload = {
+                "run_id": record["run_id"],
+                "status": record["status"],
+                "steps": [],
+            }
         return SimpleNamespace(
             run_id=record["run_id"],
             request_id="req-1",
@@ -283,5 +287,88 @@ def test_unknown_run_is_404() -> None:
         key_a, _ = _register("alice@test.com")
         resp = client.get("/api/v1/runs/does-not-exist", headers=_auth(key_a))
         assert resp.status_code == 404
+    finally:
+        _teardown()
+
+
+def test_run_detail_projection_drops_raw_fields() -> None:
+    """The user endpoint never exposes raw tool payloads (goal 5 acceptance).
+
+    A deliberately "polluted" stored payload (raw arguments/result keys)
+    must be projected onto the public step/tool allowlists at the API
+    boundary — the same safe projection the schema guarantees at
+    construction time.
+    """
+
+    record_service = _FakeRecordService()
+    polluted_payload: dict[str, object] = {
+        "run_id": "run-polluted",
+        "status": "completed",
+        "steps": [
+            {
+                "index": 1,
+                "decision_kind": "tool_call",
+                "summary": "Planned 1 tool call(s): calculator.",
+                "tool_calls": [
+                    {
+                        "call_id": "call-1",
+                        "name": "calculator",
+                        # Raw fields that must never reach the client.
+                        "arguments": {"expression": "secret-expression"},
+                        "result": "raw tool output with api_key=sk-secret",
+                        "raw": {"full": "provider payload"},
+                        # Public summary fields stay.
+                        "argument_count": 1,
+                        "input_summary": "expression: secret-expression",
+                        "output_summary": "result: 42",
+                        "result_chars": 2,
+                        "succeeded": True,
+                    }
+                ],
+                # Raw step-level fields.
+                "prompt": "system prompt secret",
+                "request": {"message": "secret query"},
+                "tool_succeeded": True,
+            }
+        ],
+    }
+    record_service.records.append(
+        {
+            "run_id": "run-polluted",
+            "api_key_hash": "key-a",
+            "workspace_id": "WS_PLACEHOLDER",
+            "status": "completed",
+        }
+    )
+    record_service.polluted_payload = polluted_payload
+    _setup(record_service)
+    try:
+        key_a, ws_id = _register("alice@test.com")
+        record_service.records[0]["workspace_id"] = ws_id
+        resp = client.get("/api/v1/runs/run-polluted", headers=_auth(key_a))
+        assert resp.status_code == 200
+        body = resp.json()
+        steps = body["response"]["steps"]
+        tool = steps[0]["tool_calls"][0]
+
+        # Raw fields are dropped (arguments/result/raw/prompt/request).
+        assert "arguments" not in tool
+        assert "result" not in tool
+        assert "raw" not in tool
+        assert "prompt" not in steps[0]
+        assert "request" not in steps[0]
+        assert '"arguments"' not in resp.text
+        assert '"result"' not in resp.text
+        # Sensitive patterns never leak, even inside allowed summaries.
+        assert "api_key=sk-secret" not in resp.text
+        assert "provider payload" not in resp.text
+        assert "secret query" not in resp.text
+
+        # Public summary fields survive.
+        assert tool["argument_count"] == 1
+        assert tool["input_summary"] == "expression: secret-expression"
+        assert tool["output_summary"] == "result: 42"
+        assert tool["succeeded"] is True
+        assert steps[0]["tool_succeeded"] is True
     finally:
         _teardown()
