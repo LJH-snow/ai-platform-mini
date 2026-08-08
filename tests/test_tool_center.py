@@ -206,10 +206,15 @@ def test_tool_endpoints_reject_unbound_keys() -> None:
         key_svc = APIKeyService(repository=InMemoryAPIKeyRepository([legacy]))
         app.dependency_overrides[provide_api_key_service] = lambda: key_svc
 
+        # Legacy (unbound) keys see the global tool list (registry
+        # resources are not workspace-private), with seeded defaults.
         list_resp = client.get("/api/v1/tools", headers=_auth("sk-legacy"))
         assert list_resp.status_code == 200
-        assert list_resp.json() == []
+        names = [tool["name"] for tool in list_resp.json()]
+        assert "calculator" in names
+        assert all(tool["enabled"] is True for tool in list_resp.json())
 
+        # Writing an override still requires a workspace (conservative).
         put_resp = client.put(
             "/api/v1/tools/calculator",
             json={"enabled": False},

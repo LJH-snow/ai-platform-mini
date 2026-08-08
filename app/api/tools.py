@@ -39,9 +39,9 @@ async def list_tools(
 ) -> list[ToolResponse]:
     identity = request.state.context.identity
     ws_id = identity.workspace_id if identity else None
-    if ws_id is None:
-        # Conservative tenant boundary (mirrors agents CRUD).
-        return []
+    # Tools are global registry resources; keys without a workspace see
+    # the global view (seeded defaults, no overrides).  The enable
+    # toggle below stays conservative (404 without a workspace).
     rows = await service.list_tools_with_state(ws_id)
     return [_to_tool_response(row) for row in rows]
 

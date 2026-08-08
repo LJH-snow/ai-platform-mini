@@ -244,14 +244,24 @@ class AgentDefinitionService:
         # Registry-only tool without a seeded record: default to enabled.
         return True
 
-    async def list_tools_with_state(self, workspace_id: str) -> list[dict[str, object]]:
+    async def list_tools_with_state(
+        self, workspace_id: str | None
+    ) -> list[dict[str, object]]:
         """Registry tools enriched with the workspace-effective enabled flag.
 
-        Batches the workspace overrides and the seeded records into
-        in-memory maps so the per-tool effective state is O(1) lookups
-        instead of per-tool repository round trips.
+        ``workspace_id`` None returns the global view: no workspace
+        overrides, enabled follows the seeded default.  Batches the
+        workspace overrides and the seeded records into in-memory maps so
+        the per-tool effective state is O(1) lookups instead of per-tool
+        repository round trips.
         """
         records = await self._repo.list_tools()
+        overrides: dict[str, bool] = {}
+        if workspace_id is not None:
+            overrides = {
+                override.tool_name: override.enabled
+                for override in await self._repo.list_workspace_tools(workspace_id)
+            }
         if not records:
             # Seed failed or the DB is empty: fall back to the in-code
             # runtime registry so the tool surface is never empty.  The
@@ -268,10 +278,6 @@ class AgentDefinitionService:
                 }
                 for tool in self._tool_registry.list_tools()
             ]
-        overrides = {
-            override.tool_name: override.enabled
-            for override in await self._repo.list_workspace_tools(workspace_id)
-        }
         defaults = {record.name: record.enabled_by_default for record in records}
         result: list[dict[str, object]] = []
         for record in records:
