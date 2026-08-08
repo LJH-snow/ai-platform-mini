@@ -128,6 +128,29 @@ export function UsageDashboardPage({ client }: UsageDashboardProps): JSX.Element
   const [days, setDays] = useState(7)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState<'csv' | 'json' | null>(null)
+
+  const downloadExport = async (format: 'csv' | 'json'): Promise<void> => {
+    setError(null)
+    setExporting(format)
+    try {
+      const blob = await client.downloadUsageExport(days, format)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = format === 'csv' ? `usage_trend_${days}d.csv` : `usage_export_${days}d.json`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    } catch (caught) {
+      setError(
+        caught instanceof ConfigApiError ? caught.message : '导出失败，请重试。',
+      )
+    } finally {
+      setExporting(null)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -168,6 +191,23 @@ export function UsageDashboardPage({ client }: UsageDashboardProps): JSX.Element
             <option value={30}>近 30 天</option>
           </select>
         </label>
+      </div>
+
+      <div className="buttonRow exportRow">
+        <button
+          type="button"
+          disabled={exporting !== null}
+          onClick={() => void downloadExport('csv')}
+        >
+          {exporting === 'csv' ? '导出中…' : '导出 CSV'}
+        </button>
+        <button
+          type="button"
+          disabled={exporting !== null}
+          onClick={() => void downloadExport('json')}
+        >
+          {exporting === 'json' ? '导出中…' : '导出 JSON'}
+        </button>
       </div>
 
       {loading && <p>加载中…</p>}

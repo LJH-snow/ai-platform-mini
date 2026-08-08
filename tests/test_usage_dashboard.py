@@ -236,3 +236,93 @@ def test_backfill_statements_are_idempotent_by_construction() -> None:
         assert "api_keys" in statement
         assert "key_hash" in statement
         assert "UPDATE" in statement
+
+
+def test_export_csv_has_bom_headers_and_escaping() -> None:
+    fake = _FakeUsageService()
+    _setup(fake)
+    try:
+        api_key, _ = _register("alice@test.com")
+        fake.trend = [
+            WorkspaceUsagePoint(usage_date="2026-08-01", total_tokens=100, request_count=2),
+            WorkspaceUsagePoint(
+                usage_date="2026-08-02", total_tokens=300, request_count=3
+            ),
+        ]
+
+        resp = client.get(
+            "/api/v1/usage/export?days=7&format=csv", headers=_auth(api_key)
+        )
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert 'filename="usage_trend_7d.csv"' in resp.headers["content-disposition"]
+        text = resp.text
+        assert text.startswith("\ufeff")
+        assert "usage_date,total_tokens,request_count" in text
+        assert "2026-08-02,300,3" in text
+    finally:
+        _teardown()
+
+
+def test_export_csv_escapes_special_cells() -> None:
+    from app.api.usage import _export_csv
+
+    csv_text = _export_csv(
+        [WorkspaceUsagePoint(usage_date='2026,08"01', total_tokens=1, request_count=1)]
+    )
+    # csv module quoting: a comma inside the field is quoted.
+    assert '"2026,08""01"' in csv_text
+
+
+def test_export_json_matches_dashboard_shape() -> None:
+    fake = _FakeUsageService()
+    _setup(fake)
+    try:
+        api_key, _ = _register("alice@test.com")
+        fake.trend = [
+            WorkspaceUsagePoint(usage_date="2026-08-01", total_tokens=100, request_count=2)
+        ]
+        fake.model_ranking = [
+            UsageRanking(name="qwen3:4b", total_tokens=100, request_count=2)
+        ]
+        fake.key_ranking = [UsageRanking(name="abcd1234", total_tokens=100, request_count=2)]
+
+        resp = client.get(
+            "/api/v1/usage/export?days=7&format=json", headers=_auth(api_key)
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {"trend", "model_ranking", "key_ranking"}
+        assert body["trend"][0]["usage_date"] == "2026-08-01"
+    finally:
+        _teardown()
+
+
+def test_export_days_bound_and_unbound_key() -> None:
+    from app.auth.hash import hash_api_key
+    from app.auth.models import APIKeyRecord
+
+    fake = _FakeUsageService()
+    _setup(fake)
+    try:
+        api_key, _ = _register("alice@test.com")
+
+        bad = client.get(
+            "/api/v1/usage/export?days=999&format=csv", headers=_auth(api_key)
+        )
+        assert bad.status_code == 422
+
+        legacy_hash = hash_api_key("sk-legacy")
+        legacy = APIKeyRecord(key_hash=legacy_hash, name="legacy", status="active")
+        key_svc = APIKeyService(repository=InMemoryAPIKeyRepository([legacy]))
+        app.dependency_overrides[provide_api_key_service] = lambda: key_svc
+
+        ok = client.get(
+            "/api/v1/usage/export?days=7&format=csv", headers=_auth("sk-legacy")
+        )
+        assert ok.status_code == 200
+        assert fake.scopes[-1] == legacy_hash
+    finally:
+        _teardown()

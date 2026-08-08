@@ -157,6 +157,7 @@ const createConfigClient = (overrides: Partial<ConfigClient> = {}): ConfigClient
     created_at: null,
   })),
   listBenchmarkRuns: vi.fn(async () => []),
+  downloadUsageExport: vi.fn(async () => new Blob(['csv'])),
   getRun: vi.fn(async () => ({
     run_id: 'run-1',
     model: 'm',
@@ -457,6 +458,21 @@ describe('UsageDashboard', () => {
 
     const progress = screen.getAllByRole('progressbar')
     expect(progress.length).toBe(3)
+  })
+
+  it('downloads the CSV export through the authenticated client', async () => {
+    const user = userEvent.setup()
+    const downloadUsageExport = vi.fn(async () => new Blob(['csv']))
+    render(
+      <UsageDashboardPage
+        client={createConfigClient({ downloadUsageExport })}
+      />,
+    )
+    await screen.findByText('每日 Token 用量')
+
+    await user.click(screen.getByRole('button', { name: '导出 CSV' }))
+
+    expect(downloadUsageExport).toHaveBeenCalledWith(7, 'csv')
   })
 
   it('switches the time range', async () => {

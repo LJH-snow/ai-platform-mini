@@ -418,6 +418,20 @@ export const createConfigClient = (options: ConfigClientOptions = {}) => {
         { agent_id: agentId, task_set: taskSet },
         normalizeBenchmarkRun,
       ),
+    downloadUsageExport: async (days: number, format: 'csv' | 'json') => {
+      const headers: Record<string, string> = { Accept: 'application/octet-stream' }
+      if (options.apiKey) {
+        headers.Authorization = `Bearer ${options.apiKey}`
+      }
+      const response = await fetchImpl(
+        joinUrl(options.apiBaseUrl, `/api/v1/usage/export?days=${days}&format=${format}`),
+        { method: 'GET', headers },
+      )
+      if (!response.ok) {
+        throw new ConfigApiError(errorMessage(response.status), response.status)
+      }
+      return response.blob()
+    },
     listBenchmarkRuns: (agentId?: string) =>
       request(
         'GET',
