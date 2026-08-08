@@ -1,4 +1,11 @@
 services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - app
+
   app:
     build: .
     ports:
@@ -12,19 +19,33 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/aiplatform
       - INITIAL_API_KEY=${INITIAL_API_KEY:?INITIAL_API_KEY must be set}
       - ADMIN_API_KEYS=${ADMIN_API_KEYS:?ADMIN_API_KEYS must be set}
+      - TELEMETRY_ENABLED=true
+      - TELEMETRY_OTLP_ENDPOINT=http://jaeger:4318/v1/traces
 
     depends_on:
       postgres:
         condition: service_healthy
       ollama:
         condition: service_started
+      jaeger:
+        condition: service_started
 
   ollama:
     image: ollama/ollama:latest
     ports:
       - "11434:11434"
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
     volumes:
       - ollama-data:/root/.ollama
+      - ./docker/ollama-entrypoint.sh:/entrypoint.sh:ro
+    environment:
+      - OLLAMA_PRELOAD_MODELS=${OLLAMA_PRELOAD_MODELS:-qwen3:4b nomic-embed-text}
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4318:4318"
 
   postgres:
     image: pgvector/pgvector:pg16

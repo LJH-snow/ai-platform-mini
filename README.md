@@ -426,16 +426,13 @@ uvicorn app.main:app --reload
 ## Docker
 
 ```bash
-# Set required secrets first
+# One-command demo: builds frontend (nginx) + backend + Ollama + Jaeger + Postgres
 export INITIAL_API_KEY=sk-your-initial-key
 export ADMIN_API_KEYS=sk-your-admin-key
-
-docker compose up
+./scripts/demo.sh
 ```
 
-This starts the app on `:8000`, Ollama on `:11434`, and PostgreSQL on `:5432`.
-Both `INITIAL_API_KEY` and `ADMIN_API_KEYS` must be set (compose will refuse to start otherwise).
-Docker mode automatically uses PostgreSQL-backed authentication and persistence.
+Compose stack (5 services): **frontend**（nginx 静态 + `/api` proxy，`:5173`）、**app**（FastAPI，`:8000`）、**ollama**（entrypoint 预拉取 `OLLAMA_PRELOAD_MODELS`，默认 `qwen3:4b nomic-embed-text`，`:11434`）、**jaeger**（OTLP 接收 + UI，`:16686`/`:4318`）、**postgres**（pgvector，`:5432`）。前端通过 nginx 同源访问 API（无 CORS 问题）；`TELEMETRY_ENABLED=true` 默认开启 trace 到 Jaeger。`INITIAL_API_KEY`/`ADMIN_API_KEYS` 必填（compose 拒绝启动），Docker 模式自动使用 PostgreSQL 认证与持久化。
 
 ## Quality gate
 
