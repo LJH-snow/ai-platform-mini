@@ -150,7 +150,11 @@ def test_tool_disable_blocks_agent_creation_until_reenabled() -> None:
             headers=_auth(api_key),
         )
         assert resp.status_code == 200
-        assert resp.json()["enabled"] is False
+        body = resp.json()
+        assert body["enabled"] is False
+        # The toggle response must stay manageable (regression: the PUT
+        # response used to drop can_manage, greying out the switch).
+        assert body["can_manage"] is True
 
         # Creating an agent bound to the disabled tool is rejected.
         agent_resp = client.post(

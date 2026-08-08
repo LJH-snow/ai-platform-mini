@@ -93,5 +93,7 @@ async def set_tool_enabled(
     rows = await service.list_tools_with_state(ws_id)
     for row in rows:
         if row["name"] == override.tool_name:
-            return _to_tool_response(row)
+            # Reaching this point requires a workspace (checked above),
+            # so the toggled tool stays manageable.
+            return _to_tool_response(row, can_manage=True)
     raise HTTPException(status_code=404, detail="Tool not found.")
