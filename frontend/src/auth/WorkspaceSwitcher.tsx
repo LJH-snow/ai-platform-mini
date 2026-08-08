@@ -1,5 +1,5 @@
 import { type JSX, useEffect, useState } from 'react'
-import type { AuthClient } from './client.ts'
+import { AuthApiError, type AuthClient } from './client.ts'
 import type { WorkspaceSummary } from './types.ts'
 
 interface WorkspaceSwitcherProps {
@@ -22,7 +22,12 @@ export function WorkspaceSwitcher({
   useEffect(() => {
     let cancelled = false
     const load = async () => {
-      if (!apiKey) return
+      if (!apiKey) {
+        // No key configured: nothing to load, hide the switcher.
+        setWorkspaces([])
+        setLoading(false)
+        return
+      }
       setLoading(true)
       setError(null)
       try {
@@ -34,9 +39,15 @@ export function WorkspaceSwitcher({
             onWorkspaceChange(result[0].id)
           }
         }
-      } catch {
+      } catch (caught) {
         if (!cancelled) {
-          setError('加载工作区失败')
+          if (caught instanceof AuthApiError && caught.status === 401) {
+            // Legacy (unbound) key: no workspaces is the normal state,
+            // not an error — hide the switcher.
+            setWorkspaces([])
+          } else {
+            setError('加载工作区失败')
+          }
         }
       } finally {
         if (!cancelled) setLoading(false)
