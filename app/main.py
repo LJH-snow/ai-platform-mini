@@ -55,6 +55,16 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    # Startup initialisation happens here (not in create_app) so the
+    # application module stays free of import-time side effects.
+    setup_logging(
+        settings.log_level,
+        log_format=settings.log_format,
+        log_file=settings.log_file,
+    )
+    setup_telemetry(settings)
+    setup_metrics(settings)
+
     provider: LLMProvider | None = None
     embedder: Embedder | None = None
     mcp_manager = None
@@ -259,9 +269,6 @@ async def _bootstrap_seeds() -> None:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    setup_logging(settings.log_level, log_format=settings.log_format)
-    setup_telemetry(settings)
-    setup_metrics(settings)
 
     app = FastAPI(
         title=settings.app_name,

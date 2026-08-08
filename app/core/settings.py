@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
     log_format: str = "json"
+    log_file: str | None = None
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_default_model: str = "qwen3:4b"

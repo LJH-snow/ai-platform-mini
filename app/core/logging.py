@@ -37,8 +37,38 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(log_entry, ensure_ascii=False)
 
 
-def setup_logging(log_level: str, log_format: str = "json") -> None:
+def setup_logging(
+    log_level: str,
+    log_format: str = "json",
+    log_file: str | None = None,
+) -> None:
+    """Configure the root logger via dictConfig.
+
+    ``log_format`` selects the console formatter (json or console text);
+    ``log_file`` optionally adds a rotating file handler so production
+    deployments can persist logs without a sidecar collector.
+    """
     formatter_key = "json" if log_format == "json" else "console"
+    handlers: dict[str, Any] = {
+        "stdout": {
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",
+            "formatter": formatter_key,
+            "level": log_level.upper(),
+        },
+    }
+    handler_names = ["stdout"]
+    if log_file:
+        handlers["file"] = {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": log_file,
+            "maxBytes": 10 * 1024 * 1024,
+            "backupCount": 5,
+            "encoding": "utf-8",
+            "formatter": formatter_key,
+            "level": log_level.upper(),
+        }
+        handler_names.append("file")
     config: dict[str, Any] = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -49,16 +79,9 @@ def setup_logging(log_level: str, log_format: str = "json") -> None:
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
         },
-        "handlers": {
-            "stdout": {
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-                "formatter": formatter_key,
-                "level": log_level.upper(),
-            },
-        },
+        "handlers": handlers,
         "root": {
-            "handlers": ["stdout"],
+            "handlers": handler_names,
             "level": log_level.upper(),
         },
     }
