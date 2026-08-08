@@ -104,6 +104,7 @@ const createConfigClient = (overrides: Partial<ConfigClient> = {}): ConfigClient
       enabled_by_default: true,
       owner: 'builtin',
       enabled: true,
+      can_manage: true,
     },
   ]),
   setToolEnabled: vi.fn(async () => ({
@@ -113,6 +114,7 @@ const createConfigClient = (overrides: Partial<ConfigClient> = {}): ConfigClient
     enabled_by_default: true,
     owner: 'builtin',
     enabled: true,
+    can_manage: true,
   })),
   listAgents: vi.fn(async () => []),
   createAgent: vi.fn(async () => ({
@@ -563,6 +565,7 @@ describe('ToolCenter', () => {
         enabled_by_default: true,
         owner: 'builtin',
         enabled: true,
+        can_manage: true,
       },
     ])
     const setToolEnabled = vi.fn(async () => ({
@@ -572,6 +575,7 @@ describe('ToolCenter', () => {
       enabled_by_default: true,
       owner: 'builtin',
       enabled: false,
+      can_manage: true,
     }))
     render(<ToolCenter client={createConfigClient({ listTools, setToolEnabled })} />)
 

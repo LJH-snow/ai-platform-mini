@@ -87,10 +87,18 @@ export function ToolCenter({ client }: ToolCenterProps): JSX.Element {
                   <strong>{tool.name}</strong>
                   <span className="toolOwner">{tool.owner}</span>
                 </div>
-                <label className="switchRow">
+                <label
+                  className="switchRow"
+                  title={
+                    tool.can_manage
+                      ? undefined
+                      : '需要 workspace 才能修改工具启用状态'
+                  }
+                >
                   <input
                     type="checkbox"
                     checked={tool.enabled}
+                    disabled={!tool.can_manage}
                     onChange={() => void toggleEnabled(tool)}
                   />
                   {tool.enabled ? '已启用' : '已禁用'}

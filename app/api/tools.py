@@ -23,6 +23,9 @@ class ToolResponse(BaseModel):
     enabled_by_default: bool
     owner: str
     enabled: bool
+    # False for keys without a workspace: the toggle is read-only for
+    # them (overrides require a workspace).
+    can_manage: bool = False
 
 
 class ToolEnableRequest(BaseModel):
@@ -43,10 +46,12 @@ async def list_tools(
     # the global view (seeded defaults, no overrides).  The enable
     # toggle below stays conservative (404 without a workspace).
     rows = await service.list_tools_with_state(ws_id)
-    return [_to_tool_response(row) for row in rows]
+    return [_to_tool_response(row, can_manage=True) for row in rows]
 
 
-def _to_tool_response(row: dict[str, object]) -> ToolResponse:
+def _to_tool_response(
+    row: dict[str, object], *, can_manage: bool = False
+) -> ToolResponse:
     schema = row["parameters_schema"]
     return ToolResponse(
         name=str(row["name"]),
@@ -55,6 +60,7 @@ def _to_tool_response(row: dict[str, object]) -> ToolResponse:
         enabled_by_default=bool(row["enabled_by_default"]),
         owner=str(row["owner"]),
         enabled=bool(row["enabled"]),
+        can_manage=can_manage,
     )
 
 
@@ -71,7 +77,13 @@ async def set_tool_enabled(
     identity = request.state.context.identity
     ws_id = identity.workspace_id if identity else None
     if ws_id is None:
-        raise HTTPException(status_code=404, detail="Tool not found or not accessible.")
+        # The tool exists; the caller's identity has no workspace to
+        # write an override into.  400 with an actionable message beats
+        # a misleading 404 ("resource not found").
+        raise HTTPException(
+            status_code=400,
+            detail="需要 workspace 才能修改工具启用状态。",
+        )
     try:
         override = await service.set_tool_enabled(ws_id, tool_name, body.enabled)
     except ValidationError as exc:

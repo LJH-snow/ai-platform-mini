@@ -25,6 +25,7 @@ export type ToolInfo = {
   enabled_by_default: boolean
   owner: string
   enabled: boolean
+  can_manage: boolean
 }
 
 export type AgentSummary = {
@@ -182,6 +183,7 @@ const normalizeTools = (payload: unknown): ToolInfo[] =>
       enabled_by_default: asBoolean(item.enabled_by_default, false),
       owner: asString(item.owner, ''),
       enabled: asBoolean(item.enabled, false),
+      can_manage: asBoolean(item.can_manage, false),
     }
   })
 
@@ -194,6 +196,7 @@ const normalizeTool = (payload: unknown): ToolInfo => {
     enabled_by_default: asBoolean(item.enabled_by_default, false),
     owner: asString(item.owner, ''),
     enabled: asBoolean(item.enabled, false),
+    can_manage: asBoolean(item.can_manage, false),
   }
 }
 
