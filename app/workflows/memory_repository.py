@@ -29,6 +29,15 @@ class InMemoryWorkflowRunRepository:
     async def get(self, thread_id: str, owner_key_hash: str) -> WorkflowRun | None:
         return self._runs.get((thread_id, owner_key_hash))
 
+    async def list_by_owner(
+        self, owner_key_hash: str, *, limit: int = 20
+    ) -> list[WorkflowRun]:
+        runs = [
+            run for (_, owner), run in self._runs.items() if owner == owner_key_hash
+        ]
+        runs.sort(key=lambda run: run.created_at or datetime.min, reverse=True)
+        return runs[:limit]
+
     async def update_status_if(
         self,
         thread_id: str,

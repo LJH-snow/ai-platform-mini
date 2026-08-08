@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from pydantic import BaseModel
 
 from app.auth.models import APIKey
 from app.auth.tenant import resolve_tenant_scope
@@ -60,6 +63,42 @@ async def create_pdf_report_workflow(
         topic=topic,
     )
     return WorkflowStatusResponse.from_view(view)
+
+
+class WorkflowRunSummaryResponse(BaseModel):
+    thread_id: str
+    status: str
+    stage: str
+    filename: str | None = None
+    report_topic: str | None = None
+    created_at: datetime | None = None
+
+
+@router.get(
+    "",
+    response_model=list[WorkflowRunSummaryResponse],
+    summary="List the tenant's workflow runs (newest first)",
+)
+async def list_workflows(
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    service: Annotated[PDFReportWorkflowService, Depends(get_workflow_service)],
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[WorkflowRunSummaryResponse]:
+    identity = request.state.context.identity
+    owner = resolve_tenant_scope(identity)
+    runs = await service.list_runs(owner, limit=limit)
+    return [
+        WorkflowRunSummaryResponse(
+            thread_id=run.thread_id,
+            status=run.status.value,
+            stage=run.stage.value,
+            filename=run.filename,
+            report_topic=run.report_topic,
+            created_at=run.created_at,
+        )
+        for run in runs
+    ]
 
 
 @router.get(

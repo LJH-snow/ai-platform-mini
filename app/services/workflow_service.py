@@ -27,6 +27,7 @@ from app.exceptions.base import (
     WorkflowNotFoundError,
 )
 from app.rag.pdf_extractor import normalize_pdf_filename
+from app.workflows.models import WorkflowRun
 from app.workflows.models import WorkflowRun, WorkflowRunStage, WorkflowRunStatus
 from app.workflows.pdf_report import PDFReportState, PDFReportWorkflow
 from app.workflows.repository import WorkflowRunRepository
@@ -196,6 +197,12 @@ class PDFReportWorkflowService:
             await self._record_failure(updated, exc)
             raise
         return await self._view_from_result(updated, cast(PDFReportState, result))
+
+    async def list_runs(
+        self, owner_key_hash: str, *, limit: int = 20
+    ) -> list[WorkflowRun]:
+        """List the tenant's workflow runs, newest first."""
+        return await self._run_repository.list_by_owner(owner_key_hash, limit=limit)
 
     async def get_status(
         self, thread_id: str, owner_key_hash: str

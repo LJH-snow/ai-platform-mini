@@ -54,6 +54,7 @@ const createClient = (overrides: Partial<WorkflowClient> = {}): WorkflowClient =
     status: 'rejected',
     stage: 'rejected',
   }),
+  listRuns: vi.fn().mockResolvedValue([]),
   ...overrides,
 })
 
@@ -339,106 +340,95 @@ describe('WorkflowPanel restore', () => {
   })
 })
 
-describe('WorkflowPanel last-task view', () => {
-  it('shows the last-task button when only a historical task exists', async () => {
-    const user = userEvent.setup()
-    const getStatus = vi.fn().mockResolvedValue(pendingStatus)
-    const client = createClient({ getStatus })
-    sessionStorage.setItem('ai-platform.workflow-last-thread', 't-last')
-
-    render(<WorkflowPanel apiKeyConfigured client={client} />)
-
-    // No current restore point and no current workflow: only the
-    // last-task entry is available.
-    const viewButton = await screen.findByRole('button', { name: '查看最近任务' })
-    await user.click(viewButton)
-
-    expect(getStatus).toHaveBeenCalledWith('t-last')
-    // The historical task (pending_approval) is shown after viewing.
-    await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
+describe('WorkflowPanel history list', () => {
+  const summary = (threadId: string, filename: string, status = 'pending_approval') => ({
+    threadId,
+    status,
+    stage: 'awaiting_approval',
+    filename,
+    reportTopic: null,
+    createdAt: '2026-01-01T00:00:00Z',
   })
 
-  it('shows the last-task button even when it matches the current workflow', async () => {
-    const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
-    const getStatus = vi.fn().mockResolvedValue(currentStatus)
-    const client = createClient({ getStatus })
-    sessionStorage.setItem('ai-platform.workflow-last-thread', 't-current')
-    sessionStorage.setItem('ai-platform.workflow-thread', 't-current')
-
-    render(<WorkflowPanel apiKeyConfigured client={client} />)
-
-    await waitFor(() => expect(getStatus).toHaveBeenCalledWith('t-current'))
-    await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
-    // The entry is always available once any history exists (clicking is
-    // harmless: it re-fetches the current state).
-    expect(screen.getByRole('button', { name: '查看最近任务' })).toBeInTheDocument()
-  })
-
-  it('keeps the last task after 新建任务', async () => {
+  it('lists historical runs and opens one', async () => {
     const user = userEvent.setup()
-    const client = createClient({
-      uploadPdf: vi.fn().mockResolvedValue(pendingStatus),
-      getStatus: vi.fn().mockResolvedValue(pendingStatus),
-    })
-    render(<WorkflowPanel apiKeyConfigured client={client} />)
-
-    // Upload a file so a current workflow exists.
-    const file = new File(['%PDF-fake'], 'brief.pdf', { type: 'application/pdf' })
-    await user.upload(screen.getByLabelText('选择 PDF 文件'), file)
-    await user.click(screen.getByRole('button', { name: '开始生成报告' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: '新建任务' })).toBeInTheDocument())
-
-    // 新建任务 keeps the last task in storage and shows its entry again.
-    await user.click(screen.getByRole('button', { name: '新建任务' }))
-    expect(sessionStorage.getItem('ai-platform.workflow-last-thread')).toBe('t-123')
-    expect(sessionStorage.getItem('ai-platform.workflow-thread')).toBeNull()
-    expect(screen.getByRole('button', { name: '查看最近任务' })).toBeInTheDocument()
-  })
-})
-
-describe('WorkflowPanel last-task view feedback', () => {
-  it('says the current task is the latest when thread ids match', async () => {
-    const user = userEvent.setup()
-    const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
-    const getStatus = vi.fn().mockResolvedValue(currentStatus)
-    const client = createClient({ getStatus })
-    sessionStorage.setItem('ai-platform.workflow-last-thread', 't-current')
-    sessionStorage.setItem('ai-platform.workflow-thread', 't-current')
-
-    render(<WorkflowPanel apiKeyConfigured client={client} />)
-    await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
-
-    await user.click(screen.getByRole('button', { name: '查看最近任务' }))
-
-    expect(await screen.findByText('当前显示的就是最近任务。')).toBeInTheDocument()
-  })
-
-  it('shows a historical task with a return-to-current button', async () => {
-    const user = userEvent.setup()
-    const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
     const lastStatus: WorkflowStatus = {
       ...pendingStatus,
-      threadId: 't-last',
-      draftSummary: 'Last task draft',
+      threadId: 't-old',
+      draftSummary: 'Old task draft',
     }
+    const listRuns = vi.fn().mockResolvedValue([
+      summary('t-old', 'old.pdf'),
+      summary('t-current', 'current.pdf'),
+    ])
+    const getStatus = vi.fn().mockResolvedValueOnce(lastStatus)
+    const client = createClient({ listRuns, getStatus })
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+
+    await user.click(screen.getByRole('button', { name: '历史任务' }))
+    expect(await screen.findByText('old.pdf')).toBeInTheDocument()
+    expect(screen.getByText('current.pdf')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /old\.pdf/ }))
+    expect(getStatus).toHaveBeenCalledWith('t-old')
+    expect(await screen.findByText('Old task draft')).toBeInTheDocument()
+    expect(screen.getByText('正在查看历史任务')).toBeInTheDocument()
+  })
+
+  it('opens the current task from history with an explicit notice', async () => {
+    const user = userEvent.setup()
+    const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
+    const listRuns = vi.fn().mockResolvedValue([summary('t-current', 'current.pdf')])
+    const getStatus = vi.fn().mockResolvedValue(currentStatus)
+    const client = createClient({ listRuns, getStatus })
+    sessionStorage.setItem('ai-platform.workflow-thread', 't-current')
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+    await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: '历史任务' }))
+    await user.click(await screen.findByRole('button', { name: /current\.pdf/ }))
+
+    expect(await screen.findByText('当前显示的就是该任务。')).toBeInTheDocument()
+  })
+
+  it('returns to the current task after viewing history', async () => {
+    const user = userEvent.setup()
+    const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
+    const oldStatus: WorkflowStatus = {
+      ...pendingStatus,
+      threadId: 't-old',
+      draftSummary: 'Old task draft',
+    }
+    const listRuns = vi.fn().mockResolvedValue([summary('t-old', 'old.pdf')])
     const getStatus = vi
       .fn()
       .mockResolvedValueOnce(currentStatus)
-      .mockResolvedValueOnce(lastStatus)
+      .mockResolvedValueOnce(oldStatus)
       .mockResolvedValueOnce(currentStatus)
-    const client = createClient({ getStatus })
-    sessionStorage.setItem('ai-platform.workflow-last-thread', 't-last')
+    const client = createClient({ listRuns, getStatus })
     sessionStorage.setItem('ai-platform.workflow-thread', 't-current')
 
     render(<WorkflowPanel apiKeyConfigured client={client} />)
     await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: '查看最近任务' }))
-    expect(await screen.findByText('Last task draft')).toBeInTheDocument()
-    expect(screen.getByText('正在查看最近任务')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '历史任务' }))
+    await user.click(await screen.findByRole('button', { name: /old\.pdf/ }))
+    expect(await screen.findByText('Old task draft')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '返回当前任务' }))
     expect(await screen.findByText('Draft summary here')).toBeInTheDocument()
-    expect(screen.queryByText('正在查看最近任务')).not.toBeInTheDocument()
+    expect(screen.queryByText('正在查看历史任务')).not.toBeInTheDocument()
+  })
+
+  it('shows an empty state when no history exists', async () => {
+    const user = userEvent.setup()
+    const client = createClient({ listRuns: vi.fn().mockResolvedValue([]) })
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+    await user.click(screen.getByRole('button', { name: '历史任务' }))
+
+    expect(await screen.findByText('暂无历史任务。')).toBeInTheDocument()
   })
 })

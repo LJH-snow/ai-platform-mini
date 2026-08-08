@@ -56,7 +56,7 @@ settings 全局默认
 
 ```python
 if quota_scope == "key":
-    return resolve_key_quota()        # 现状路径，plan 不参与
+    return resolve_key_quota()  # 现状路径，plan 不参与
 if quota_scope == "workspace":
     return resolve_workspace_quota()  # override → plan → default
 ```

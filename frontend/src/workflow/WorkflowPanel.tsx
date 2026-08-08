@@ -2,6 +2,7 @@ import type { ChangeEvent, FormEvent, JSX } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkflowClient } from './client.ts'
 import { WorkflowApiError, WorkflowNetworkError } from './client.ts'
+import type { WorkflowRunSummary } from './client.ts'
 import type { WorkflowStatus } from './types.ts'
 
 type WorkflowPanelProps = {
@@ -180,7 +181,6 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
       const status = await client.uploadPdf(pdfFile, topic)
       sessionStorage.setItem(THREAD_STORAGE_KEY, status.threadId)
       sessionStorage.setItem(LAST_THREAD_STORAGE_KEY, status.threadId)
-      setLastThreadId(status.threadId)
       handleStatus(status)
       if (status.status === 'running') {
         startPolling(status.threadId)
@@ -258,36 +258,44 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
     setAnnouncement('已重置，可上传新 PDF。')
   }
 
-  const [lastThreadId, setLastThreadId] = useState<string | null>(() =>
-    sessionStorage.getItem(LAST_THREAD_STORAGE_KEY),
-  )
   const [viewingLast, setViewingLast] = useState(false)
   const [returnThreadId, setReturnThreadId] = useState<string | null>(null)
+  const [history, setHistory] = useState<WorkflowRunSummary[]>([])
+  const [showHistory, setShowHistory] = useState(false)
 
-  const viewLastTask = async (): Promise<void> => {
-    if (!client || lastThreadId === null) return
+  const loadHistory = async (): Promise<void> => {
+    if (!client) return
     setErrorMessage(null)
-    if (lastThreadId === workflow?.threadId) {
-      // Same task as the one already on screen: state is unchanged, so
-      // give explicit feedback instead of appearing to do nothing.
-      setAnnouncement('当前显示的就是最近任务。')
+    try {
+      setHistory(await client.listRuns(20))
+      setShowHistory(true)
+    } catch {
+      setErrorMessage('无法加载历史任务。')
+    }
+  }
+
+  const openHistoryItem = async (threadId: string): Promise<void> => {
+    if (!client) return
+    setErrorMessage(null)
+    setShowHistory(false)
+    if (threadId === workflow?.threadId) {
+      setAnnouncement('当前显示的就是该任务。')
       return
     }
-    setAnnouncement('正在加载最近任务…')
+    setAnnouncement('正在加载历史任务…')
     try {
-      const status = await client.getStatus(lastThreadId)
+      const status = await client.getStatus(threadId)
       setReturnThreadId(workflow?.threadId ?? null)
       setWorkflow(status)
       setViewingLast(true)
       if (status.status === 'running') {
         setPanelState('polling')
-        setAnnouncement('最近任务仍在运行，请稍后刷新查看。')
+        setAnnouncement('该任务仍在运行，请稍后刷新查看。')
       } else {
         handleStatus(status)
       }
     } catch {
-      setErrorMessage('无法加载最近任务（可能已过期）。')
-      setAnnouncement('最近任务加载失败。')
+      setErrorMessage('无法加载该任务（可能已过期）。')
     }
   }
 
@@ -334,7 +342,7 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
             </button>
           ) : null}
           {viewingLast ? (
-            <span className="workflowViewingLast">正在查看最近任务</span>
+            <span className="workflowViewingLast">正在查看历史任务</span>
           ) : null}
           {returnThreadId !== null ? (
             <button
@@ -345,14 +353,37 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
               返回当前任务
             </button>
           ) : null}
-          {lastThreadId !== null ? (
-            <button
-              type="button"
-              className="secondaryButton"
-              onClick={() => void viewLastTask()}
-            >
-              查看最近任务
-            </button>
+          <button
+            type="button"
+            className="secondaryButton"
+            onClick={() => void loadHistory()}
+          >
+            历史任务
+          </button>
+          {showHistory && history.length > 0 ? (
+            <div className="workflowHistory">
+              <h4>历史任务</h4>
+              <ul>
+                {history.map((run) => (
+                  <li key={run.threadId}>
+                    <button type="button" onClick={() => void openHistoryItem(run.threadId)}>
+                      <span>{run.filename ?? '未命名'}</span>
+                      <span>{run.status}</span>
+                      <span>
+                        {run.createdAt === null
+                          ? '--'
+                          : new Date(run.createdAt).toLocaleString('zh-CN', {
+                              hour12: false,
+                            })}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {showHistory && history.length === 0 ? (
+            <p className="workflowHistoryEmpty">暂无历史任务。</p>
           ) : null}
         </div>
       </section>

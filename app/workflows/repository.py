@@ -14,6 +14,10 @@ class WorkflowRunRepository(Protocol):
 
     async def get(self, thread_id: str, owner_key_hash: str) -> WorkflowRun | None: ...
 
+    async def list_by_owner(
+        self, owner_key_hash: str, *, limit: int = 20
+    ) -> list[WorkflowRun]: ...
+
     async def update_status_if(
         self,
         thread_id: str,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.workflow_models import WorkflowRunTable
@@ -63,6 +63,19 @@ class PostgresWorkflowRunRepository:
                 )
             )
             return _row_to_run(row) if row is not None else None
+
+    async def list_by_owner(
+        self, owner_key_hash: str, *, limit: int = 20
+    ) -> list[WorkflowRun]:
+        async with self._session_factory() as session:
+            stmt = (
+                select(WorkflowRunTable)
+                .where(WorkflowRunTable.owner_key_hash == owner_key_hash)
+                .order_by(desc(WorkflowRunTable.created_at))
+                .limit(limit)
+            )
+            rows = await session.scalars(stmt)
+            return [_row_to_run(row) for row in rows]
 
     async def update_status_if(
         self,

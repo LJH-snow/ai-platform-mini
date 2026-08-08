@@ -305,3 +305,46 @@ def _build_postgres_service(
         run_repository=repository,
         work_dir=tmp_path / "pg-workflows",
     )
+
+
+def test_list_runs_returns_own_runs_newest_first(
+    workflow_client: tuple[TestClient, PDFReportWorkflowService, FakeModel],
+) -> None:
+    client, _, _ = workflow_client
+
+    first = _upload_pdf(client, topic="First")
+    second = _upload_pdf(client, topic="Second")
+
+    response = client.get("/api/v1/workflows", headers=_auth())
+    assert response.status_code == 200
+    runs = response.json()
+    assert [run["thread_id"] for run in runs][:2] == [
+        second["thread_id"],
+        first["thread_id"],
+    ]
+    assert runs[0]["filename"] == "sample.pdf"
+    assert runs[0]["report_topic"] == "Second"
+    assert runs[0]["created_at"] is not None
+
+
+async def test_list_runs_is_tenant_isolated(
+    workflow_client: tuple[TestClient, PDFReportWorkflowService, FakeModel],
+) -> None:
+    client, service, _ = workflow_client
+    _upload_pdf(client, topic="Mine")
+
+    # A run owned by another tenant (inserted directly via the service,
+    # as the HTTP layer rejects unknown keys) must not leak into the list.
+    await_other = await service.start(
+        pdf_bytes=b"%PDF-fake",
+        filename="other.pdf",
+        owner_key_hash=OWNER_B,
+        topic="Other",
+    )
+    assert await_other.thread_id != ""
+
+    response = client.get("/api/v1/workflows", headers=_auth())
+    assert response.status_code == 200
+    runs = response.json()
+    assert all(run["thread_id"] != await_other.thread_id for run in runs)
+    assert runs[0]["filename"] == "sample.pdf"
