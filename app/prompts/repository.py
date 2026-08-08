@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.prompt_models import PromptTemplateTable
@@ -90,9 +90,23 @@ class InMemoryPromptRepository:
     async def list_active_templates(
         self, workspace_id: str | None
     ) -> list[PromptRecord]:
-        return [
-            r for r in self._records if r.workspace_id == workspace_id and r.is_active
+        """Workspace-first with global fallback (same semantics as render).
+
+        A workspace template wins over the global one for the same name;
+        global (NULL) templates are listed when the workspace has none.
+        """
+        candidates = [
+            r
+            for r in self._records
+            if r.is_active
+            and (r.workspace_id == workspace_id or r.workspace_id is None)
         ]
+        by_name: dict[str, PromptRecord] = {}
+        for record in candidates:
+            current = by_name.get(record.name)
+            if current is None or record.workspace_id == workspace_id:
+                by_name[record.name] = record
+        return list(by_name.values())
 
     async def seed(self, record: PromptRecord) -> PromptRecord:
         existing = await self.find_by_name_and_version(
@@ -194,13 +208,23 @@ class PostgresPromptRepository:
     async def list_active_templates(
         self, workspace_id: str | None
     ) -> list[PromptRecord]:
+        """Workspace-first with global fallback (same semantics as render)."""
         async with self._session_factory() as session:
             stmt = select(PromptTemplateTable).where(
-                PromptTemplateTable.workspace_id == workspace_id,
+                or_(
+                    PromptTemplateTable.workspace_id == workspace_id,
+                    PromptTemplateTable.workspace_id.is_(None),
+                ),
                 PromptTemplateTable.is_active.is_(True),
             )
-            result = await session.scalars(stmt)
-            return [_row_to_record(row) for row in result]
+            rows = await session.scalars(stmt)
+            by_name: dict[str, PromptRecord] = {}
+            for row in rows:
+                record = _row_to_record(row)
+                current = by_name.get(record.name)
+                if current is None or record.workspace_id == workspace_id:
+                    by_name[record.name] = record
+            return list(by_name.values())
 
     async def seed(self, record: PromptRecord) -> PromptRecord:
         async with self._session_factory() as session:
