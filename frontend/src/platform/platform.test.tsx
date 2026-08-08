@@ -464,7 +464,7 @@ describe('UsageDashboard', () => {
     expect(await screen.findByText('每日 Token 用量')).toBeInTheDocument()
     expect(screen.getByText('按模型')).toBeInTheDocument()
     expect(screen.getByText('qwen3:4b')).toBeInTheDocument()
-    expect(screen.getByText('按 Key')).toBeInTheDocument()
+    expect(screen.getByText('按 Key（哈希前缀）')).toBeInTheDocument()
     expect(screen.getByText('abcd1234')).toBeInTheDocument()
     expect(screen.getByRole('img', { name: '每日 Token 用量趋势' })).toBeInTheDocument()
 

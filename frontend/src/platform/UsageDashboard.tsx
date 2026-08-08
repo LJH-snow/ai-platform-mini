@@ -221,7 +221,7 @@ export function UsageDashboardPage({ client }: UsageDashboardProps): JSX.Element
           </div>
           <div className="rankingGrid">
             <RankingList title="按模型" entries={data.model_ranking} />
-            <RankingList title="按 Key" entries={data.key_ranking} />
+            <RankingList title="按 Key（哈希前缀）" entries={data.key_ranking} />
           </div>
         </>
       )}
