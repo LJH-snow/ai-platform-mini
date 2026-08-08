@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from app.evals.agent_benchmark import AgentBenchmarkRunner
     from app.mcp.manager import MCPToolManager
     from app.prompts.service import PromptRegistryService
+    from app.rag.embedder import Embedder
     from app.rag.ingestion import RAGIngestionService
-    from app.rag.ollama_embedder import OllamaEmbedder
     from app.rag.queue import RAGIngestionQueue
     from app.rag.service import RAGService
     from app.rag.vector_store import VectorStore
@@ -144,12 +144,22 @@ def provide_quota_service() -> QuotaService:
 
 
 @lru_cache
-def provide_embedder() -> OllamaEmbedder | None:
+def provide_embedder() -> Embedder | None:
+    """Provide the embedding backend for RAG.
+
+    The deterministic MockEmbedder backs the mock LLM provider so the
+    E2E chain (PDF -> chunks -> retrieval -> answer) runs with zero
+    external dependencies.
+    """
     from app.rag.ollama_embedder import OllamaEmbedder
 
     settings = get_settings()
     if not settings.rag_enabled:
         return None
+    if settings.llm_provider == "mock":
+        from app.evals.mock_embedder import MockEmbedder
+
+        return MockEmbedder(dimensions=settings.rag_embedding_dimensions)
     return OllamaEmbedder(
         base_url=settings.ollama_base_url,
         model=settings.rag_embedding_model,

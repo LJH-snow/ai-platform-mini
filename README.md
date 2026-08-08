@@ -24,6 +24,7 @@
 - Agent 配置前端（Sprint B 收尾）：PromptStudio 已服务端化（版本历史 + 保存即新版本 + 设为当前版本/回滚）；新增 Agent Studio（模型/Prompt 版本/工具勾选/步数/温度）与 Tool Center（workspace 级启用开关 + JSON Schema 展示）；run 审计 payload 记录 agent_id + prompt_ref
 - Agent Run 回放（Sprint D1）：`GET /api/v1/runs`（列表，可按 agent_id 过滤）与 `GET /api/v1/runs/{run_id}`（详情）按租户隔离（workspace 或 legacy key hash），跨租户统一 404；`agent_run_records` 新增 workspace_id 列（幂等迁移）；前端 Trace 面板 Run ID 旁新增「回放」入口，步骤时间线页展示 LLM 决策/工具调用/RAG 来源/最终回答（沿用后端安全投影）
 - Usage Dashboard（Sprint D2）：`GET /api/v1/usage/dashboard?days=N` 返回当前租户的按日 Token 趋势 + 按模型/按 Key 排行（scope 与 D1 同款双匹配：workspace 或 legacy key hash）；`daily_usage` 新增 workspace_id 列（幂等迁移，历史行 NULL → legacy 口径）；前端「用量仪表盘」页用轻量 SVG 柱状图（无新图表库）+ 占比排行
+- Playwright E2E（Sprint D3）：`frontend/e2e/` 四条全链路（注册 → Chat / Agent Run + Trace 回放 / PDF 工作流审批 / 知识库问答），后端 `LLM_PROVIDER=mock`（MockProvider 支持 Agent JSON 决策 + 确定性 token 计数）与 mock embedder 零外部依赖，独立端口（8010/5174）隔离本地开发服务；CI `e2e` job（needs: [ci] + pgvector 容器）
 - Verification baseline（2026-08-04）：
   - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
   - PostgreSQL/pgvector integration suite：通过

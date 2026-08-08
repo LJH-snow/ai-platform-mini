@@ -45,7 +45,7 @@ from app.observability import (
 
 if TYPE_CHECKING:
     from app.providers.base import LLMProvider
-    from app.rag.ollama_embedder import OllamaEmbedder
+    from app.rag.embedder import Embedder
     from app.rag.queue import RAGIngestionQueue
     from app.workflows.checkpointer import PostgresWorkflowCheckpointer
 
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     provider: LLMProvider | None = None
-    embedder: OllamaEmbedder | None = None
+    embedder: Embedder | None = None
     mcp_manager = None
     ingestion_queue: RAGIngestionQueue | None = None
     workflow_checkpointer: PostgresWorkflowCheckpointer | None = None
