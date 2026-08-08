@@ -15,7 +15,9 @@ from fastapi import (
 
 from app.auth.models import APIKey
 from app.auth.tenant import resolve_tenant_scope
+from app.billing.entitlement import EntitlementService
 from app.core.container import (
+    provide_entitlement_service,
     provide_quota_service,
     provide_rag_ingestion_queue,
     provide_rag_ingestion_service,
@@ -101,6 +103,10 @@ async def upload_rag_document(
     request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     ingestion_queue: Annotated[RAGIngestionQueue, Depends(get_rag_ingestion_queue)],
+    entitlement: Annotated[EntitlementService, Depends(provide_entitlement_service)],
+    rag_ingestion: Annotated[
+        RAGIngestionService | None, Depends(provide_rag_ingestion_service)
+    ],
 ) -> RAGIngestionTaskResponse:
     from app.core.settings import get_settings
 
@@ -118,6 +124,18 @@ async def upload_rag_document(
             create_parser(file.filename)
         except RAGDocumentValidationError as exc:
             raise RAGDocumentValidationError(str(exc)) from exc
+        # E1a checkpoint (document ceiling) at the ingestion entry:
+        # refuse queueing beyond the plan's max_documents.  Legacy keys
+        # (no workspace) have no subscription dimension and pass through
+        # untouched (dependency resolves to None when RAG is off).
+        if identity is not None and identity.workspace_id is not None:
+            if rag_ingestion is not None:
+                documents = await rag_ingestion.list_documents(
+                    owner_key_hash=resolve_tenant_scope(identity)
+                )
+                await entitlement.require_limit(
+                    identity.workspace_id, "document", len(documents)
+                )
         try:
             task = await ingestion_queue.submit(
                 content,

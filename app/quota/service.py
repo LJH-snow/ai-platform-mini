@@ -2,6 +2,10 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from app.billing.models import (
+    ACTIVE_SUBSCRIPTION_STATUSES,
+)
+from app.billing.repository import BillingRepository
 from app.exceptions.base import QuotaExceededError
 from app.quota.models import (
     QuotaConfig,
@@ -21,10 +25,15 @@ class QuotaService:
         usage_repository: UsageRepository,
         quota_repository: QuotaRepository,
         config: QuotaConfig,
+        # E1a: subscription plan layer of the inheritance chain.  None
+        # (tests / bare deployments) keeps the pre-E1 behaviour — plan
+        # participation is opt-in wiring, never implicit.
+        billing_repository: BillingRepository | None = None,
     ) -> None:
         self._usage_repo = usage_repository
         self._quota_repo = quota_repository
         self._config = config
+        self._billing_repo = billing_repository
 
     async def reserve(
         self,
@@ -215,17 +224,62 @@ class QuotaService:
     async def _resolve_limits(
         self, workspace_id: str | None
     ) -> tuple[int | None, int | None]:
-        """Resolve effective limits: workspace override -> global default."""
+        """Resolve effective limits with an explicit scope branch (E1 review).
+
+        key scope → settings only (byte-identical legacy path; plans are
+        workspace-dimension and must never leak into per-key judgement).
+        workspace scope → workspace override > subscription plan > settings.
+        """
+        if self._config.quota_scope == "key":
+            return self._config.daily_token_limit, self._config.monthly_token_limit
+        return await self._resolve_workspace_limits(workspace_id)
+
+    async def _resolve_workspace_limits(
+        self, workspace_id: str | None
+    ) -> tuple[int | None, int | None]:
+        """Workspace override -> subscription plan -> settings default."""
         daily = self._config.daily_token_limit
         monthly = self._config.monthly_token_limit
-        if self._config.quota_scope == "workspace" and workspace_id is not None:
-            override = await self._quota_repo.get_workspace_quota(workspace_id)
-            if override is not None:
-                if override.daily_token_limit is not None:
-                    daily = override.daily_token_limit
-                if override.monthly_token_limit is not None:
-                    monthly = override.monthly_token_limit
+        if workspace_id is None:
+            return daily, monthly
+
+        plan_daily, plan_monthly = await self._plan_token_limits(workspace_id)
+        if plan_daily is not None:
+            daily = plan_daily
+        if plan_monthly is not None:
+            monthly = plan_monthly
+
+        # Workspace overrides sit at the top of the chain and always win.
+        override = await self._quota_repo.get_workspace_quota(workspace_id)
+        if override is not None:
+            if override.daily_token_limit is not None:
+                daily = override.daily_token_limit
+            if override.monthly_token_limit is not None:
+                monthly = override.monthly_token_limit
         return daily, monthly
+
+    async def _plan_token_limits(
+        self, workspace_id: str
+    ) -> tuple[int | None, int | None]:
+        """Token ceilings from the subscription plan, or (None, None).
+
+        Only ACTIVE/TRIAL subscriptions participate; EXPIRED/CANCELLED
+        (and missing plans) fall through to the settings default.
+        """
+        if self._billing_repo is None:
+            return None, None
+        subscription = await self._billing_repo.get_subscription_for_workspace(
+            workspace_id
+        )
+        if (
+            subscription is None
+            or subscription.status not in ACTIVE_SUBSCRIPTION_STATUSES
+        ):
+            return None, None
+        plan = await self._billing_repo.get_plan(subscription.plan_id)
+        if plan is None:
+            return None, None
+        return plan.daily_token_limit, plan.monthly_token_limit
 
     def _lock_key(self, api_key_hash: str, workspace_id: str | None) -> str:
         """Advisory lock key: workspace id in workspace mode, else key hash."""
