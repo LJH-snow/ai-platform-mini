@@ -175,6 +175,24 @@ def public_run_summary(payload: Mapping[str, Any]) -> AgentRunRecordSummary:
 # AgentStepSummary / AgentToolCallSummary.  Anything outside these keys
 # (raw tool arguments, results, provider payloads) is dropped at the
 # user-facing boundary even if it ever leaks into stored payloads.
+# Top-level response allowlist — mirrors AgentRunResponse.  Any other
+# key (raw prompts, requests, provider payloads) is dropped at the
+# user-facing boundary.
+_RESPONSE_ALLOWED_KEYS = frozenset(
+    {
+        "run_id",
+        "thread_id",
+        "status",
+        "answer",
+        "stop_reason",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "steps",
+        "events",
+        "usage",
+    }
+)
 _STEP_ALLOWED_KEYS = frozenset(
     {
         "index",
@@ -223,16 +241,16 @@ def project_run_response(
     response = payload.get("response")
     projected_response: dict[str, object] = {}
     if isinstance(response, dict):
+        projected_response = {
+            key: value
+            for key, value in response.items()
+            if key in _RESPONSE_ALLOWED_KEYS
+        }
         steps = response.get("steps")
         if isinstance(steps, list):
-            projected_response = {
-                **response,
-                "steps": [
-                    _project_step(step) for step in steps if isinstance(step, dict)
-                ],
-            }
-        else:
-            projected_response = dict(response)
+            projected_response["steps"] = [
+                _project_step(step) for step in steps if isinstance(step, dict)
+            ]
     return AgentRunRecordResponse(
         run_id=str(payload["run_id"]),
         request_id=str(payload["request_id"]),

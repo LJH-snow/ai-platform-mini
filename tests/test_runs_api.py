@@ -304,6 +304,10 @@ def test_run_detail_projection_drops_raw_fields() -> None:
     polluted_payload: dict[str, object] = {
         "run_id": "run-polluted",
         "status": "completed",
+        # Top-level raw fields that must never reach the client.
+        "prompt": "top-level system prompt secret",
+        "request": {"message": "top-level secret query"},
+        "raw": {"provider": "top-level payload"},
         "steps": [
             {
                 "index": 1,
@@ -357,6 +361,13 @@ def test_run_detail_projection_drops_raw_fields() -> None:
         assert "raw" not in tool
         assert "prompt" not in steps[0]
         assert "request" not in steps[0]
+        # Top-level response allowlist drops raw keys too.
+        assert "prompt" not in body["response"]
+        assert "request" not in body["response"]
+        assert "raw" not in body["response"]
+        assert "top-level system prompt secret" not in resp.text
+        assert "top-level secret query" not in resp.text
+        assert "top-level payload" not in resp.text
         assert '"arguments"' not in resp.text
         assert '"result"' not in resp.text
         # Sensitive patterns never leak, even inside allowed summaries.
