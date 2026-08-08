@@ -64,6 +64,8 @@
 - Bearer API Key 鉴权、Admin Key 管理及 SHA-256 哈希存储
 - 按 API Key 的滑动窗口限流，以及日/月 Token 配额
 - 配额预占、续租、结算和断连释放，支持并发及长时间流式请求
+- Billing/Plan：内置 free/pro/enterprise 计划种子，订阅继承链（workspace 显式覆盖 > 计划限额 > 全局默认）；无订阅 = legacy 模式（行为与现状完全一致，不隐式收紧）
+- EntitlementService：feature 能力（reranker/benchmark）与资源上限（agent/document/member）职责分离，超限拒绝并返回明确 422
 - PostgreSQL Usage 聚合、API Key 持久化和 Testcontainers 集成测试
 - Agent Runtime 核心状态、事件、Tool Protocol 和 `POST /api/v1/agent/runs` 应用层
 - Tool Registry/Executor：Schema 参数校验、超时、异常安全归一化、输出截断和工具 Schema 导出
@@ -693,6 +695,7 @@ TELEMETRY_OTLP_ENDPOINT=http://localhost:4318/v1/traces
 - `QUOTA_RESERVATION_TTL_SECONDS`: lifespan of an active quota reservation; must be positive
 - `QUOTA_RESERVATION_RENEWAL_SECONDS`: reservation renewal interval; must be positive and shorter than its TTL
 - Quota uses a reserve/settle pattern: tokens are reserved before an LLM call and settled only after actual usage is persisted. `ReservationLifecycle` renews active reservations for both non-streaming and streaming requests, and releases them if renewal fails or a client disconnects.
+- Billing/Plan: `POST /admin/workspaces/{id}/subscription` assigns a plan; only `ACTIVE`/`TRIAL` subscriptions participate in limit resolution (`EXPIRED`/`CANCELLED` fall back to settings). A workspace **without a subscription is legacy and fully open** — plans never tighten anything implicitly.
 
 ### RAG configuration notes
 

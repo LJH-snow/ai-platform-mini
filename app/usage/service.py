@@ -49,6 +49,14 @@ class UsageService:
     ) -> list[UsageAggregation]:
         return await self._repository.get_monthly_usage(api_key_hash, year_month)
 
+    async def get_monthly_usage_for_workspace(
+        self, workspace_id: str, year_month: str
+    ) -> list[UsageAggregation]:
+        """Monthly aggregation for one workspace (billing page source)."""
+        return await self._repository.get_monthly_usage_for_workspace(
+            workspace_id, year_month
+        )
+
     async def get_workspace_trend(
         self, owner_scope: str, days: int
     ) -> list[WorkspaceUsagePoint]:
