@@ -48,6 +48,9 @@ const safeErrorMessage = (error: unknown): string => {
 }
 
 const POLL_INTERVAL_MS = 3000
+// Last workflow thread id, kept per user session so returning to the
+// page restores the in-flight or completed task instead of losing it.
+const THREAD_STORAGE_KEY = 'ai-platform.workflow-thread'
 
 export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps): JSX.Element {
   const [pdfFile, setPdfFile] = useState<File | null>(null)
@@ -73,6 +76,32 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
     }
     isFetchingRef.current = false
   }, [])
+
+  useEffect(() => {
+    const savedThreadId = sessionStorage.getItem(THREAD_STORAGE_KEY)
+    if (savedThreadId && apiKeyConfigured && savedThreadId !== workflow?.threadId) {
+      setAnnouncement('正在恢复上次的工作流任务…')
+      const poll = async (): Promise<void> => {
+        try {
+          const status = await client.getStatus(savedThreadId)
+          setWorkflow(status)
+          if (status.status === 'running') {
+            setPanelState('polling')
+            startPolling(savedThreadId)
+          } else {
+            handleStatus(status)
+          }
+        } catch {
+          // Thread may have expired or belong to another tenant; leave the
+          // panel idle so the user can start a fresh workflow.
+          setAnnouncement('无法恢复上次任务，可重新上传。')
+        }
+      }
+      void poll()
+    }
+    // Restore once per mount; workflow/stopPolling intentionally omitted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKeyConfigured, client])
 
   useEffect(() => {
     return () => {
@@ -146,6 +175,7 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
 
     try {
       const status = await client.uploadPdf(pdfFile, topic)
+      sessionStorage.setItem(THREAD_STORAGE_KEY, status.threadId)
       handleStatus(status)
       if (status.status === 'running') {
         startPolling(status.threadId)
@@ -185,6 +215,7 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
     setAnnouncement('正在拒绝并重新分析…')
     try {
       const status = await client.reject(workflow.threadId, trimmed)
+      sessionStorage.setItem(THREAD_STORAGE_KEY, status.threadId)
       handleStatus(status)
       if (status.status === 'running') {
         startPolling(status.threadId)
@@ -206,6 +237,7 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
 
   const handleReset = (): void => {
     stopPolling()
+    sessionStorage.removeItem(THREAD_STORAGE_KEY)
     setPdfFile(null)
     setTopic('')
     setWorkflow(null)

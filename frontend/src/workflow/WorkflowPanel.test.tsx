@@ -59,6 +59,7 @@ const createClient = (overrides: Partial<WorkflowClient> = {}): WorkflowClient =
 
 afterEach(() => {
   cleanup()
+  sessionStorage.clear()
 })
 
 describe('WorkflowPanel', () => {
@@ -301,5 +302,39 @@ describe('WorkflowPanel', () => {
     })
 
     vi.useRealTimers()
+  })
+})
+
+describe('WorkflowPanel restore', () => {
+  it('restores a persisted in-flight thread on mount', async () => {
+    const runningStatus: WorkflowStatus = {
+      ...pendingStatus,
+      threadId: 't-restore',
+      status: 'running',
+      stage: 'starting',
+    }
+    const getStatus = vi.fn().mockResolvedValue(runningStatus)
+    const client = createClient({ getStatus })
+    sessionStorage.setItem('ai-platform.workflow-thread', 't-restore')
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+
+    await waitFor(() => expect(getStatus).toHaveBeenCalledWith('t-restore'))
+    await waitFor(() => expect(screen.getByLabelText('报告主题（可选）')).toBeInTheDocument())
+    // The panel moved into the polling state for the restored task.
+    expect(screen.getByText(/恢复上次的工作流任务/)).toBeInTheDocument()
+  })
+
+  it('stays idle when a persisted thread cannot be restored', async () => {
+    const getStatus = vi.fn().mockRejectedValue(new WorkflowApiError('gone', 404))
+    const client = createClient({ getStatus })
+    sessionStorage.setItem('ai-platform.workflow-thread', 't-expired')
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+
+    await waitFor(() => expect(getStatus).toHaveBeenCalledWith('t-expired'))
+    await waitFor(() => expect(screen.getByText(/无法恢复上次任务/)).toBeInTheDocument())
+    // Upload button is available for a fresh workflow.
+    expect(screen.getByRole('button', { name: '开始生成报告' })).toBeDisabled()
   })
 })
