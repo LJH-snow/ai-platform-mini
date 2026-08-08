@@ -9,10 +9,12 @@ from typing import TYPE_CHECKING
 
 from app.agent_config.models import AgentRecord, ToolRecord, WorkspaceToolRecord
 from app.agent_config.repository import AgentDefinitionRepository
+from app.audit.service import AuditActor, AuditService
 from app.exceptions.base import ValidationError
 from app.prompts.service import PromptRegistryService, split_prompt_ref
 
 if TYPE_CHECKING:
+    from app.billing.entitlement import EntitlementService
     from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -24,12 +26,30 @@ class AgentDefinitionService:
         repository: AgentDefinitionRepository,
         tool_registry: ToolRegistry,
         prompt_registry: PromptRegistryService | None = None,
+        audit: AuditService | None = None,
+        # E1a: agent ceiling checkpoint.  None disables the check
+        # (pre-E1 behaviour) — legacy wiring stays untouched.
+        entitlement: EntitlementService | None = None,
     ) -> None:
         self._repo = repository
+        self._audit = audit
         self._tool_registry = tool_registry
         self._prompt_registry = prompt_registry
+        self._entitlement = entitlement
 
     # ── Agents ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _agent_snapshot(record: AgentRecord) -> dict[str, object]:
+        """Key fields for the audit before/after diff (not the full object)."""
+        return {
+            "name": record.name,
+            "model": record.model,
+            "prompt_ref": record.prompt_ref,
+            "temperature": record.temperature,
+            "max_steps": record.max_steps,
+            "enabled": record.enabled,
+        }
 
     async def create_agent(
         self,
@@ -42,6 +62,7 @@ class AgentDefinitionService:
         temperature: float = 0.7,
         max_steps: int = 10,
         created_by: str | None = None,
+        actor: AuditActor | None = None,
     ) -> tuple[AgentRecord, list[str]]:
         """Create an agent and optionally bind tools."""
         name = name.strip()
@@ -53,6 +74,12 @@ class AgentDefinitionService:
         agent_id = str(uuid.uuid4())
         prompt_ref = prompt_ref.strip()
         await self._validate_prompt_ref(prompt_ref, workspace_id=workspace_id)
+        # E1a checkpoint (the only agent resource ceiling): refuse new
+        # agents beyond the plan's max_agents.  Legacy (no subscription)
+        # passes through untouched.
+        if self._entitlement is not None:
+            existing = await self._repo.list_agents(workspace_id)
+            await self._entitlement.require_limit(workspace_id, "agent", len(existing))
         record = AgentRecord(
             id=agent_id,
             workspace_id=workspace_id,
@@ -75,6 +102,14 @@ class AgentDefinitionService:
             await self._repo.set_agent_tools(agent_id, bound_tools)
 
         logger.info("agent_created id=%s name=%s", agent_id, name)
+        if self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="agent.create",
+                resource_type="agent",
+                resource_id=agent_id,
+                actor=actor,
+                after=self._agent_snapshot(saved),
+            )
         return saved, bound_tools
 
     async def get_agent(
@@ -102,6 +137,7 @@ class AgentDefinitionService:
         temperature: float | None = None,
         max_steps: int | None = None,
         enabled: bool | None = None,
+        actor: AuditActor | None = None,
     ) -> AgentRecord | None:
         existing = await self._repo.find_agent_by_id(agent_id)
         if existing is None:
@@ -118,6 +154,7 @@ class AgentDefinitionService:
             await self._validate_prompt_ref(
                 existing.prompt_ref, workspace_id=workspace_id
             )
+        before_snapshot = self._agent_snapshot(existing)
         if temperature is not None:
             existing.temperature = temperature
         if max_steps is not None:
@@ -133,17 +170,40 @@ class AgentDefinitionService:
             )
             await self._repo.set_agent_tools(agent_id, bound)
 
+        if self._audit is not None and actor is not None and result is not None:
+            await self._audit.record(
+                action="agent.update",
+                resource_type="agent",
+                resource_id=agent_id,
+                actor=actor,
+                before=before_snapshot,
+                after=self._agent_snapshot(result),
+            )
+
         return result
 
     async def delete_agent(
-        self, agent_id: str, *, workspace_id: str | None = None
+        self,
+        agent_id: str,
+        *,
+        workspace_id: str | None = None,
+        actor: AuditActor | None = None,
     ) -> bool:
         record = await self._repo.find_agent_by_id(agent_id)
         if record is None:
             return False
         if workspace_id is not None and record.workspace_id != workspace_id:
             return False
-        return await self._repo.delete_agent(agent_id)
+        deleted = await self._repo.delete_agent(agent_id)
+        if deleted and self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="agent.delete",
+                resource_type="agent",
+                resource_id=agent_id,
+                actor=actor,
+                before=self._agent_snapshot(record),
+            )
+        return deleted
 
     async def get_agent_tools(self, agent_id: str) -> list[str]:
         tools = await self._repo.get_agent_tools(agent_id)
@@ -222,14 +282,30 @@ class AgentDefinitionService:
     # ── Workspace tool enablement ─────────────────────────────────────────
 
     async def set_tool_enabled(
-        self, workspace_id: str, tool_name: str, enabled: bool
+        self,
+        workspace_id: str,
+        tool_name: str,
+        enabled: bool,
+        *,
+        actor: AuditActor | None = None,
     ) -> WorkspaceToolRecord:
         """Override a tool's enablement for one workspace."""
         if self._tool_registry.get(tool_name) is None:
             raise ValidationError(
                 f"Tool '{tool_name}' is not available in the tool registry."
             )
-        return await self._repo.set_workspace_tool(workspace_id, tool_name, enabled)
+        previous = await self.is_tool_enabled(workspace_id, tool_name)
+        override = await self._repo.set_workspace_tool(workspace_id, tool_name, enabled)
+        if self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="tool.enable",
+                resource_type="tool",
+                resource_id=tool_name,
+                actor=actor,
+                before={"tool_name": tool_name, "enabled": previous},
+                after={"tool_name": tool_name, "enabled": enabled},
+            )
+        return override
 
     async def is_tool_enabled(self, workspace_id: str, tool_name: str) -> bool:
         """Effective enablement: workspace override wins, else the global default."""

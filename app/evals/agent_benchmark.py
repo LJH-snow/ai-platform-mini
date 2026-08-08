@@ -24,6 +24,7 @@ from types import MappingProxyType
 
 from app.agent_config.service import AgentDefinitionService
 from app.agents.models import RunStatus
+from app.audit.service import AuditActor, AuditService
 from app.auth.models import APIKey
 from app.core.context import RequestContext
 from app.evals.benchmark_repository import (
@@ -88,10 +89,12 @@ class AgentBenchmarkRunner:
         agent_service: AgentService,
         agent_definition_service: AgentDefinitionService,
         run_repository: BenchmarkRunRepository,
+        audit: AuditService | None = None,
     ) -> None:
         self._agent_service = agent_service
         self._definition_service = agent_definition_service
         self._run_repository = run_repository
+        self._audit = audit
 
     async def run(
         self,
@@ -102,6 +105,7 @@ class AgentBenchmarkRunner:
         context: RequestContext,
         api_key: APIKey,
         max_steps: int | None = None,
+        actor: AuditActor | None = None,
     ) -> BenchmarkRunRecord:
         """Execute every task of the set and persist the aggregated metrics.
 
@@ -158,6 +162,19 @@ class AgentBenchmarkRunner:
 
         record = _aggregate(agent_id, workspace_id, task_set, tasks, outcomes)
         saved = await self._run_repository.save(record)
+        if self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="benchmark.execute",
+                resource_type="benchmark",
+                resource_id=agent_id,
+                actor=actor,
+                after={
+                    "task_set": task_set,
+                    "task_count": saved.task_count,
+                    "completed_count": saved.completed_count,
+                    "tool_call_accuracy": saved.tool_call_accuracy,
+                },
+            )
         logger.info(
             "benchmark_run agent_id=%s task_set=%s task_count=%d completed=%d",
             agent_id,

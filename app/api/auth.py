@@ -111,9 +111,13 @@ def provide_user_service() -> UserService:
 
 @lru_cache
 def provide_workspace_service() -> WorkspaceService:
+    from app.core.container import provide_audit_service, provide_entitlement_service
+
     return WorkspaceService(
         workspace_repo=_provide_workspace_repository(),
         user_repo=_provide_user_repository(),
+        audit=provide_audit_service(),
+        entitlement=provide_entitlement_service(),
     )
 
 

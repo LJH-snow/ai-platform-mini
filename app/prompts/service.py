@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import UTC, datetime
 
+from app.audit.service import AuditActor, AuditService
 from app.prompts.models import PromptRecord, PromptVersionSummary
 from app.prompts.repository import PromptRepository
 
@@ -34,8 +35,11 @@ class PromptRegistryService:
     first startup before seeds run or in-memory mode).
     """
 
-    def __init__(self, repository: PromptRepository) -> None:
+    def __init__(
+        self, repository: PromptRepository, audit: AuditService | None = None
+    ) -> None:
         self._repo = repository
+        self._audit = audit
 
     async def seed(
         self,
@@ -90,6 +94,7 @@ class PromptRegistryService:
         variables: list[dict[str, object]] | None = None,
         workspace_id: str | None = None,
         created_by: str | None = None,
+        actor: AuditActor | None = None,
     ) -> PromptRecord:
         """Create a new version of a template (auto-incremented)."""
         versions = await self._repo.list_versions(workspace_id, name)
@@ -107,7 +112,16 @@ class PromptRegistryService:
             created_by=created_by,
             created_at=datetime.now(UTC),
         )
-        return await self._repo.create_version(record)
+        saved = await self._repo.create_version(record)
+        if self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="prompt.create_version",
+                resource_type="prompt",
+                resource_id=f"{name}@{next_version}",
+                actor=actor,
+                after={"name": name, "version": next_version},
+            )
+        return saved
 
     async def activate(
         self,
@@ -115,9 +129,21 @@ class PromptRegistryService:
         version: int,
         *,
         workspace_id: str | None = None,
+        actor: AuditActor | None = None,
     ) -> bool:
         """Set a specific version as active (also serves as rollback)."""
-        return await self._repo.set_active(workspace_id, name, version)
+        previous = await self.resolve_version(name, workspace_id=workspace_id)
+        activated = await self._repo.set_active(workspace_id, name, version)
+        if activated and self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="prompt.activate",
+                resource_type="prompt",
+                resource_id=f"{name}@{version}",
+                actor=actor,
+                before={"name": name, "version": previous},
+                after={"name": name, "version": version},
+            )
+        return activated
 
     async def resolve_version(
         self, name: str, *, workspace_id: str | None = None

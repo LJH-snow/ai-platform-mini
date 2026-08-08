@@ -1,12 +1,13 @@
 import logging
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.api.auth import provide_workspace_service
+from app.audit.service import AuditService
 from app.auth.dependencies import (
     is_configured_admin_key_hash,
     is_configured_admin_key_prefix,
@@ -17,6 +18,7 @@ from app.auth.service import APIKeyService
 from app.auth.workspace_service import WorkspaceService
 from app.core.container import (
     provide_agent_run_record_service,
+    provide_audit_service,
     provide_quota_service,
     provide_usage_service,
 )
@@ -314,3 +316,50 @@ async def set_workspace_quota(
         daily_token_limit=quota.daily_token_limit,
         monthly_token_limit=quota.monthly_token_limit,
     )
+
+
+class AuditEventResponse(BaseModel):
+    id: int
+    workspace_id: str | None = None
+    api_key_hash: str | None = None
+    user_id: str | None = None
+    action: str
+    resource_type: str
+    resource_id: str
+    before: dict[str, object] | None = None
+    after: dict[str, object] | None = None
+    ip: str | None = None
+    created_at: datetime | None = None
+
+
+@router.get(
+    "/audit-events",
+    response_model=list[AuditEventResponse],
+    summary="List audit events (admin, time-descending)",
+)
+async def list_audit_events(
+    _admin: Annotated[APIKey, Depends(require_admin_rate_limit)],
+    audit_service: Annotated[AuditService, Depends(provide_audit_service)],
+    workspace_id: str | None = Query(default=None, max_length=64),
+    action: str | None = Query(default=None, max_length=64),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[AuditEventResponse]:
+    events = await audit_service.list_events(
+        workspace_id=workspace_id, action=action, limit=limit
+    )
+    return [
+        AuditEventResponse(
+            id=event.id,
+            workspace_id=event.workspace_id,
+            api_key_hash=event.api_key_hash,
+            user_id=event.user_id,
+            action=event.action,
+            resource_type=event.resource_type,
+            resource_id=event.resource_id,
+            before=event.before,
+            after=event.after,
+            ip=event.ip,
+            created_at=event.created_at,
+        )
+        for event in events
+    ]

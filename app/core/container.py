@@ -27,6 +27,10 @@ from app.workflows.repository import WorkflowRunRepository
 
 if TYPE_CHECKING:
     from app.agent_config.service import AgentDefinitionService
+    from app.audit.service import AuditService
+    from app.billing.entitlement import EntitlementService
+    from app.billing.repository import BillingRepository
+    from app.billing.service import PlanService
     from app.evals.agent_benchmark import AgentBenchmarkRunner
     from app.mcp.manager import MCPToolManager
     from app.prompts.service import PromptRegistryService
@@ -141,6 +145,10 @@ def provide_quota_service() -> QuotaService:
         usage_repository=usage_repo,
         quota_repository=quota_repo,
         config=config,
+        # E1a: subscription plan layer of the inheritance chain.  The
+        # billing repository is injected from the container; billing
+        # never depends on quota (no cycle).
+        billing_repository=provide_billing_repository(),
     )
 
 
@@ -365,6 +373,58 @@ def provide_agent_service() -> AgentService:
 
 
 @lru_cache
+def provide_audit_service() -> AuditService:
+    """Provide the audit log with the active storage backend."""
+    from app.audit.service import (
+        AuditService,
+        InMemoryAuditRepository,
+        PostgresAuditRepository,
+    )
+
+    settings = get_settings()
+    from app.audit.service import AuditRepository
+
+    repo: AuditRepository
+    if settings.auth_storage == "postgres":
+        repo = PostgresAuditRepository(provide_session_factory())
+    else:
+        repo = InMemoryAuditRepository()
+    return AuditService(repository=repo)
+
+
+@lru_cache
+def provide_billing_repository() -> BillingRepository:
+    """Provide the billing repository with the active storage backend."""
+
+    settings = get_settings()
+    if settings.auth_storage == "postgres":
+        from app.billing.postgres_repository import PostgresBillingRepository
+
+        repo: BillingRepository = PostgresBillingRepository(provide_session_factory())
+    else:
+        from app.billing.memory_repository import InMemoryBillingRepository
+
+        repo = InMemoryBillingRepository()
+    return repo
+
+
+@lru_cache
+def provide_plan_service() -> PlanService:
+    """Provide PlanService (subscription assignment) over the billing repo."""
+    from app.billing.service import PlanService
+
+    return PlanService(repository=provide_billing_repository())
+
+
+@lru_cache
+def provide_entitlement_service() -> EntitlementService:
+    """Provide EntitlementService (feature + resource ceilings)."""
+    from app.billing.entitlement import EntitlementService
+
+    return EntitlementService(repository=provide_billing_repository())
+
+
+@lru_cache
 def provide_prompt_registry() -> PromptRegistryService:
     """Provide the PromptRegistryService with appropriate storage backend."""
     from app.prompts.repository import (
@@ -379,7 +439,7 @@ def provide_prompt_registry() -> PromptRegistryService:
         repo: PromptRepository = PostgresPromptRepository(provide_session_factory())
     else:
         repo = InMemoryPromptRepository()
-    return PromptRegistryService(repository=repo)
+    return PromptRegistryService(repository=repo, audit=provide_audit_service())
 
 
 @lru_cache
@@ -419,6 +479,8 @@ def provide_agent_definition_service() -> AgentDefinitionService:
         repository=repo,
         tool_registry=tool_registry,
         prompt_registry=provide_prompt_registry(),
+        audit=provide_audit_service(),
+        entitlement=provide_entitlement_service(),
     )
 
 
@@ -443,6 +505,7 @@ def provide_agent_benchmark_runner() -> AgentBenchmarkRunner:
         agent_service=provide_agent_service(),
         agent_definition_service=provide_agent_definition_service(),
         run_repository=repo,
+        audit=provide_audit_service(),
     )
 
 
@@ -469,6 +532,10 @@ def clear_container_cache() -> None:
     provide_agent_benchmark_runner.cache_clear()
     provide_agent_definition_service.cache_clear()
     provide_prompt_registry.cache_clear()
+    provide_entitlement_service.cache_clear()
+    provide_plan_service.cache_clear()
+    provide_billing_repository.cache_clear()
+    provide_audit_service.cache_clear()
     provide_agent_service.cache_clear()
     provide_agent_run_record_service.cache_clear()
     provide_workflow_service.cache_clear()

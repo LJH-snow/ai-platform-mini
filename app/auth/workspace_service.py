@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
+from app.audit.service import AuditActor, AuditService
 from app.auth.users_repository import UserRepository
 from app.auth.workspaces_repository import (
     WorkspaceMemberRecord,
@@ -16,6 +18,9 @@ from app.exceptions.base import (
     AuthorizationError,
     ValidationError,
 )
+
+if TYPE_CHECKING:
+    from app.billing.entitlement import EntitlementService
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +37,15 @@ class WorkspaceService:
         self,
         workspace_repo: WorkspaceRepository,
         user_repo: UserRepository,
+        audit: AuditService | None = None,
+        # E1a: member ceiling checkpoint.  None disables the check
+        # (pre-E1 behaviour) — legacy wiring stays untouched.
+        entitlement: EntitlementService | None = None,
     ) -> None:
         self._ws_repo = workspace_repo
         self._user_repo = user_repo
+        self._audit = audit
+        self._entitlement = entitlement
 
     async def create_workspace(
         self, user_id: str, name: str
@@ -88,6 +99,8 @@ class WorkspaceService:
         actor_user_id: str,
         target_email: str,
         role: str,
+        *,
+        actor: AuditActor | None = None,
     ) -> WorkspaceMemberRecord:
         """Add a user to a workspace.  Only owner/admin can manage members."""
         await self._require_member_role(
@@ -109,7 +122,22 @@ class WorkspaceService:
         if target_user is None:
             raise ValidationError(f"User with email '{target_email}' not found.")
 
-        return await self._ws_repo.add_member(workspace_id, target_user.id, role)
+        # E1a checkpoint (member ceiling): refuse new members beyond the
+        # plan's max_members.  Legacy (no subscription) passes through.
+        if self._entitlement is not None:
+            existing = await self._ws_repo.list_members(workspace_id)
+            await self._entitlement.require_limit(workspace_id, "member", len(existing))
+
+        member = await self._ws_repo.add_member(workspace_id, target_user.id, role)
+        if self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="member.invite",
+                resource_type="member",
+                resource_id=target_user.id,
+                actor=actor,
+                after={"role": role},
+            )
+        return member
 
     async def list_members(
         self,
@@ -126,6 +154,8 @@ class WorkspaceService:
         actor_user_id: str,
         target_user_id: str,
         role: str,
+        *,
+        actor: AuditActor | None = None,
     ) -> None:
         """Change a member's role. Only owner/admin."""
         await self._require_member_role(
@@ -146,17 +176,29 @@ class WorkspaceService:
         if target.role == "owner":
             raise AuthorizationError("Cannot change the role of the workspace owner.")
 
+        previous_role = target.role
         updated = await self._ws_repo.update_member_role(
             workspace_id, target_user_id, role
         )
         if not updated:
             raise ValidationError("Failed to update member role.")
+        if self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="member.role_change",
+                resource_type="member",
+                resource_id=target_user_id,
+                actor=actor,
+                before={"role": previous_role},
+                after={"role": role},
+            )
 
     async def remove_member(
         self,
         workspace_id: str,
         actor_user_id: str,
         target_user_id: str,
+        *,
+        actor: AuditActor | None = None,
     ) -> None:
         """Remove a member. Only owner/admin. Cannot remove the owner."""
         await self._require_member_role(
@@ -168,7 +210,14 @@ class WorkspaceService:
             raise ValidationError("Target user is not a member of this workspace.")
         if target.role == "owner":
             raise AuthorizationError("Cannot remove the workspace owner.")
-
         removed = await self._ws_repo.remove_member(workspace_id, target_user_id)
         if not removed:
             raise ValidationError("Failed to remove member.")
+        if self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="member.remove",
+                resource_type="member",
+                resource_id=target_user_id,
+                actor=actor,
+                before={"role": target.role},
+            )

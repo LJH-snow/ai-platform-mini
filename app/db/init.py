@@ -9,7 +9,9 @@ from app.db.agent_models import (
     ToolTable,
     WorkspaceToolTable,
 )
+from app.db.audit_models import AuditEventTable
 from app.db.benchmark_models import AgentBenchmarkRunTable
+from app.db.billing_models import PlanTable, SubscriptionTable
 from app.db.conversation_models import (
     ConversationMessageTable,
     ConversationThreadTable,
@@ -44,6 +46,9 @@ _CORE_TABLES = [
     AgentToolTable,
     WorkspaceToolTable,
     AgentBenchmarkRunTable,
+    AuditEventTable,
+    PlanTable,
+    SubscriptionTable,
     DailyUsageTable,
     QuotaReservationTable,
     WorkspaceQuotaTable,
