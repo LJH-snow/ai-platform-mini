@@ -244,7 +244,9 @@ def test_export_csv_has_bom_headers_and_escaping() -> None:
     try:
         api_key, _ = _register("alice@test.com")
         fake.trend = [
-            WorkspaceUsagePoint(usage_date="2026-08-01", total_tokens=100, request_count=2),
+            WorkspaceUsagePoint(
+                usage_date="2026-08-01", total_tokens=100, request_count=2
+            ),
             WorkspaceUsagePoint(
                 usage_date="2026-08-02", total_tokens=300, request_count=3
             ),
@@ -281,12 +283,16 @@ def test_export_json_matches_dashboard_shape() -> None:
     try:
         api_key, _ = _register("alice@test.com")
         fake.trend = [
-            WorkspaceUsagePoint(usage_date="2026-08-01", total_tokens=100, request_count=2)
+            WorkspaceUsagePoint(
+                usage_date="2026-08-01", total_tokens=100, request_count=2
+            )
         ]
         fake.model_ranking = [
             UsageRanking(name="qwen3:4b", total_tokens=100, request_count=2)
         ]
-        fake.key_ranking = [UsageRanking(name="abcd1234", total_tokens=100, request_count=2)]
+        fake.key_ranking = [
+            UsageRanking(name="abcd1234", total_tokens=100, request_count=2)
+        ]
 
         resp = client.get(
             "/api/v1/usage/export?days=7&format=json", headers=_auth(api_key)
