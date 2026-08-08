@@ -29,6 +29,14 @@ class UsageRepository(Protocol):
 
     async def get_all_summary(self) -> UsageSummary: ...
 
+    async def get_total_tokens_for_workspace(
+        self, workspace_id: str, usage_date: str
+    ) -> int: ...
+
+    async def get_monthly_usage_for_workspace(
+        self, workspace_id: str, year_month: str
+    ) -> list[UsageAggregation]: ...
+
     async def get_workspace_trend(
         self, owner_scope: str, days: int
     ) -> list[WorkspaceUsagePoint]: ...

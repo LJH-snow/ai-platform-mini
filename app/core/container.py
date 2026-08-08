@@ -125,6 +125,7 @@ def provide_quota_service() -> QuotaService:
         default_reserve_tokens=512,
         reservation_ttl_seconds=settings.quota_reservation_ttl_seconds,
         reservation_renewal_seconds=settings.quota_reservation_renewal_seconds,
+        quota_scope=settings.quota_scope,
     )
     usage_repo = provide_usage_repository()
     if settings.auth_storage == "postgres":

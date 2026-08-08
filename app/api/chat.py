@@ -74,6 +74,11 @@ async def create_chat_completion(
         _api_key.key,
         max_tokens=request.max_tokens,
         prompt_tokens=estimate_prompt_tokens(messages),
+        workspace_id=(
+            http_request.state.context.identity.workspace_id
+            if http_request.state.context.identity
+            else None
+        ),
     )
 
     async with ReservationLifecycle(reservation, quota_service) as lifecycle:

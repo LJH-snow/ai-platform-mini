@@ -1076,6 +1076,8 @@ class _FakeQuotaService:
         api_key_hash: str,
         max_tokens: int | None = None,
         prompt_tokens: int = 0,
+        *,
+        workspace_id: str | None = None,
     ) -> object:
         from app.quota.models import QuotaReservation
 
@@ -1084,6 +1086,7 @@ class _FakeQuotaService:
                 "api_key_hash": api_key_hash,
                 "max_tokens": max_tokens,
                 "prompt_tokens": prompt_tokens,
+                "workspace_id": workspace_id,
             }
         )
         return QuotaReservation(
@@ -1091,6 +1094,7 @@ class _FakeQuotaService:
             api_key_hash=api_key_hash,
             reserved_tokens=100,
             usage_date="2026-08-04",
+            workspace_id=workspace_id,
         )
 
     async def settle(self, reservation_id: str) -> None:
@@ -1099,7 +1103,14 @@ class _FakeQuotaService:
     async def release(self, reservation_id: str) -> None:
         self.released.append(reservation_id)
 
-    async def extend(self, reservation_id: str, additional_tokens: int) -> None:
+    async def extend(
+        self,
+        reservation_id: str,
+        additional_tokens: int,
+        *,
+        workspace_id: str | None = None,
+    ) -> None:
+        del workspace_id
         if self.extend_error is not None:
             raise self.extend_error
         self.extended.append((reservation_id, additional_tokens))

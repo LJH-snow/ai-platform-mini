@@ -558,10 +558,13 @@ class AgentService:
             messages=[AgentMessage(role="user", content=request.message)],
         )
         reserved_prompt_tokens = model.estimate_prompt_tokens_for_state(initial_state)
+        identity = context.identity
+        workspace_id = identity.workspace_id if identity else None
         reservation = await self._quota_service.reserve(
             api_key.key,
             max_tokens=request.token_budget,
             prompt_tokens=reserved_prompt_tokens,
+            workspace_id=workspace_id,
         )
 
         async def ensure_prompt_reservation(prompt_tokens: int) -> None:
@@ -570,7 +573,9 @@ class AgentService:
             if reservation is None or additional_tokens <= 0:
                 return
             await self._quota_service.extend(
-                reservation.reservation_id, additional_tokens
+                reservation.reservation_id,
+                additional_tokens,
+                workspace_id=workspace_id,
             )
             reserved_prompt_tokens = prompt_tokens
 

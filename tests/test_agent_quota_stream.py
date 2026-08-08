@@ -78,8 +78,10 @@ class _FailingQuotaService:
         api_key_hash: str,
         max_tokens: int | None = None,
         prompt_tokens: int = 0,
+        *,
+        workspace_id: str | None = None,
     ) -> QuotaReservation:
-        del api_key_hash, max_tokens, prompt_tokens
+        del api_key_hash, max_tokens, prompt_tokens, workspace_id
         return QuotaReservation(
             reservation_id="reservation-1",
             api_key_hash="hashed",
@@ -87,7 +89,14 @@ class _FailingQuotaService:
             usage_date="2026-08-05",
         )
 
-    async def extend(self, reservation_id: str, additional_tokens: int) -> None:
+    async def extend(
+        self,
+        reservation_id: str,
+        additional_tokens: int,
+        *,
+        workspace_id: str | None = None,
+    ) -> None:
+        del workspace_id
         self.extended.append((reservation_id, additional_tokens))
         raise QuotaExceededError("daily quota exceeded")
 

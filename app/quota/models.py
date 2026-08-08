@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 
 class ReservationResult(StrEnum):
@@ -16,6 +17,10 @@ class QuotaConfig:
     default_reserve_tokens: int = 512
     reservation_ttl_seconds: int = 600
     reservation_renewal_seconds: int = 60
+    # key = per-API-key limits (legacy, byte-identical); workspace =
+    # workspace-bound keys share the workspace aggregate.  Legacy keys
+    # (workspace_id NULL) are always key-scoped.
+    quota_scope: Literal["key", "workspace"] = "key"
 
     @property
     def enabled(self) -> bool:
@@ -30,3 +35,13 @@ class QuotaReservation:
     api_key_hash: str
     reserved_tokens: int
     usage_date: str
+    workspace_id: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkspaceQuota:
+    """Per-workspace quota overrides; None inherits the global default."""
+
+    workspace_id: str
+    daily_token_limit: int | None = None
+    monthly_token_limit: int | None = None

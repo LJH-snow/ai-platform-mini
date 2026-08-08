@@ -26,6 +26,8 @@ class QuotaService:
         api_key_hash: str,
         max_tokens: int | None = None,
         prompt_tokens: int = 0,
+        *,
+        workspace_id: str | None = None,
     ) -> QuotaReservation | None:
         if not self._config.enabled:
             return None
@@ -36,15 +38,18 @@ class QuotaService:
         reserve_amount = prompt_tokens + completion_tokens
 
         reservation_id = uuid.uuid4().hex
+        daily_limit, monthly_limit = await self._resolve_limits(workspace_id)
 
         result = await self._quota_repo.create_reservation(
             reservation_id=reservation_id,
             api_key_hash=api_key_hash,
             usage_date=today,
             reserved_tokens=reserve_amount,
-            daily_limit=self._config.daily_token_limit,
-            monthly_limit=self._config.monthly_token_limit,
+            daily_limit=daily_limit,
+            monthly_limit=monthly_limit,
             reservation_ttl_seconds=self._config.reservation_ttl_seconds,
+            workspace_id=workspace_id,
+            lock_key=self._lock_key(api_key_hash, workspace_id),
         )
 
         if result is ReservationResult.DAILY_LIMIT:
@@ -59,6 +64,7 @@ class QuotaService:
             api_key_hash=api_key_hash,
             reserved_tokens=reserve_amount,
             usage_date=today,
+            workspace_id=workspace_id,
         )
 
     async def settle(self, reservation_id: str) -> None:
@@ -66,15 +72,23 @@ class QuotaService:
             return
         await self._quota_repo.settle_reservation(reservation_id)
 
-    async def extend(self, reservation_id: str, additional_tokens: int) -> None:
+    async def extend(
+        self,
+        reservation_id: str,
+        additional_tokens: int,
+        *,
+        workspace_id: str | None = None,
+    ) -> None:
         """Atomically extend an active reservation for a later model prompt."""
         if not self._config.enabled or additional_tokens <= 0:
             return
+        daily_limit, monthly_limit = await self._resolve_limits(workspace_id)
         result = await self._quota_repo.extend_reservation(
             reservation_id=reservation_id,
             additional_tokens=additional_tokens,
-            daily_limit=self._config.daily_token_limit,
-            monthly_limit=self._config.monthly_token_limit,
+            daily_limit=daily_limit,
+            monthly_limit=monthly_limit,
+            workspace_id=workspace_id,
         )
         now = datetime.now(UTC)
         if result is ReservationResult.DAILY_LIMIT:
@@ -167,6 +181,27 @@ class QuotaService:
             "Monthly token quota exceeded.",
             retry_after=self._seconds_until_next_month(now),
         )
+
+    async def _resolve_limits(
+        self, workspace_id: str | None
+    ) -> tuple[int | None, int | None]:
+        """Resolve effective limits: workspace override -> global default."""
+        daily = self._config.daily_token_limit
+        monthly = self._config.monthly_token_limit
+        if self._config.quota_scope == "workspace" and workspace_id is not None:
+            override = await self._quota_repo.get_workspace_quota(workspace_id)
+            if override is not None:
+                if override.daily_token_limit is not None:
+                    daily = override.daily_token_limit
+                if override.monthly_token_limit is not None:
+                    monthly = override.monthly_token_limit
+        return daily, monthly
+
+    def _lock_key(self, api_key_hash: str, workspace_id: str | None) -> str:
+        """Advisory lock key: workspace id in workspace mode, else key hash."""
+        if self._config.quota_scope == "workspace" and workspace_id is not None:
+            return f"ws:{workspace_id}"
+        return api_key_hash
 
     @staticmethod
     def _seconds_until_next_day(now: datetime) -> int:

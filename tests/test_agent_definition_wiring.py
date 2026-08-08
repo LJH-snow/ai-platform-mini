@@ -180,8 +180,10 @@ class _FakeQuotaService:
         api_key_hash: str,
         max_tokens: int | None = None,
         prompt_tokens: int = 0,
+        *,
+        workspace_id: str | None = None,
     ) -> object:
-        del api_key_hash, max_tokens, prompt_tokens
+        del api_key_hash, max_tokens, prompt_tokens, workspace_id
         from app.quota.models import QuotaReservation
 
         return QuotaReservation(
@@ -191,7 +193,14 @@ class _FakeQuotaService:
             usage_date="2026-01-01",
         )
 
-    async def extend(self, reservation_id: str, additional_tokens: int) -> None:
+    async def extend(
+        self,
+        reservation_id: str,
+        additional_tokens: int,
+        *,
+        workspace_id: str | None = None,
+    ) -> None:
+        del workspace_id
         del reservation_id, additional_tokens
 
     async def settle(self, reservation_id: str) -> None:

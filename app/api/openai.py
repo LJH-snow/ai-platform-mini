@@ -149,6 +149,11 @@ async def create_chat_completions(
         prompt_tokens=estimate_prompt_tokens(
             (message.role, message.content) for message in request.messages
         ),
+        workspace_id=(
+            http_request.state.context.identity.workspace_id
+            if http_request.state.context.identity
+            else None
+        ),
     )
 
     remaining = getattr(http_request.state, "rate_limit_remaining", None)

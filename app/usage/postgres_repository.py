@@ -111,6 +111,42 @@ class PostgresUsageRepository:
             rows = await session.scalars(stmt)
             return self._summarize(rows)
 
+    async def get_total_tokens_for_workspace(
+        self, workspace_id: str, usage_date: str
+    ) -> int:
+        async with self._session_factory() as session:
+            stmt = select(
+                func.coalesce(func.sum(DailyUsageTable.total_tokens), 0)
+            ).where(
+                DailyUsageTable.workspace_id == workspace_id,
+                DailyUsageTable.usage_date == date.fromisoformat(usage_date),
+            )
+            value = await session.scalar(stmt)
+            return int(value or 0)
+
+    async def get_monthly_usage_for_workspace(
+        self, workspace_id: str, year_month: str
+    ) -> list[UsageAggregation]:
+        year, month = year_month.split("-")
+        start = f"{year}-{month}-01"
+        end = (
+            f"{int(year) + 1}-01-01"
+            if month == "12"
+            else f"{year}-{int(month) + 1:02d}-01"
+        )
+        async with self._session_factory() as session:
+            stmt = (
+                select(DailyUsageTable)
+                .where(
+                    DailyUsageTable.workspace_id == workspace_id,
+                    DailyUsageTable.usage_date >= date.fromisoformat(start),
+                    DailyUsageTable.usage_date < date.fromisoformat(end),
+                )
+                .order_by(DailyUsageTable.usage_date)
+            )
+            rows = await session.scalars(stmt)
+            return [_row_to_agg(row) for row in rows]
+
     async def get_workspace_trend(
         self, owner_scope: str, days: int
     ) -> list[WorkspaceUsagePoint]:

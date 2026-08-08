@@ -51,6 +51,9 @@ class Settings(BaseSettings):
 
     quota_daily_tokens: int = Field(default=0, ge=0)
     quota_monthly_tokens: int = Field(default=0, ge=0)
+    # key = per-API-key limits (legacy); workspace = workspace-bound keys
+    # share the workspace aggregate (legacy keys stay key-scoped).
+    quota_scope: Literal["key", "workspace"] = "key"
     quota_reservation_ttl_seconds: int = Field(default=600, gt=0)
     quota_reservation_renewal_seconds: int = Field(default=60, gt=0)
 

@@ -74,6 +74,31 @@ class InMemoryUsageRepository:
     async def get_all_summary(self) -> UsageSummary:
         return self._summarize(self._records)
 
+    async def get_total_tokens_for_workspace(
+        self, workspace_id: str, usage_date: str
+    ) -> int:
+        return sum(
+            record.total_tokens
+            for record in self._records
+            if record.workspace_id == workspace_id and record.usage_date == usage_date
+        )
+
+    async def get_monthly_usage_for_workspace(
+        self, workspace_id: str, year_month: str
+    ) -> list[UsageAggregation]:
+        result: dict[str, UsageAggregation] = {}
+        for record in self._records:
+            if record.workspace_id != workspace_id:
+                continue
+            if record.usage_date is None or not record.usage_date.startswith(
+                year_month
+            ):
+                continue
+            agg = result.setdefault(record.model, UsageAggregation(model=record.model))
+            agg.request_count += 1
+            agg.total_tokens += record.total_tokens
+        return list(result.values())
+
     async def get_workspace_trend(
         self, owner_scope: str, days: int
     ) -> list[WorkspaceUsagePoint]:
