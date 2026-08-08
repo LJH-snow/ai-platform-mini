@@ -43,6 +43,9 @@ class DocumentSummary:
     created_at: datetime | None
     chunk_count: int
     text_characters: int
+    # Prompt-injection safety verdict (clean|suspicious|malicious);
+    # None pre-dates safety tracking.
+    safety_verdict: str | None = None
 
 
 @dataclass(frozen=True)

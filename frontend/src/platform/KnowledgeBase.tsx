@@ -362,6 +362,11 @@ export function KnowledgeBase(props: KnowledgeBaseProps): JSX.Element {
                 <article className="knowledgeDocument" key={document.document_id}>
                   <div className="knowledgeDocumentTopline">
                     <strong>{document.filename}</strong>
+                    {document.safety_verdict === 'suspicious' && (
+                      <span className="safetyBadge" title="命中注入规则，strict 模式下不参与检索">
+                        疑似注入
+                      </span>
+                    )}
                     <span>已索引</span>
                   </div>
                   <div className="knowledgeFacts">

@@ -17,6 +17,7 @@ const document: KnowledgeDocument = {
   content_sha256: 'a'.repeat(64),
   embedding_model: 'nomic-embed-text',
   created_at: null,
+  safety_verdict: null,
 }
 
 const response = (status: number, body?: unknown): Response =>

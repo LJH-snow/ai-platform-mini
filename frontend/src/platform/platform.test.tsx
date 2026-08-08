@@ -11,6 +11,7 @@ import { AgentStudio } from './AgentStudio.tsx'
 import type { ConfigClient } from './config-client.ts'
 import { PromptStudio } from './PromptStudio.tsx'
 import { RunDetail } from './RunDetail.tsx'
+import { RunList } from './RunList.tsx'
 import { ToolCenter } from './ToolCenter.tsx'
 import { UsageDashboardPage } from './UsageDashboard.tsx'
 import type { PlatformClient } from './client.ts'
@@ -326,6 +327,46 @@ describe('AgentStudio', () => {
   })
 })
 
+describe('RunList', () => {
+  it('renders runs and opens the replay page', async () => {
+    const user = userEvent.setup()
+    const listRuns = vi.fn(async () => [
+      {
+        run_id: 'run-1',
+        model: 'qwen3:4b',
+        status: 'completed',
+        stop_reason: 'direct_answer',
+        started_at: '2026-08-08T00:00:00Z',
+        completed_at: null,
+        duration_ms: 120,
+        total_tokens: 42,
+        tool_count: 2,
+        rag_reference_count: 3,
+      },
+    ])
+    const onOpenRun = vi.fn()
+    render(
+      <RunList
+        client={createConfigClient({ listRuns })}
+        onOpenRun={onOpenRun}
+      />,
+    )
+
+    expect(await screen.findByText('qwen3:4b')).toBeInTheDocument()
+    expect(screen.getByText('已完成')).toBeInTheDocument()
+    expect(screen.getByText('42')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '回放' }))
+    expect(onOpenRun).toHaveBeenCalledWith('run-1')
+  })
+
+  it('shows the empty state', async () => {
+    render(<RunList client={createConfigClient()} onOpenRun={vi.fn()} />)
+    expect(await screen.findByText(/暂无 Run 记录/)).toBeInTheDocument()
+  })
+})
+
 describe('RunDetail', () => {
   it('renders the timeline, tool calls, and final answer from a stored run', async () => {
     const getRun = vi.fn(async () => ({
@@ -561,6 +602,44 @@ describe('KnowledgeBase', () => {
     expect(await screen.findByText('brief.pdf')).toBeInTheDocument()
     expect(screen.getByText('1 个')).toBeInTheDocument()
     expect(uploadPdf).toHaveBeenCalledWith(file)
+  })
+
+  it('marks suspicious documents in the list', async () => {
+    const listDocuments = vi.fn().mockResolvedValue([
+      {
+        document_id: 'doc-1',
+        filename: 'suspicious.pdf',
+        text_characters: 120,
+        chunk_count: 2,
+        content_sha256: 'a'.repeat(64),
+        embedding_model: 'nomic-embed-text',
+        created_at: null,
+        safety_verdict: 'suspicious',
+      },
+      {
+        document_id: 'doc-2',
+        filename: 'clean.pdf',
+        text_characters: 90,
+        chunk_count: 1,
+        content_sha256: 'b'.repeat(64),
+        embedding_model: 'nomic-embed-text',
+        created_at: null,
+        safety_verdict: 'clean',
+      },
+    ])
+    render(
+      <KnowledgeBase
+        apiKeyConfigured
+        ragStatus={readyRagStatus}
+        client={{ listDocuments, uploadPdf: vi.fn() }}
+        maxUploadBytes={10_000_000}
+        onOpenRagChat={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('suspicious.pdf')).toBeInTheDocument()
+    expect(screen.getByText('疑似注入')).toBeInTheDocument()
+    expect(screen.getByText('clean.pdf')).toBeInTheDocument()
   })
 
   it('shows the RAG loading state without calling the document API', () => {

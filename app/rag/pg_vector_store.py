@@ -336,6 +336,7 @@ class PgVectorStore:
                 RagDocument.embedding_model,
                 RagDocument.embedding_dimensions,
                 RagDocument.created_at,
+                RagDocument.safety_verdict,
                 chunk_count,
                 text_characters,
             )
@@ -362,6 +363,11 @@ class PgVectorStore:
             created_at=mapping["created_at"],
             chunk_count=int(mapping["chunk_count"]),
             text_characters=int(mapping["text_characters"]),
+            safety_verdict=(
+                str(mapping["safety_verdict"])
+                if mapping["safety_verdict"] is not None
+                else None
+            ),
         )
 
     async def keyword_search(

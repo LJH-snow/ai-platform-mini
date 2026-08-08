@@ -41,7 +41,12 @@ export const isKnowledgeDocument = (value: unknown): value is KnowledgeDocument 
     typeof document.chunk_count === 'number' &&
     typeof document.content_sha256 === 'string' &&
     typeof document.embedding_model === 'string' &&
-    (typeof document.created_at === 'string' || document.created_at === null)
+    (typeof document.created_at === 'string' || document.created_at === null) &&
+    (document.safety_verdict === null ||
+      document.safety_verdict === undefined ||
+      document.safety_verdict === 'clean' ||
+      document.safety_verdict === 'suspicious' ||
+      document.safety_verdict === 'malicious')
   )
 }
 

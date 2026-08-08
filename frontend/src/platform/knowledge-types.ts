@@ -6,6 +6,7 @@ export type KnowledgeDocument = {
   content_sha256: string
   embedding_model: string
   created_at: string | null
+  safety_verdict: 'clean' | 'suspicious' | 'malicious' | null
 }
 
 export type KnowledgeDocumentsResponse = {
