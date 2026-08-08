@@ -14,3 +14,5 @@ __pycache__/
 output/
 demo/
 CLAUDE.md
+frontend/test-results/
+frontend/playwright-report/
