@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.rag.parsers.base import ParsedDocument, SourceFormat
-from app.rag.parsers.text import _decode_text
+from app.rag.parsers.text import decode_text
 
 
 class MarkdownParser:
@@ -15,7 +15,7 @@ class MarkdownParser:
     """
 
     def parse(self, filename: str, content: bytes) -> ParsedDocument:
-        text = _strip_frontmatter(_decode_text(content))
+        text = _strip_frontmatter(decode_text(content))
         return ParsedDocument(
             filename=filename,
             text=text,
@@ -25,7 +25,7 @@ class MarkdownParser:
 
 
 def _strip_frontmatter(text: str) -> str:
-    if not text.startswith("---"):
+    if not text.startswith("---\n") and text.strip() != "---":
         return text
     lines = text.splitlines()
     closing = next(

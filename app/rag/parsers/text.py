@@ -15,7 +15,7 @@ class TextParser:
     """
 
     def parse(self, filename: str, content: bytes) -> ParsedDocument:
-        text = _decode_text(content)
+        text = decode_text(content)
         return ParsedDocument(
             filename=filename,
             text=text,
@@ -24,7 +24,7 @@ class TextParser:
         )
 
 
-def _decode_text(content: bytes) -> str:
+def decode_text(content: bytes) -> str:
     for encoding in ("utf-8-sig", "gb18030"):
         try:
             return content.decode(encoding)

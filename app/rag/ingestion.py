@@ -88,6 +88,8 @@ class RAGIngestionService:
         """
         owner_hash = validate_owner_key_hash(owner_key_hash)
         parsed = parse_document(filename, content)
+        if parsed.page_count is not None and parsed.page_count > self._max_pages:
+            raise ProviderError(f"PDF 页数超过限制（最多 {self._max_pages} 页）。")
         if len(parsed.text) > self._max_text_characters:
             raise ProviderError(
                 f"文档内容超过限制（最多 {self._max_text_characters} 字符）。"

@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from pytest import MonkeyPatch
 
-from app.exceptions.base import RAGDocumentValidationError, ValidationError
+from app.exceptions.base import (
+    ProviderError,
+    RAGDocumentValidationError,
+    ValidationError,
+)
 from app.rag.ingestion import RAGIngestionService
 from app.rag.parsers.base import ParsedDocument
 from app.rag.parsers.factory import create_parser, parse_document
@@ -243,3 +248,34 @@ async def test_ingest_pdf_legacy_wrapper_still_works() -> None:
             b"not a pdf", filename="x.pdf", owner_key_hash="a" * 64
         )
     assert store.added == []
+
+
+async def test_ingest_document_rejects_excessive_page_count(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The business page limit applies even when the parser's ceiling is higher."""
+    from app.rag import ingestion as ingestion_module
+    from app.rag.parsers.base import ParsedDocument
+
+    store = _FakeStore()
+    service = _ingestion(store)
+    monkeypatch.setattr(
+        ingestion_module,
+        "parse_document",
+        lambda _f, _c: ParsedDocument(
+            filename="long.pdf", text="x" * 100, source_format="pdf", page_count=11
+        ),
+    )
+
+    with pytest.raises(ProviderError, match="页数"):
+        await service.ingest_document(
+            b"pdf", filename="long.pdf", owner_key_hash="a" * 64
+        )
+    assert store.added == []
+
+
+def test_markdown_frontmatter_opener_requires_full_line() -> None:
+    """'---title' is not a frontmatter opener; nothing is stripped."""
+    source = "---title: inline\nbody"
+    parsed = MarkdownParser().parse("a.md", source.encode("utf-8"))
+    assert parsed.text == source
