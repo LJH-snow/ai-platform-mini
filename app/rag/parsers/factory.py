@@ -6,9 +6,12 @@ from pathlib import PurePath
 
 from app.exceptions.base import RAGDocumentValidationError
 from app.rag.parsers.base import ParsedDocument, Parser
+from app.rag.parsers.docx import DocxParser
+from app.rag.parsers.html import HtmlParser
 from app.rag.parsers.markdown import MarkdownParser
 from app.rag.parsers.pdf import PdfParser
 from app.rag.parsers.text import TextParser
+from app.rag.parsers.xlsx import XlsxParser
 
 # Lower-case extension → parser instance (stateless).
 _PARSERS: dict[str, Parser] = {
@@ -16,6 +19,10 @@ _PARSERS: dict[str, Parser] = {
     ".txt": TextParser(),
     ".md": MarkdownParser(),
     ".markdown": MarkdownParser(),
+    ".docx": DocxParser(),
+    ".xlsx": XlsxParser(),
+    ".html": HtmlParser(),
+    ".htm": HtmlParser(),
 }
 
 _SUPPORTED_EXTENSIONS = ", ".join(sorted({ext.lstrip(".") for ext in _PARSERS}))

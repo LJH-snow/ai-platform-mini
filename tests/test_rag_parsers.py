@@ -34,7 +34,7 @@ def test_factory_is_case_insensitive() -> None:
 
 @pytest.mark.parametrize(
     "filename",
-    ["notes.docx", "data.xlsx", "page.html", "noext"],
+    ["notes.doc", "data.csv", "page.xml", "archive.rar", "noext"],
 )
 def test_factory_rejects_unknown_or_missing_extensions(filename: str) -> None:
     with pytest.raises(RAGDocumentValidationError, match="不支持"):

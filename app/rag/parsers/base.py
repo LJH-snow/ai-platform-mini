@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-SourceFormat = Literal["pdf", "txt", "markdown"]
+SourceFormat = Literal["pdf", "txt", "markdown", "docx", "xlsx", "html"]
 
 
 @dataclass(frozen=True)
