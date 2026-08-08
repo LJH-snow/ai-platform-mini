@@ -8,7 +8,7 @@ from datetime import datetime
 from app.exceptions.base import ConflictError, ProviderError, ValidationError
 from app.rag.chunker import chunk_text
 from app.rag.embedder import Embedder
-from app.rag.pdf_extractor import extract_pdf_text
+from app.rag.parsers.factory import parse_document
 from app.rag.safety import SafetyVerdict, evaluate_document
 from app.rag.vector_store import (
     DocumentPreview,
@@ -64,40 +64,59 @@ class RAGIngestionService:
         filename: str | None,
         owner_key_hash: str,
     ) -> IngestedDocument:
-        owner_hash = validate_owner_key_hash(owner_key_hash)
-        extracted = extract_pdf_text(
-            content,
-            filename=filename,
-            max_pages=self._max_pages,
-            max_text_characters=self._max_text_characters,
+        """Legacy PDF entry point — a thin wrapper over ``ingest_document``.
+
+        Kept for API/queue compatibility; new callers should use
+        ``ingest_document`` which routes any supported format.
+        """
+        return await self.ingest_document(
+            content, filename=filename, owner_key_hash=owner_key_hash
         )
+
+    async def ingest_document(
+        self,
+        content: bytes,
+        *,
+        filename: str | None,
+        owner_key_hash: str,
+    ) -> IngestedDocument:
+        """Parse, safety-check, chunk, embed, and persist one document.
+
+        The parser factory routes the format by extension; the business
+        text-length limit applies after parsing (parser bounds are fixed
+        safety ceilings, not configuration).
+        """
+        owner_hash = validate_owner_key_hash(owner_key_hash)
+        parsed = parse_document(filename, content)
+        if len(parsed.text) > self._max_text_characters:
+            raise ProviderError(
+                f"文档内容超过限制（最多 {self._max_text_characters} 字符）。"
+            )
         safety_verdict: SafetyVerdict | None = None
         if self._safety_mode != "off":
-            safety_verdict = evaluate_document(extracted.text)
+            safety_verdict = evaluate_document(parsed.text)
             if safety_verdict.is_malicious:
                 raise ValidationError("文档包含疑似注入内容，已拒绝。")
         chunks = chunk_text(
-            extracted.text,
+            parsed.text,
             chunk_size=self._chunk_size,
             overlap=self._chunk_overlap,
         )
         if not chunks:
-            raise ProviderError("PDF 没有可用于向量化的文本分块。")
+            raise ProviderError("文档没有可用于向量化的文本分块。")
 
         existing_documents = await self._vector_store.list_documents(
             owner_key_hash=owner_hash
         )
-        if any(
-            document.filename == extracted.filename for document in existing_documents
-        ):
+        if any(document.filename == parsed.filename for document in existing_documents):
             raise ConflictError("同名文档已存在，请更换文件名后再上传。")
 
         embeddings = await self._embedder.embed(chunks)
         self._validate_embeddings(embeddings, expected_count=len(chunks))
 
-        content_sha256 = hashlib.sha256(extracted.text.encode("utf-8")).hexdigest()
+        content_sha256 = hashlib.sha256(parsed.text.encode("utf-8")).hexdigest()
         document_id = await self._vector_store.add_document(
-            source_path=extracted.filename,
+            source_path=parsed.filename,
             content_sha256=content_sha256,
             embedding_model=self._embedding_model,
             embedding_dimensions=self._embedding_dimensions,
@@ -118,8 +137,8 @@ class RAGIngestionService:
         )
         return IngestedDocument(
             document_id=document_id,
-            filename=extracted.filename,
-            text_characters=len(extracted.text),
+            filename=parsed.filename,
+            text_characters=len(parsed.text),
             chunk_count=len(chunks),
             content_sha256=content_sha256,
             embedding_model=self._embedding_model,

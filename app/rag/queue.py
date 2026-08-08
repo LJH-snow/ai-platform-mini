@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class IngestionService(Protocol):
-    async def ingest_pdf(
+    async def ingest_document(
         self,
         content: bytes,
         *,
@@ -190,7 +190,7 @@ class RAGIngestionQueue:
             error=None,
         )
         try:
-            document = await self._ingestion_service.ingest_pdf(
+            document = await self._ingestion_service.ingest_document(
                 work_item.content,
                 filename=work_item.filename,
                 owner_key_hash=work_item.owner_key_hash,

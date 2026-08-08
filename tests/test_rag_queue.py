@@ -15,7 +15,7 @@ class FakeIngestionService:
         self.should_fail = should_fail
         self.calls: list[tuple[bytes, str | None, str]] = []
 
-    async def ingest_pdf(
+    async def ingest_document(
         self,
         content: bytes,
         *,

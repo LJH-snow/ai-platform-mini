@@ -22,12 +22,17 @@ from app.core.container import (
     provide_usage_collector,
 )
 from app.core.context import RequestContext
-from app.exceptions.base import RAGDocumentTooLargeError, RAGUnavailableError
+from app.exceptions.base import (
+    RAGDocumentTooLargeError,
+    RAGDocumentValidationError,
+    RAGUnavailableError,
+)
 from app.quota.lifecycle import ReservationLifecycle
 from app.quota.models import QuotaReservation
 from app.quota.service import QuotaService
 from app.quota.token_estimator import estimate_prompt_tokens
 from app.rag.ingestion import IngestedDocument, RAGIngestionService
+from app.rag.parsers.factory import create_parser
 from app.rag.queue import IngestionTask, RAGIngestionQueue
 from app.rag.service import PreparedRAGRequest, RAGService
 from app.rag.vector_store import DocumentSummary
@@ -89,10 +94,10 @@ def get_rag_service() -> RAGService:
     "/rag/documents",
     response_model=RAGIngestionTaskResponse,
     status_code=202,
-    summary="Queue a PDF document for indexing",
+    summary="Queue a document (PDF/TXT/Markdown) for indexing",
 )
 async def upload_rag_document(
-    file: Annotated[UploadFile, File(description="PDF document")],
+    file: Annotated[UploadFile, File(description="Document (PDF/TXT/Markdown)")],
     request: Request,
     api_key: Annotated[APIKey, Depends(require_rate_limit)],
     ingestion_queue: Annotated[RAGIngestionQueue, Depends(get_rag_ingestion_queue)],
@@ -105,8 +110,14 @@ async def upload_rag_document(
         content = await file.read(settings.rag_max_upload_bytes + 1)
         if len(content) > settings.rag_max_upload_bytes:
             raise RAGDocumentTooLargeError(
-                f"PDF 文件超过限制（最多 {settings.rag_max_upload_bytes} 字节）。"
+                f"文档超过大小限制（最多 {settings.rag_max_upload_bytes} 字节）。"
             )
+        # Validate the extension up front so unsupported formats fail
+        # synchronously instead of surfacing as a failed queue task.
+        try:
+            create_parser(file.filename)
+        except RAGDocumentValidationError as exc:
+            raise RAGDocumentValidationError(str(exc)) from exc
         try:
             task = await ingestion_queue.submit(
                 content,

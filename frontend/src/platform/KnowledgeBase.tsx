@@ -285,7 +285,7 @@ export function KnowledgeBase(props: KnowledgeBaseProps): JSX.Element {
               选择 PDF 文件
               <input
                 type="file"
-                accept=".pdf,application/pdf"
+                accept=".pdf,.txt,.md,.markdown"
                 disabled={!canUseKnowledge || uploadState === 'uploading'}
                 onChange={(event) => {
                   const file = event.target.files?.[0]

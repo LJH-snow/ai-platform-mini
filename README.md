@@ -14,6 +14,7 @@
 - Conversation memory: Chat/Agent/OpenAI 端点按 `thread_id` 维护服务端会话记忆（`conversation_thread` / `conversation_message`），支持 `CONVERSATION_STORAGE=memory|postgres`
 - RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）；keyword/hybrid 检索（Sprint C）：jieba 中文分词 → `to_tsvector('simple')`，`RAG_SEARCH_MODE=hybrid` 用 RRF（`1/(60+rank)`）融合向量与关键词两路排序，`vector`（默认）与 legacy 行为逐字节一致，`keyword` 仅关键词路；融合后可选 Jina rerank（`RERANKER_API_KEY` 仅 .env 加载，无 Key 或调用失败自动降级为原顺序，Cohere 预留同一 Protocol）
 - Prompt Injection 防护（hardening backlog B2）：入库前对全文做确定性规则评估（中英文注入模式 + 指令轰炸启发），`malicious` 拒绝入库（422）、`suspicious` 入库但按 `RAG_SAFETY_MODE` 处理——`strict`（默认）隐藏于检索、`flag` 带标记参与检索、`off` 完全关闭（逐字节兼容）；`SafetyReviewer` Protocol 预留 LLM 复核扩展点
+- Document Pipeline（hardening B1 P1）：Parser 工厂（`app/rag/parsers/`）按扩展名路由 PDF/TXT/Markdown——PDF 包装现有 `extract_pdf_text`（零重复）、TXT 确定性解码（utf-8-sig → gb18030 固定回退链）、Markdown 剥离 YAML frontmatter；`ingest_document` 泛化主路径（parse → safety → chunk → embed → 入库），`ingest_pdf` 保留薄包装兼容；上传 API 与前端 accept 支持 `.pdf/.txt/.md/.markdown`；P2（DOCX/XLSX/HTML）在 factory 加一个条目即可接入
 - LangGraph PDF Workflow：`POST /api/v1/workflows/pdf-report` 上传 PDF 创建人工审批任务，支持 PostgreSQL checkpoint 持久化和跨重启恢复，按 API Key 租户隔离
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节

@@ -4,7 +4,6 @@ import pytest
 
 from app.exceptions.base import ConflictError, ProviderError
 from app.rag.ingestion import RAGIngestionService
-from app.rag.pdf_extractor import ExtractedPdf
 from app.rag.vector_store import DocumentSummary, SearchResult
 
 
@@ -96,9 +95,13 @@ class FakeVectorStore:
 async def test_ingest_pdf_extracts_embeds_and_persists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.rag.parsers.base import ParsedDocument
+
     monkeypatch.setattr(
-        "app.rag.ingestion.extract_pdf_text",
-        lambda *args, **kwargs: ExtractedPdf("brief.pdf", "hello knowledge", 1),
+        "app.rag.ingestion.parse_document",
+        lambda _filename, _content: ParsedDocument(
+            filename="brief.pdf", text="hello knowledge", source_format="pdf"
+        ),
     )
     store = FakeVectorStore()
     service = RAGIngestionService(
@@ -127,9 +130,13 @@ async def test_ingest_pdf_extracts_embeds_and_persists(
 async def test_ingest_pdf_rejects_empty_chunk_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.rag.parsers.base import ParsedDocument
+
     monkeypatch.setattr(
-        "app.rag.ingestion.extract_pdf_text",
-        lambda *args, **kwargs: ExtractedPdf("empty.pdf", "", 1),
+        "app.rag.ingestion.parse_document",
+        lambda _filename, _content: ParsedDocument(
+            filename="empty.pdf", text="", source_format="pdf"
+        ),
     )
     service = RAGIngestionService(
         FakeEmbedder(),
@@ -152,9 +159,13 @@ async def test_ingest_pdf_rejects_empty_chunk_result(
 async def test_ingest_pdf_rejects_same_filename(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.rag.parsers.base import ParsedDocument
+
     monkeypatch.setattr(
-        "app.rag.ingestion.extract_pdf_text",
-        lambda *args, **kwargs: ExtractedPdf("brief.pdf", "new content", 1),
+        "app.rag.ingestion.parse_document",
+        lambda _filename, _content: ParsedDocument(
+            filename="brief.pdf", text="new content", source_format="pdf"
+        ),
     )
     existing = DocumentSummary(
         document_id="doc-old",
