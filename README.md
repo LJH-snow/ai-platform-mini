@@ -5,31 +5,32 @@
 
 ## Current status
 
-- Current milestone: **Agent Console + RAG product demo completed; production hardening next**
+- Current milestone: **目标 1-5 全部完成 + hardening backlog 清空**（身份/租户、配置层、混合检索、展示增强、E2E；Prompt Injection 防护、Document Pipeline 6 格式、Docker 演示栈、Benchmark 前端）
 - Version: `0.1.0`
 - Runtime: Python `3.12`–`3.14`（默认 `3.14`）
 - Active routing: 默认模型 → Ollama，其余 `gpt-*` → OpenAI，其他模型 → Ollama；Mock 用于测试
 - OpenAIProvider: 已接入 ProviderRouter、DI 和应用生命周期
 - Storage: Memory 或 PostgreSQL
 - Conversation memory: Chat/Agent/OpenAI 端点按 `thread_id` 维护服务端会话记忆（`conversation_thread` / `conversation_message`），支持 `CONVERSATION_STORAGE=memory|postgres`
-- RAG: 检索增强生成（实验性，需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）；keyword/hybrid 检索（Sprint C）：jieba 中文分词 → `to_tsvector('simple')`，`RAG_SEARCH_MODE=hybrid` 用 RRF（`1/(60+rank)`）融合向量与关键词两路排序，`vector`（默认）与 legacy 行为逐字节一致，`keyword` 仅关键词路；融合后可选 Jina rerank（`RERANKER_API_KEY` 仅 .env 加载，无 Key 或调用失败自动降级为原顺序，Cohere 预留同一 Protocol）
+- RAG: 检索增强生成（需启用 `RAG_ENABLED=true` + PostgreSQL + pgvector + Ollama Embedding）；keyword/hybrid 检索（Sprint C）：jieba 中文分词 → `to_tsvector('simple')`，`RAG_SEARCH_MODE=hybrid` 用 RRF（`1/(60+rank)`）融合向量与关键词两路排序，`vector`（默认）与 legacy 行为逐字节一致，`keyword` 仅关键词路；融合后可选 Jina rerank（`RERANKER_API_KEY` 仅 .env 加载，无 Key 或调用失败自动降级为原顺序，Cohere 预留同一 Protocol）
 - Prompt Injection 防护（hardening backlog B2）：入库前对全文做确定性规则评估（中英文注入模式 + 指令轰炸启发），`malicious` 拒绝入库（422）、`suspicious` 入库但按 `RAG_SAFETY_MODE` 处理——`strict`（默认）隐藏于检索、`flag` 带标记参与检索、`off` 完全关闭（逐字节兼容）；`SafetyReviewer` Protocol 预留 LLM 复核扩展点
-- Document Pipeline（hardening B1 P1）：Parser 工厂（`app/rag/parsers/`）按扩展名路由 PDF/TXT/Markdown——PDF 包装现有 `extract_pdf_text`（零重复）、TXT 确定性解码（utf-8-sig → gb18030 固定回退链）、Markdown 剥离 YAML frontmatter；`ingest_document` 泛化主路径（parse → safety → chunk → embed → 入库），`ingest_pdf` 保留薄包装兼容；上传 API 与前端 accept 支持 `.pdf/.txt/.md/.markdown/.docx/.xlsx/.html/.htm`——P2 补齐 DOCX（python-docx 段落）、XLSX（openpyxl read_only 单元格）、HTML（stdlib HTMLParser 可见文本，script/style 跳过、实体解码）
+- Document Pipeline（hardening B1 P1+P2）：Parser 工厂（`app/rag/parsers/`）按扩展名路由 PDF/TXT/Markdown——PDF 包装现有 `extract_pdf_text`（零重复）、TXT 确定性解码（utf-8-sig → gb18030 固定回退链）、Markdown 剥离 YAML frontmatter；`ingest_document` 泛化主路径（parse → safety → chunk → embed → 入库），`ingest_pdf` 保留薄包装兼容；上传 API 与前端 accept 支持 `.pdf/.txt/.md/.markdown/.docx/.xlsx/.html/.htm`——P2 补齐 DOCX（python-docx 段落）、XLSX（openpyxl read_only 单元格）、HTML（stdlib HTMLParser 可见文本，script/style 跳过、实体解码）
 - LangGraph PDF Workflow：`POST /api/v1/workflows/pdf-report` 上传 PDF 创建人工审批任务，支持 PostgreSQL checkpoint 持久化和跨重启恢复，按 API Key 租户隔离
 - Agent Runtime: 有界的模型决策→工具执行→结果回填循环，支持最大步数、超时、取消和 Token budget
 - Agent Run RAG 契约：同步 Agent Run 在 `steps[].tool_calls[].rag` 下按 Tool Call 公开受限 RAG 来源摘要，不暴露原始 Tool 输入/输出、Prompt、Provider 响应或内部错误细节
 - 前端 Agent Console：[阶段 6 已接入 Agent SSE、实时 Trace、Tool/RAG 状态和错误边界；开发期 Vite proxy 已用于真实浏览器流式验证](docs/roadmap/2026-08-05-agent-sse-stage-6-record.md)
 - 前端平台壳层：默认 Dashboard、对话工作台、Prompt Studio、模型目录和管理员后台导航已接入。
-- HR 演示闭环：平台概览 → Agent 工作流 → RAG 知识库 → Trace/来源审计 → 管理员用量与 Run 审计均已接通真实后端能力。
+- HR 演示闭环：平台概览 → Agent 工作流 → RAG 知识库 → Trace/来源审计 → Run 回放与用量仪表盘均已接通真实后端能力。
 - Tool System: `ToolRegistry` + `ToolExecutor` + 低风险 `calculator`/`knowledge_search`，默认不开放任意文件、网络或 Shell 能力
 - Agent 配置层（Sprint B 批 A）：`AgentDefinitionService` 把 `Agent = Model + Prompt(版本) + Tools(白名单)` 落库；`POST /api/v1/agent/runs` 支持 `{agent_id}` 解析（model/prompt_ref/max_steps/工具白名单），显式请求字段覆盖定义；Prompt Registry 按 workspace 隔离模板并支持版本激活/回滚；Agent CRUD 全链路 IDOR 隔离（无 workspace 的 Key 统一 404/400）
 - Agent 配置前端（Sprint B 收尾）：PromptStudio 已服务端化（版本历史 + 保存即新版本 + 设为当前版本/回滚）；新增 Agent Studio（模型/Prompt 版本/工具勾选/步数/温度）与 Tool Center（workspace 级启用开关 + JSON Schema 展示）；run 审计 payload 记录 agent_id + prompt_ref
 - Agent Run 回放（Sprint D1）：`GET /api/v1/runs`（列表，可按 agent_id 过滤）与 `GET /api/v1/runs/{run_id}`（详情）按租户隔离（workspace 或 legacy key hash），跨租户统一 404；`agent_run_records` 新增 workspace_id 列（幂等迁移）；前端 Trace 面板 Run ID 旁新增「回放」入口，步骤时间线页展示 LLM 决策/工具调用/RAG 来源/最终回答（沿用后端安全投影）
 - Usage Dashboard（Sprint D2）：`GET /api/v1/usage/dashboard?days=N` 返回当前租户的按日 Token 趋势 + 按模型/按 Key 排行（scope 与 D1 同款双匹配：workspace 或 legacy key hash）；`daily_usage` 新增 workspace_id 列（幂等迁移，历史行 NULL → legacy 口径）；前端「用量仪表盘」页用轻量 SVG 柱状图（无新图表库）+ 占比排行
 - Playwright E2E（Sprint D3）：`frontend/e2e/` 四条全链路（注册 → Chat / Agent Run + Trace 回放 / PDF 工作流审批 / 知识库问答），后端 `LLM_PROVIDER=mock`（MockProvider 支持 Agent JSON 决策 + 确定性 token 计数）与 mock embedder 零外部依赖，独立端口（8010/5174）隔离本地开发服务；CI `e2e` job（needs: [ci] + pgvector 容器）
-- Verification baseline（2026-08-04）：
-  - Default suite：通过（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
+- Verification baseline（2026-08-08）：
+  - Default suite：858 passed（数据库集成测试按 `INTEGRATION_TEST` 条件跳过）
   - PostgreSQL/pgvector integration suite：通过
+  - 前端：213 vitest + 4 Playwright E2E 链路
   - Ruff format/lint、mypy 和 Uvicorn 启动检查：通过
 
 ## Why this project is a strong Agent engineering demo
@@ -39,7 +40,7 @@
 - **Agent Runtime**：模型决策、有限步数循环、工具执行、结果回填、超时、取消、配额和预算终态都有明确边界。
 - **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
 - **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和终态；前端 Trace 展示真实事件，不补造时间、来源或回答。
-- **RAG 闭环**：PDF 入库 → 文本提取 → 分块 → Ollama Embedding → pgvector 检索 → 安全来源投影 → Agent 回答。
+- **RAG 闭环**：文档入库（PDF/TXT/Markdown/DOCX/XLSX/HTML）→ 注入安全评估 → 分块 → Embedding → pgvector 检索（hybrid/RRF）→ 安全来源投影 → Agent 回答。
 - **安全与多租户**：API Key 哈希存储、限流、Token 配额、RAG 文档按 Key 隔离；Prompt、原始 Tool payload、Provider 响应和敏感信息不公开。
 - **工程质量**：前后端均有单元/契约测试、真实浏览器验证、可访问性检查、失败/超时/断连回归和 Code Review 记录。
 
@@ -461,6 +462,25 @@ INTEGRATION_TEST=1 pytest
 | POST   | `/api/v1/chat`             | Generate a chat completion with model-based provider routing        |
 | POST   | `/api/v1/chat/rag`         | RAG-enhanced chat completion (requires `RAG_ENABLED=true`)          |
 | POST   | `/api/v1/agent/runs`       | Bounded Agent Runtime run (model decision and controlled tool loop) |
+| POST   | `/api/v1/agent/runs/stream`| SSE stream of Agent lifecycle events and answer deltas              |
+| GET    | `/api/v1/runs`             | List the tenant's Agent runs (optional `agent_id` filter)           |
+| GET    | `/api/v1/runs/{run_id}`    | Fetch one run's safe replay projection (cross-tenant 404)           |
+| GET    | `/api/v1/usage/dashboard`  | Tenant usage trend + model/key rankings (`days=1..90`)              |
+| POST   | `/api/v1/auth/register`    | Register a user (creates workspace + bound API key)                 |
+| GET    | `/api/v1/auth/me`          | Current identity                                                    |
+| GET    | `/api/v1/workspaces`       | List the tenant's workspaces                                        |
+| GET    | `/api/v1/prompts`          | List prompt templates with active versions                          |
+| POST   | `/api/v1/prompts/{name}/versions` | Create a new template version                                |
+| POST   | `/api/v1/prompts/{name}/activate` | Activate a version (rollback = activate an older one)        |
+| GET    | `/api/v1/agents`           | List workspace agents                                              |
+| POST   | `/api/v1/agents`           | Create an agent (model + prompt_ref + tool whitelist)               |
+| PUT    | `/api/v1/agents/{id}`      | Update an agent                                                     |
+| DELETE | `/api/v1/agents/{id}`      | Delete an agent                                                     |
+| GET    | `/api/v1/tools`            | List tools with workspace-effective enablement                      |
+| PUT    | `/api/v1/tools/{name}`     | Toggle a tool for the workspace                                    |
+| POST   | `/api/v1/benchmarks/run`   | Run a golden task set against an agent (real execution)             |
+| GET    | `/api/v1/benchmarks/runs`  | List benchmark runs (workspace-scoped, optional `agent_id`)         |
+| POST   | `/api/v1/rag/documents`    | Upload a document (PDF/TXT/Markdown/DOCX/XLSX/HTML) for indexing    |
 | POST   | `/admin/api-keys`          | Create a new API key (admin only)                                   |
 | GET    | `/admin/api-keys`          | List all API keys (admin only)                                      |
 | DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only)                       |
@@ -576,9 +596,10 @@ Copy `.env.example` to `.env` and adjust:
 APP_NAME=AI Platform Mini
 DEBUG=false
 LOG_LEVEL=INFO
-LLM_PROVIDER=ollama
+# LOG_FILE=/var/log/ai-platform/app.log  (optional rotating file output)
+LOG_FORMAT=json
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_DEFAULT_MODEL=qwen3:4b-instruct
+OLLAMA_DEFAULT_MODEL=qwen3:4b
 OLLAMA_TIMEOUT_SECONDS=120
 
 # OpenAI Provider (non-default `gpt-*` models route here)
@@ -635,6 +656,7 @@ RAG_EMBEDDING_TIMEOUT_SECONDS=60
 # switch to hybrid after the golden-set gate confirms hybrid >= vector.
 RAG_SEARCH_MODE=vector
 RAG_RRF_K=60
+RAG_SAFETY_MODE=strict
 # Reranker: set RERANKER_API_KEY in .env to enable Jina reranking; without
 # it (or on any reranker failure) results pass through unchanged. Rerank
 # re-ranks the top 15 fused candidates, then truncates to RAG_TOP_K.
