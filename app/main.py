@@ -264,7 +264,11 @@ async def _bootstrap_seeds() -> None:
         )
         logger.info("Seeds bootstrap complete.")
     except Exception:
-        logger.warning("Seed bootstrap skipped (DB may not be ready).", exc_info=True)
+        logger.error(
+            "Seed bootstrap FAILED — tool/prompt surfaces fall back to in-code "
+            "constants until a successful restart seeds the DB.",
+            exc_info=True,
+        )
 
 
 def create_app() -> FastAPI:

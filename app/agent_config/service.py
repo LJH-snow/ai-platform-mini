@@ -252,6 +252,22 @@ class AgentDefinitionService:
         instead of per-tool repository round trips.
         """
         records = await self._repo.list_tools()
+        if not records:
+            # Seed failed or the DB is empty: fall back to the in-code
+            # runtime registry so the tool surface is never empty.  The
+            # built-in registry IS the seed source (roadmap B2); a later
+            # successful bootstrap persists it.
+            return [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters_schema": dict(tool.input_schema),
+                    "owner": "builtin",
+                    "enabled_by_default": True,
+                    "enabled": True,
+                }
+                for tool in self._tool_registry.list_tools()
+            ]
         overrides = {
             override.tool_name: override.enabled
             for override in await self._repo.list_workspace_tools(workspace_id)

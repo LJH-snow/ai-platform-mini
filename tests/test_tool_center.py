@@ -220,6 +220,21 @@ def test_tool_endpoints_reject_unbound_keys() -> None:
         _teardown()
 
 
+async def test_tools_fall_back_to_runtime_registry_when_seed_missing() -> None:
+    """A failed seed must not empty the tool surface (registry is the source)."""
+    service = AgentDefinitionService(
+        repository=InMemoryAgentDefinitionRepository(),
+        tool_registry=ToolRegistry([CalculatorTool()]),
+        prompt_registry=None,
+    )
+
+    tools = await service.list_tools_with_state("ws-1")
+
+    names = [tool["name"] for tool in tools]
+    assert "calculator" in names
+    assert all(tool["enabled"] is True for tool in tools)
+
+
 def test_tool_unknown_name_returns_404() -> None:
     _setup()
     try:
