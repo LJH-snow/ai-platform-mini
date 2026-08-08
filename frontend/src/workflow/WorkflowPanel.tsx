@@ -307,7 +307,7 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
               新建任务
             </button>
           ) : null}
-          {lastThreadId !== null && lastThreadId !== workflow?.threadId ? (
+          {lastThreadId !== null ? (
             <button
               type="button"
               className="secondaryButton"

@@ -358,7 +358,7 @@ describe('WorkflowPanel last-task view', () => {
     await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
   })
 
-  it('hides the last-task button when the current workflow is the latest', async () => {
+  it('shows the last-task button even when it matches the current workflow', async () => {
     const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
     const getStatus = vi.fn().mockResolvedValue(currentStatus)
     const client = createClient({ getStatus })
@@ -369,7 +369,9 @@ describe('WorkflowPanel last-task view', () => {
 
     await waitFor(() => expect(getStatus).toHaveBeenCalledWith('t-current'))
     await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
-    expect(screen.queryByRole('button', { name: '查看最近任务' })).not.toBeInTheDocument()
+    // The entry is always available once any history exists (clicking is
+    // harmless: it re-fetches the current state).
+    expect(screen.getByRole('button', { name: '查看最近任务' })).toBeInTheDocument()
   })
 
   it('keeps the last task after 新建任务', async () => {
