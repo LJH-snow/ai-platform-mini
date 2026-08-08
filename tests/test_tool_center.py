@@ -214,13 +214,17 @@ def test_tool_endpoints_reject_unbound_keys() -> None:
         assert "calculator" in names
         assert all(tool["enabled"] is True for tool in list_resp.json())
 
-        # Writing an override still requires a workspace (conservative).
+        # Writing an override requires a workspace: 400 with an
+        # actionable message (not a misleading 404).
         put_resp = client.put(
             "/api/v1/tools/calculator",
             json={"enabled": False},
             headers=_auth("sk-legacy"),
         )
-        assert put_resp.status_code == 404
+        assert put_resp.status_code == 400
+        assert "workspace" in put_resp.text
+        # The response also flags read-only toggles.
+        assert all(tool["can_manage"] is False for tool in list_resp.json())
     finally:
         _teardown()
 
