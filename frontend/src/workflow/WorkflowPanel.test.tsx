@@ -395,3 +395,50 @@ describe('WorkflowPanel last-task view', () => {
     expect(screen.getByRole('button', { name: '查看最近任务' })).toBeInTheDocument()
   })
 })
+
+describe('WorkflowPanel last-task view feedback', () => {
+  it('says the current task is the latest when thread ids match', async () => {
+    const user = userEvent.setup()
+    const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
+    const getStatus = vi.fn().mockResolvedValue(currentStatus)
+    const client = createClient({ getStatus })
+    sessionStorage.setItem('ai-platform.workflow-last-thread', 't-current')
+    sessionStorage.setItem('ai-platform.workflow-thread', 't-current')
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+    await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: '查看最近任务' }))
+
+    expect(await screen.findByText('当前显示的就是最近任务。')).toBeInTheDocument()
+  })
+
+  it('shows a historical task with a return-to-current button', async () => {
+    const user = userEvent.setup()
+    const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
+    const lastStatus: WorkflowStatus = {
+      ...pendingStatus,
+      threadId: 't-last',
+      draftSummary: 'Last task draft',
+    }
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce(currentStatus)
+      .mockResolvedValueOnce(lastStatus)
+      .mockResolvedValueOnce(currentStatus)
+    const client = createClient({ getStatus })
+    sessionStorage.setItem('ai-platform.workflow-last-thread', 't-last')
+    sessionStorage.setItem('ai-platform.workflow-thread', 't-current')
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+    await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: '查看最近任务' }))
+    expect(await screen.findByText('Last task draft')).toBeInTheDocument()
+    expect(screen.getByText('正在查看最近任务')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '返回当前任务' }))
+    expect(await screen.findByText('Draft summary here')).toBeInTheDocument()
+    expect(screen.queryByText('正在查看最近任务')).not.toBeInTheDocument()
+  })
+})

@@ -246,6 +246,8 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
     // Clear only the current restore point; the last task stays
     // viewable via the '查看最近任务' entry.
     sessionStorage.removeItem(THREAD_STORAGE_KEY)
+    setViewingLast(false)
+    setReturnThreadId(null)
     setPdfFile(null)
     setTopic('')
     setWorkflow(null)
@@ -259,14 +261,24 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
   const [lastThreadId, setLastThreadId] = useState<string | null>(() =>
     sessionStorage.getItem(LAST_THREAD_STORAGE_KEY),
   )
+  const [viewingLast, setViewingLast] = useState(false)
+  const [returnThreadId, setReturnThreadId] = useState<string | null>(null)
 
   const viewLastTask = async (): Promise<void> => {
     if (!client || lastThreadId === null) return
     setErrorMessage(null)
+    if (lastThreadId === workflow?.threadId) {
+      // Same task as the one already on screen: state is unchanged, so
+      // give explicit feedback instead of appearing to do nothing.
+      setAnnouncement('当前显示的就是最近任务。')
+      return
+    }
     setAnnouncement('正在加载最近任务…')
     try {
       const status = await client.getStatus(lastThreadId)
+      setReturnThreadId(workflow?.threadId ?? null)
       setWorkflow(status)
+      setViewingLast(true)
       if (status.status === 'running') {
         setPanelState('polling')
         setAnnouncement('最近任务仍在运行，请稍后刷新查看。')
@@ -276,6 +288,20 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
     } catch {
       setErrorMessage('无法加载最近任务（可能已过期）。')
       setAnnouncement('最近任务加载失败。')
+    }
+  }
+
+  const returnToCurrent = async (): Promise<void> => {
+    if (!client || returnThreadId === null) return
+    setErrorMessage(null)
+    try {
+      const status = await client.getStatus(returnThreadId)
+      setWorkflow(status)
+      setViewingLast(false)
+      setReturnThreadId(null)
+      handleStatus(status)
+    } catch {
+      setErrorMessage('无法恢复当前任务（可能已过期）。')
     }
   }
 
@@ -305,6 +331,18 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
           {workflow ? (
             <button type="button" className="secondaryButton" onClick={handleReset}>
               新建任务
+            </button>
+          ) : null}
+          {viewingLast ? (
+            <span className="workflowViewingLast">正在查看最近任务</span>
+          ) : null}
+          {returnThreadId !== null ? (
+            <button
+              type="button"
+              className="secondaryButton"
+              onClick={() => void returnToCurrent()}
+            >
+              返回当前任务
             </button>
           ) : null}
           {lastThreadId !== null ? (
