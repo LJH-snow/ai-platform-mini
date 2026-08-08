@@ -303,3 +303,30 @@ def test_admin_audit_api_requires_admin_key() -> None:
         assert resp.status_code in (401, 403)
     finally:
         _teardown_admin_api()
+
+
+async def test_agent_update_name_before_snapshot_is_old_value() -> None:
+    """Regression: the pre-update snapshot must predate ALL field mutations."""
+    audit, repo = _audit()
+    service = _agent_service(audit)
+    record, _ = await service.create_agent(
+        workspace_id="ws-1",
+        name="old-name",
+        model="m",
+        prompt_ref="",
+        actor=_actor(),
+    )
+
+    await service.update_agent(
+        record.id,
+        workspace_id="ws-1",
+        name="new-name",
+        actor=_actor(),
+    )
+
+    update_events = [e for e in repo._events if e.action == "agent.update"]
+    assert len(update_events) == 1
+    assert update_events[0].before is not None
+    assert update_events[0].after is not None
+    assert update_events[0].before["name"] == "old-name"
+    assert update_events[0].after["name"] == "new-name"

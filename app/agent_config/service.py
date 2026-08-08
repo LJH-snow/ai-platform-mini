@@ -145,6 +145,9 @@ class AgentDefinitionService:
         if workspace_id is not None and existing.workspace_id != workspace_id:
             return None
 
+        # Capture the pre-update snapshot before ANY field mutation so
+        # the audit before/after diff reflects true old vs new values.
+        before_snapshot = self._agent_snapshot(existing)
         if name is not None:
             existing.name = name.strip()
         if model is not None:
@@ -154,7 +157,6 @@ class AgentDefinitionService:
             await self._validate_prompt_ref(
                 existing.prompt_ref, workspace_id=workspace_id
             )
-        before_snapshot = self._agent_snapshot(existing)
         if temperature is not None:
             existing.temperature = temperature
         if max_steps is not None:
