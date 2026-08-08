@@ -9,10 +9,16 @@ _MOCK_CHAT_TEXT = "Hello from Mock Provider"
 class MockProvider:
     """Deterministic LLM stand-in for tests and E2E.
 
-    Routes on the Agent protocol marker: prompts containing
-    "decision model" get a valid JSON Agent decision (final answer);
-    everything else (plain chat, workflow report generation) gets the
-    fixed chat text.  Streaming mirrors the same routing.
+    Routing anchors on the "decision model" substring of the built-in Agent
+    protocol prompt (app/prompts/builtins.py).  If that wording ever changes,
+    the Agent path here silently degrades to plain text — the E2E gate keeps
+    CI red in that case, but keep the marker in sync with builtins.py.
+
+
+        Routes on the Agent protocol marker: prompts containing
+        "decision model" get a valid JSON Agent decision (final answer);
+        everything else (plain chat, workflow report generation) gets the
+        fixed chat text.  Streaming mirrors the same routing.
     """
 
     def __init__(self, default_model: str = "mock-model") -> None:

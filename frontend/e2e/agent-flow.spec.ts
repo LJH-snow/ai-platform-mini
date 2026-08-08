@@ -1,5 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
 
+// Layering note: the RAG E2E asserts process completeness (preset forces
+// knowledge_search, the tool tolerates an empty result under the mock
+// embedder, and the mock LLM final-answers). Retrieval quality itself is
+// covered by the Sprint C golden-set gate, not by this browser test.
+
 /** Register a fresh user through the auth UI and land in the console. */
 async function register(page: Page, email: string): Promise<void> {
   await page.goto('/')
