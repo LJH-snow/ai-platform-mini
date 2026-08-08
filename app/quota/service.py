@@ -3,7 +3,12 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.exceptions.base import QuotaExceededError
-from app.quota.models import QuotaConfig, QuotaReservation, ReservationResult
+from app.quota.models import (
+    QuotaConfig,
+    QuotaReservation,
+    ReservationResult,
+    WorkspaceQuota,
+)
 from app.quota.repository import QuotaRepository
 from app.usage.repository import UsageRepository
 
@@ -189,6 +194,22 @@ class QuotaService:
         raise QuotaExceededError(
             "Monthly token quota exceeded.",
             retry_after=self._seconds_until_next_month(now),
+        )
+
+    async def get_workspace_quota(self, workspace_id: str) -> WorkspaceQuota | None:
+        """Return the workspace's explicit overrides (None row = full inherit)."""
+        return await self._quota_repo.get_workspace_quota(workspace_id)
+
+    async def set_workspace_quota(
+        self,
+        workspace_id: str,
+        *,
+        daily_token_limit: int | None,
+        monthly_token_limit: int | None,
+    ) -> WorkspaceQuota:
+        """Write overrides; None clears that dimension (inherit global default)."""
+        return await self._quota_repo.set_workspace_quota(
+            workspace_id, daily=daily_token_limit, monthly=monthly_token_limit
         )
 
     async def _resolve_limits(

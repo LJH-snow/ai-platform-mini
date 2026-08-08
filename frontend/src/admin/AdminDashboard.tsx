@@ -67,6 +67,11 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
   const [selectedPrefix, setSelectedPrefix] = useState('')
   const [usage, setUsage] = useState<UsageAggregation[]>([])
   const [usageDate, setUsageDate] = useState(todayInShanghai)
+  const [quotaWorkspaceId, setQuotaWorkspaceId] = useState('')
+  const [quotaDaily, setQuotaDaily] = useState('')
+  const [quotaMonthly, setQuotaMonthly] = useState('')
+  const [quotaNotice, setQuotaNotice] = useState<string | null>(null)
+  const [quotaError, setQuotaError] = useState<string | null>(null)
   const [usageMonth, setUsageMonth] = useState(monthInShanghai)
   const [usagePeriod, setUsagePeriod] = useState<UsagePeriod>('daily')
   const [newKeyName, setNewKeyName] = useState('HR 演示用户')
@@ -217,6 +222,43 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
       setNotice('原始 Key 已复制，请立即交给用户。')
     } catch {
       setError('复制失败，请手动选择并复制原始 Key。')
+    }
+  }
+
+  const loadQuota = async (): Promise<void> => {
+    if (!client || !quotaWorkspaceId.trim()) {
+      setQuotaError('请输入 Workspace ID。')
+      return
+    }
+    setQuotaError(null)
+    setQuotaNotice(null)
+    try {
+      const quota = await client.getWorkspaceQuota(quotaWorkspaceId.trim())
+      setQuotaDaily(quota.daily_token_limit === null ? '' : String(quota.daily_token_limit))
+      setQuotaMonthly(
+        quota.monthly_token_limit === null ? '' : String(quota.monthly_token_limit),
+      )
+      setQuotaNotice('已加载当前配额设置。')
+    } catch (caught) {
+      setQuotaError(caught instanceof Error ? caught.message : '配额读取失败。')
+    }
+  }
+
+  const saveQuota = async (): Promise<void> => {
+    if (!client || !quotaWorkspaceId.trim()) {
+      setQuotaError('请输入 Workspace ID。')
+      return
+    }
+    setQuotaError(null)
+    setQuotaNotice(null)
+    try {
+      await client.setWorkspaceQuota(quotaWorkspaceId.trim(), {
+        daily_token_limit: quotaDaily.trim() === '' ? null : Number(quotaDaily),
+        monthly_token_limit: quotaMonthly.trim() === '' ? null : Number(quotaMonthly),
+      })
+      setQuotaNotice('配额已保存（空值 = 继承全局默认）。')
+    } catch (caught) {
+      setQuotaError(caught instanceof Error ? caught.message : '配额保存失败。')
     }
   }
 
@@ -551,6 +593,47 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
             <p className="formHint">暂无 Agent Run 记录；完成一次 Agent 调用后会出现在这里。</p>
           ) : null}
         </div>
+      </section>
+
+      <section className="panel adminCard quotaCard">
+        <div className="panelHeader">
+          <div>
+            <h2>Workspace 配额</h2>
+            <p>设置 workspace 级每日/每月 Token 限额；空值 = 继承全局默认（QUOTA_SCOPE=workspace 时生效）。</p>
+          </div>
+        </div>
+        <div className="quotaForm">
+          <input
+            aria-label="Workspace ID"
+            placeholder="Workspace ID"
+            value={quotaWorkspaceId}
+            onChange={(event) => setQuotaWorkspaceId(event.target.value)}
+          />
+          <input
+            aria-label="每日限额"
+            placeholder="每日限额 (token)"
+            type="number"
+            min={0}
+            value={quotaDaily}
+            onChange={(event) => setQuotaDaily(event.target.value)}
+          />
+          <input
+            aria-label="每月限额"
+            placeholder="每月限额 (token)"
+            type="number"
+            min={0}
+            value={quotaMonthly}
+            onChange={(event) => setQuotaMonthly(event.target.value)}
+          />
+          <button type="button" onClick={() => void loadQuota()}>
+            读取
+          </button>
+          <button type="button" onClick={() => void saveQuota()}>
+            保存
+          </button>
+        </div>
+        {quotaError !== null && <p className="inlineError" role="alert">{quotaError}</p>}
+        {quotaNotice !== null && <p className="inlineNotice" role="status">{quotaNotice}</p>}
       </section>
 
       {selectedRun ? (

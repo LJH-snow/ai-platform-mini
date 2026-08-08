@@ -34,6 +34,12 @@ const errorMessage = (status: number): string => {
   return `管理员请求失败（HTTP ${status}）。`
 }
 
+export type WorkspaceQuota = {
+  workspace_id: string
+  daily_token_limit: number | null
+  monthly_token_limit: number | null
+}
+
 export const createAdminClient = (options: AdminClientOptions) => {
   const fetchImpl = options.fetchImpl ?? fetch
 
@@ -80,6 +86,21 @@ export const createAdminClient = (options: AdminClientOptions) => {
       request<AgentRunSummary[]>(`/admin/agent-runs?limit=${encodeURIComponent(String(limit))}`),
     getRun: (runId: string) =>
       request<AgentRunRecord>(`/admin/agent-runs/${encodeURIComponent(runId)}`),
+    getWorkspaceQuota: (workspaceId: string) =>
+      request<WorkspaceQuota>(
+        `/admin/workspaces/${encodeURIComponent(workspaceId)}/quota`,
+      ),
+    setWorkspaceQuota: (
+      workspaceId: string,
+      body: { daily_token_limit: number | null; monthly_token_limit: number | null },
+    ) =>
+      request<WorkspaceQuota>(
+        `/admin/workspaces/${encodeURIComponent(workspaceId)}/quota`,
+        {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        },
+      ),
   }
 }
 

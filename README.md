@@ -486,6 +486,8 @@ INTEGRATION_TEST=1 pytest
 | DELETE | `/admin/api-keys/{prefix}` | Revoke an API key by hash prefix (admin only)                       |
 | GET    | `/admin/usage/daily`       | Get daily token usage for an API key (admin only)                   |
 | GET    | `/admin/usage/monthly`     | Get monthly token usage for an API key (admin only)                 |
+| GET    | `/admin/workspaces/{id}/quota` | Read a workspace's quota overrides (admin only, null = inherit) |
+| PUT    | `/admin/workspaces/{id}/quota` | Write/clear a workspace's quota overrides (admin only)          |
 
 ### Chat request example
 

@@ -4,7 +4,9 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
+from app.api.auth import provide_workspace_service
 from app.auth.dependencies import (
     is_configured_admin_key_hash,
     is_configured_admin_key_prefix,
@@ -12,8 +14,10 @@ from app.auth.dependencies import (
 )
 from app.auth.models import APIKey, APIKeyMetadata
 from app.auth.service import APIKeyService
+from app.auth.workspace_service import WorkspaceService
 from app.core.container import (
     provide_agent_run_record_service,
+    provide_quota_service,
     provide_usage_service,
 )
 from app.core.context import RequestContext
@@ -22,6 +26,7 @@ from app.exceptions.base import (
     AuthorizationError,
     ValidationError,
 )
+from app.quota.service import QuotaService
 from app.ratelimit.dependencies import require_admin_rate_limit
 from app.schemas.admin import (
     AgentRunRecordResponse,
@@ -248,3 +253,64 @@ async def get_agent_run(
         raise HTTPException(status_code=404, detail="Agent Run record not found.")
     payload = public_run_payload(row)
     return AgentRunRecordResponse(**payload)
+
+
+class WorkspaceQuotaResponse(BaseModel):
+    workspace_id: str
+    daily_token_limit: int | None = None
+    monthly_token_limit: int | None = None
+
+
+class WorkspaceQuotaUpdate(BaseModel):
+    daily_token_limit: int | None = Field(default=None, ge=0)
+    monthly_token_limit: int | None = Field(default=None, ge=0)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/quota",
+    response_model=WorkspaceQuotaResponse,
+    summary="Read a workspace's quota overrides",
+)
+async def get_workspace_quota(
+    workspace_id: str,
+    _admin: Annotated[APIKey, Depends(require_admin_rate_limit)],
+    quota_service: Annotated[QuotaService, Depends(provide_quota_service)],
+    workspace_service: Annotated[WorkspaceService, Depends(provide_workspace_service)],
+) -> WorkspaceQuotaResponse:
+    if await workspace_service.get_workspace(workspace_id) is None:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    quota = await quota_service.get_workspace_quota(workspace_id)
+    if quota is None:
+        # No row = full inheritance; null/null is an expressible state.
+        return WorkspaceQuotaResponse(workspace_id=workspace_id)
+    return WorkspaceQuotaResponse(
+        workspace_id=quota.workspace_id,
+        daily_token_limit=quota.daily_token_limit,
+        monthly_token_limit=quota.monthly_token_limit,
+    )
+
+
+@router.put(
+    "/workspaces/{workspace_id}/quota",
+    response_model=WorkspaceQuotaResponse,
+    summary="Write a workspace's quota overrides (null clears a dimension)",
+)
+async def set_workspace_quota(
+    workspace_id: str,
+    body: WorkspaceQuotaUpdate,
+    _admin: Annotated[APIKey, Depends(require_admin_rate_limit)],
+    quota_service: Annotated[QuotaService, Depends(provide_quota_service)],
+    workspace_service: Annotated[WorkspaceService, Depends(provide_workspace_service)],
+) -> WorkspaceQuotaResponse:
+    if await workspace_service.get_workspace(workspace_id) is None:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    quota = await quota_service.set_workspace_quota(
+        workspace_id,
+        daily_token_limit=body.daily_token_limit,
+        monthly_token_limit=body.monthly_token_limit,
+    )
+    return WorkspaceQuotaResponse(
+        workspace_id=quota.workspace_id,
+        daily_token_limit=quota.daily_token_limit,
+        monthly_token_limit=quota.monthly_token_limit,
+    )
