@@ -13,6 +13,7 @@ import { PromptStudio } from './PromptStudio.tsx'
 import { RunDetail } from './RunDetail.tsx'
 import { RunList } from './RunList.tsx'
 import { ToolCenter } from './ToolCenter.tsx'
+import { Billing } from './Billing.tsx'
 import { UsageDashboardPage } from './UsageDashboard.tsx'
 import type { PlatformClient } from './client.ts'
 
@@ -145,6 +146,15 @@ const createConfigClient = (overrides: Partial<ConfigClient> = {}): ConfigClient
     trend: [],
     model_ranking: [],
     key_ranking: [],
+  })),
+  getBilling: vi.fn(async () => ({
+    plan: null,
+    usage: { month: '2026-08', total_tokens: 0 },
+    resources: {
+      agents: { count: 0, limit: null },
+      documents: { count: 0, limit: null },
+      members: { count: 0, limit: null },
+    },
   })),
   runBenchmark: vi.fn(async () => ({
     id: 1,
@@ -551,6 +561,49 @@ describe('AgentStudio benchmark', () => {
     expect(await screen.findByText('0.67')).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Benchmark 完成')
     expect(listBenchmarkRuns).toHaveBeenCalledWith('agent-1')
+  })
+})
+
+describe('Billing', () => {
+  it('shows the legacy state when no plan is subscribed', async () => {
+    render(<Billing client={createConfigClient()} />)
+
+    expect(await screen.findByText('无计划（legacy）')).toBeInTheDocument()
+    expect(screen.getByText('不限')).toBeInTheDocument()
+    expect(screen.getByText(/本月用量/)).toBeInTheDocument()
+  })
+
+  it('renders a subscribed plan with usage bars and resource limits', async () => {
+    const getBilling = vi.fn(async () => ({
+      plan: {
+        id: 'p1',
+        name: 'pro',
+        version: 1,
+        status: 'ACTIVE',
+        features: { reranker: true, benchmark: false },
+        daily_token_limit: null,
+        monthly_token_limit: 10_000_000,
+        max_agents: 50,
+        max_documents: 100,
+        max_members: 20,
+      },
+      usage: { month: '2026-08', total_tokens: 8_200_000 },
+      resources: {
+        agents: { count: 12, limit: 50 },
+        documents: { count: 3, limit: 100 },
+        members: { count: 2, limit: 20 },
+      },
+    }))
+    render(<Billing client={createConfigClient({ getBilling })} />)
+
+    expect(await screen.findByText('pro（ACTIVE）')).toBeInTheDocument()
+    const progress = screen.getByRole('progressbar', { name: '月度 Token 用量' })
+    expect(progress.getAttribute('aria-valuenow')).toBe('82')
+    expect(screen.getByText(/8\.2M/)).toBeInTheDocument()
+    expect(screen.getByText('12 / 50')).toBeInTheDocument()
+    expect(screen.getByText('reranker')).toBeInTheDocument()
+    expect(screen.getByText('benchmark')).toBeInTheDocument()
+    expect(screen.getByText('未启用')).toBeInTheDocument()
   })
 })
 

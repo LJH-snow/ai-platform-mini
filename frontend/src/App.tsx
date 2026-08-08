@@ -38,6 +38,7 @@ import { createPlatformClient } from './platform/client.ts'
 import { KnowledgeBase } from './platform/KnowledgeBase.tsx'
 import { ModelCatalog } from './platform/ModelCatalog.tsx'
 import { AgentStudio } from './platform/AgentStudio.tsx'
+import { Billing } from './platform/Billing.tsx'
 import { createConfigClient } from './platform/config-client.ts'
 import { PromptStudio } from './platform/PromptStudio.tsx'
 import { RunDetail } from './platform/RunDetail.tsx'
@@ -52,7 +53,7 @@ import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
-type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members' | 'agents' | 'tools' | 'run' | 'usage' | 'runs'
+type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members' | 'agents' | 'tools' | 'run' | 'usage' | 'runs' | 'billing'
 type RequestStatus =
   | 'idle'
   | 'sending'
@@ -1264,6 +1265,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       { id: 'agents', label: 'Agent Studio', shortLabel: 'Agent' },
       { id: 'tools', label: 'Tool Center', shortLabel: '工具' },
       { id: 'usage', label: '用量仪表盘', shortLabel: '用量' },
+      { id: 'billing', label: 'Billing / 计划', shortLabel: '计划' },
       { id: 'runs', label: 'Run 历史', shortLabel: 'Run' },
       { id: 'models', label: '模型目录', shortLabel: '模型' },
     ]
@@ -1467,6 +1469,9 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   }
   if (page === 'usage') {
     return renderPlatformShell(<UsageDashboardPage client={configClient} />)
+  }
+  if (page === 'billing') {
+    return renderPlatformShell(<Billing client={configClient} />)
   }
   if (page === 'runs') {
     return renderPlatformShell(

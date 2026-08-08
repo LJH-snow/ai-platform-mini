@@ -82,6 +82,34 @@ export type BenchmarkRun = {
   created_at: string | null
 }
 
+export type BillingPlan = {
+  id: string
+  name: string
+  version: number
+  status: string
+  features: Record<string, boolean>
+  daily_token_limit: number | null
+  monthly_token_limit: number | null
+  max_agents: number | null
+  max_documents: number | null
+  max_members: number | null
+}
+
+export type BillingResource = {
+  count: number
+  limit: number | null
+}
+
+export type BillingInfo = {
+  plan: BillingPlan | null
+  usage: { month: string; total_tokens: number }
+  resources: {
+    agents: BillingResource
+    documents: BillingResource
+    members: BillingResource
+  }
+}
+
 export type UsageDashboard = {
   trend: UsageTrendPoint[]
   model_ranking: UsageRankingEntry[]
@@ -258,6 +286,67 @@ const normalizeBenchmarkRun = (payload: unknown): BenchmarkRun => {
   }
 }
 
+const normalizeBilling = (payload: unknown): BillingInfo => {
+  const item = asObject(payload)
+  const planValue = item.plan
+  const plan: BillingPlan | null =
+    typeof planValue === 'object' && planValue !== null
+      ? (() => {
+          const planItem = asObject(planValue)
+          const rawFeatures = asObject(planItem.features)
+          const featuresValue: Record<string, boolean> = Object.fromEntries(
+            Object.entries(rawFeatures).map(([key, value]) => [
+              key,
+              value === true,
+            ]),
+          )
+          return {
+            id: asString(planItem.id, ''),
+            name: asString(planItem.name, ''),
+            version: asNumber(planItem.version, 1),
+            status: asString(planItem.status, ''),
+            features: featuresValue,
+            daily_token_limit:
+              typeof planItem.daily_token_limit === 'number'
+                ? planItem.daily_token_limit
+                : null,
+            monthly_token_limit:
+              typeof planItem.monthly_token_limit === 'number'
+                ? planItem.monthly_token_limit
+                : null,
+            max_agents:
+              typeof planItem.max_agents === 'number' ? planItem.max_agents : null,
+            max_documents:
+              typeof planItem.max_documents === 'number'
+                ? planItem.max_documents
+                : null,
+            max_members:
+              typeof planItem.max_members === 'number' ? planItem.max_members : null,
+          }
+        })()
+      : null
+  const resource = (value: unknown): BillingResource => {
+    const res = asObject(value)
+    return {
+      count: asNumber(res.count, 0),
+      limit: typeof res.limit === 'number' ? res.limit : null,
+    }
+  }
+  const usageValue = asObject(item.usage)
+  return {
+    plan,
+    usage: {
+      month: asString(usageValue.month, ''),
+      total_tokens: asNumber(usageValue.total_tokens, 0),
+    },
+    resources: {
+      agents: resource(item.resources && asObject(item.resources).agents),
+      documents: resource(item.resources && asObject(item.resources).documents),
+      members: resource(item.resources && asObject(item.resources).members),
+    },
+  }
+}
+
 const normalizeUsageDashboard = (payload: unknown): UsageDashboard => {
   const item = asObject(payload)
   const trend = asArray(item.trend).map((entry): UsageTrendPoint => {
@@ -421,6 +510,7 @@ export const createConfigClient = (options: ConfigClientOptions = {}) => {
         { agent_id: agentId, task_set: taskSet },
         normalizeBenchmarkRun,
       ),
+    getBilling: () => request('GET', '/api/v1/billing', null, normalizeBilling),
     downloadUsageExport: async (days: number, format: 'csv' | 'json') => {
       const headers: Record<string, string> = { Accept: 'application/octet-stream' }
       if (options.apiKey) {

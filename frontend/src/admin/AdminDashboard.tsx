@@ -1,5 +1,6 @@
 import type { FormEvent, JSX } from 'react'
 import { useMemo, useState } from 'react'
+import type { AuditEvent } from './client.ts'
 import { AdminApiError, createAdminClient, type AdminClient } from './client.ts'
 import type {
   AdminApiKey,
@@ -72,6 +73,8 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
   const [quotaMonthly, setQuotaMonthly] = useState('')
   const [quotaNotice, setQuotaNotice] = useState<string | null>(null)
   const [quotaError, setQuotaError] = useState<string | null>(null)
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[] | null>(null)
+  const [auditError, setAuditError] = useState<string | null>(null)
   const [usageMonth, setUsageMonth] = useState(monthInShanghai)
   const [usagePeriod, setUsagePeriod] = useState<UsagePeriod>('daily')
   const [newKeyName, setNewKeyName] = useState('HR 演示用户')
@@ -241,6 +244,17 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
       setQuotaNotice('已加载当前配额设置。')
     } catch (caught) {
       setQuotaError(caught instanceof Error ? caught.message : '配额读取失败。')
+    }
+  }
+
+  const loadAuditEvents = async (): Promise<void> => {
+    if (!client) return
+    setAuditError(null)
+    try {
+      setAuditEvents(await client.listAuditEvents({ limit: 50 }))
+    } catch (caught) {
+      setAuditError(caught instanceof Error ? caught.message : '审计记录加载失败。')
+      setAuditEvents(null)
     }
   }
 
@@ -634,6 +648,60 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
         </div>
         {quotaError !== null && <p className="inlineError" role="alert">{quotaError}</p>}
         {quotaNotice !== null && <p className="inlineNotice" role="status">{quotaNotice}</p>}
+      </section>
+
+      <section className="panel adminCard auditCard">
+        <div className="panelHeader">
+          <div>
+            <h2>审计记录</h2>
+            <p>关键操作（agent/prompt/tool/benchmark/成员）的 before/after 快照。</p>
+          </div>
+          <button type="button" onClick={() => void loadAuditEvents()}>
+            刷新
+          </button>
+        </div>
+        {auditError !== null && (
+          <p className="inlineError" role="alert">{auditError}</p>
+        )}
+        {auditEvents !== null && auditEvents.length === 0 && (
+          <p className="formHint">暂无审计记录。</p>
+        )}
+        {auditEvents !== null && auditEvents.length > 0 && (
+          <table className="auditTable">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>操作</th>
+                <th>资源</th>
+                <th>actor</th>
+                <th>变更</th>
+              </tr>
+            </thead>
+            <tbody>
+              {auditEvents.map((event) => (
+                <tr key={event.id}>
+                  <td>
+                    {event.created_at === null
+                      ? '--'
+                      : new Date(event.created_at).toLocaleString('zh-CN', {
+                          hour12: false,
+                        })}
+                  </td>
+                  <td>{event.action}</td>
+                  <td>
+                    {event.resource_type}/{event.resource_id}
+                  </td>
+                  <td>{event.user_id ?? event.api_key_hash?.slice(0, 8) ?? '--'}</td>
+                  <td>
+                    {event.after !== null
+                      ? JSON.stringify(event.after).slice(0, 80)
+                      : '--'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
 
       {selectedRun ? (

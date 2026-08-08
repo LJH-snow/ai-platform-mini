@@ -34,6 +34,20 @@ const errorMessage = (status: number): string => {
   return `管理员请求失败（HTTP ${status}）。`
 }
 
+export type AuditEvent = {
+  id: number
+  workspace_id: string | null
+  api_key_hash: string | null
+  user_id: string | null
+  action: string
+  resource_type: string
+  resource_id: string
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+  ip: string | null
+  created_at: string | null
+}
+
 export type WorkspaceQuota = {
   workspace_id: string
   daily_token_limit: number | null
@@ -90,6 +104,13 @@ export const createAdminClient = (options: AdminClientOptions) => {
       request<WorkspaceQuota>(
         `/admin/workspaces/${encodeURIComponent(workspaceId)}/quota`,
       ),
+    listAuditEvents: (params: { workspace_id?: string; action?: string; limit?: number } = {}) => {
+      const query = new URLSearchParams()
+      if (params.workspace_id) query.set('workspace_id', params.workspace_id)
+      if (params.action) query.set('action', params.action)
+      query.set('limit', String(params.limit ?? 50))
+      return request<AuditEvent[]>(`/admin/audit-events?${query.toString()}`)
+    },
     setWorkspaceQuota: (
       workspaceId: string,
       body: { daily_token_limit: number | null; monthly_token_limit: number | null },

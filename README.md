@@ -468,6 +468,8 @@ INTEGRATION_TEST=1 pytest
 | GET    | `/api/v1/runs`             | List the tenant's Agent runs (optional `agent_id` filter)           |
 | GET    | `/api/v1/runs/{run_id}`    | Fetch one run's safe replay projection (cross-tenant 404)           |
 | GET    | `/api/v1/usage/dashboard`  | Tenant usage trend + model/key rankings (`days=1..90`)              |
+| GET    | `/api/v1/billing`         | Current plan + monthly usage + resource counts (legacy: plan=null) |
+| GET    | `/admin/audit-events`      | Audit log (admin, workspace/action filters, limit 1-200)          |
 | POST   | `/api/v1/auth/register`    | Register a user (creates workspace + bound API key)                 |
 | GET    | `/api/v1/auth/me`          | Current identity                                                    |
 | GET    | `/api/v1/workspaces`       | List the tenant's workspaces                                        |
