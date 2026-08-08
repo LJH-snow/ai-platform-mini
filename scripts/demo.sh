@@ -20,6 +20,9 @@ done
 
 echo
 echo "Demo ready:"
+if ! docker compose exec ollama sh -c 'ls /root/.ollama/models/blobs >/dev/null 2>&1'; then
+    echo "  (Ollama models are still pulling on first start - watch the ollama logs.)"
+fi
 echo "  Frontend:  http://localhost:5173"
 echo "  API:       http://localhost:8000"
 echo "  Jaeger UI: http://localhost:16686"
