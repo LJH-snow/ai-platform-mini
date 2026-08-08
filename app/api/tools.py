@@ -46,7 +46,7 @@ async def list_tools(
     # the global view (seeded defaults, no overrides).  The enable
     # toggle below stays conservative (404 without a workspace).
     rows = await service.list_tools_with_state(ws_id)
-    return [_to_tool_response(row, can_manage=True) for row in rows]
+    return [_to_tool_response(row, can_manage=ws_id is not None) for row in rows]
 
 
 def _to_tool_response(
