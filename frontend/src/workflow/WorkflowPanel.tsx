@@ -51,6 +51,9 @@ const POLL_INTERVAL_MS = 3000
 // Last workflow thread id, kept per user session so returning to the
 // page restores the in-flight or completed task instead of losing it.
 const THREAD_STORAGE_KEY = 'ai-platform.workflow-thread'
+// Last completed/terminal task thread id, kept across '新建任务' so the
+// user can re-open a previous result without losing it.
+const LAST_THREAD_STORAGE_KEY = 'ai-platform.workflow-last-thread'
 
 export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps): JSX.Element {
   const [pdfFile, setPdfFile] = useState<File | null>(null)
@@ -176,6 +179,8 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
     try {
       const status = await client.uploadPdf(pdfFile, topic)
       sessionStorage.setItem(THREAD_STORAGE_KEY, status.threadId)
+      sessionStorage.setItem(LAST_THREAD_STORAGE_KEY, status.threadId)
+      setLastThreadId(status.threadId)
       handleStatus(status)
       if (status.status === 'running') {
         startPolling(status.threadId)
@@ -216,6 +221,7 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
     try {
       const status = await client.reject(workflow.threadId, trimmed)
       sessionStorage.setItem(THREAD_STORAGE_KEY, status.threadId)
+      sessionStorage.setItem(LAST_THREAD_STORAGE_KEY, status.threadId)
       handleStatus(status)
       if (status.status === 'running') {
         startPolling(status.threadId)
@@ -237,6 +243,8 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
 
   const handleReset = (): void => {
     stopPolling()
+    // Clear only the current restore point; the last task stays
+    // viewable via the '查看最近任务' entry.
     sessionStorage.removeItem(THREAD_STORAGE_KEY)
     setPdfFile(null)
     setTopic('')
@@ -246,6 +254,29 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
     setFeedback('')
     setActionLoading(false)
     setAnnouncement('已重置，可上传新 PDF。')
+  }
+
+  const [lastThreadId, setLastThreadId] = useState<string | null>(() =>
+    sessionStorage.getItem(LAST_THREAD_STORAGE_KEY),
+  )
+
+  const viewLastTask = async (): Promise<void> => {
+    if (!client || lastThreadId === null) return
+    setErrorMessage(null)
+    setAnnouncement('正在加载最近任务…')
+    try {
+      const status = await client.getStatus(lastThreadId)
+      setWorkflow(status)
+      if (status.status === 'running') {
+        setPanelState('polling')
+        setAnnouncement('最近任务仍在运行，请稍后刷新查看。')
+      } else {
+        handleStatus(status)
+      }
+    } catch {
+      setErrorMessage('无法加载最近任务（可能已过期）。')
+      setAnnouncement('最近任务加载失败。')
+    }
   }
 
   const canUpload = apiKeyConfigured && pdfFile !== null && panelState === 'idle'
@@ -274,6 +305,15 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
           {workflow ? (
             <button type="button" className="secondaryButton" onClick={handleReset}>
               新建任务
+            </button>
+          ) : null}
+          {lastThreadId !== null && lastThreadId !== workflow?.threadId ? (
+            <button
+              type="button"
+              className="secondaryButton"
+              onClick={() => void viewLastTask()}
+            >
+              查看最近任务
             </button>
           ) : null}
         </div>

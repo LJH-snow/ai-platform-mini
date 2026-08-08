@@ -338,3 +338,58 @@ describe('WorkflowPanel restore', () => {
     expect(screen.getByRole('button', { name: '开始生成报告' })).toBeDisabled()
   })
 })
+
+describe('WorkflowPanel last-task view', () => {
+  it('shows the last-task button when only a historical task exists', async () => {
+    const user = userEvent.setup()
+    const getStatus = vi.fn().mockResolvedValue(pendingStatus)
+    const client = createClient({ getStatus })
+    sessionStorage.setItem('ai-platform.workflow-last-thread', 't-last')
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+
+    // No current restore point and no current workflow: only the
+    // last-task entry is available.
+    const viewButton = await screen.findByRole('button', { name: '查看最近任务' })
+    await user.click(viewButton)
+
+    expect(getStatus).toHaveBeenCalledWith('t-last')
+    // The historical task (pending_approval) is shown after viewing.
+    await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
+  })
+
+  it('hides the last-task button when the current workflow is the latest', async () => {
+    const currentStatus: WorkflowStatus = { ...pendingStatus, threadId: 't-current' }
+    const getStatus = vi.fn().mockResolvedValue(currentStatus)
+    const client = createClient({ getStatus })
+    sessionStorage.setItem('ai-platform.workflow-last-thread', 't-current')
+    sessionStorage.setItem('ai-platform.workflow-thread', 't-current')
+
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+
+    await waitFor(() => expect(getStatus).toHaveBeenCalledWith('t-current'))
+    await waitFor(() => expect(screen.getByText('Draft summary here')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: '查看最近任务' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the last task after 新建任务', async () => {
+    const user = userEvent.setup()
+    const client = createClient({
+      uploadPdf: vi.fn().mockResolvedValue(pendingStatus),
+      getStatus: vi.fn().mockResolvedValue(pendingStatus),
+    })
+    render(<WorkflowPanel apiKeyConfigured client={client} />)
+
+    // Upload a file so a current workflow exists.
+    const file = new File(['%PDF-fake'], 'brief.pdf', { type: 'application/pdf' })
+    await user.upload(screen.getByLabelText('选择 PDF 文件'), file)
+    await user.click(screen.getByRole('button', { name: '开始生成报告' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '新建任务' })).toBeInTheDocument())
+
+    // 新建任务 keeps the last task in storage and shows its entry again.
+    await user.click(screen.getByRole('button', { name: '新建任务' }))
+    expect(sessionStorage.getItem('ai-platform.workflow-last-thread')).toBe('t-123')
+    expect(sessionStorage.getItem('ai-platform.workflow-thread')).toBeNull()
+    expect(screen.getByRole('button', { name: '查看最近任务' })).toBeInTheDocument()
+  })
+})
