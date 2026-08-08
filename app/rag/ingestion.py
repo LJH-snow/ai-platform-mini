@@ -5,10 +5,11 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.exceptions.base import ConflictError, ProviderError
+from app.exceptions.base import ConflictError, ProviderError, ValidationError
 from app.rag.chunker import chunk_text
 from app.rag.embedder import Embedder
 from app.rag.pdf_extractor import extract_pdf_text
+from app.rag.safety import SafetyVerdict, evaluate_document
 from app.rag.vector_store import (
     DocumentPreview,
     DocumentSummary,
@@ -44,6 +45,7 @@ class RAGIngestionService:
         chunk_overlap: int,
         max_pages: int,
         max_text_characters: int,
+        safety_mode: str = "strict",
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
@@ -53,6 +55,7 @@ class RAGIngestionService:
         self._chunk_overlap = chunk_overlap
         self._max_pages = max_pages
         self._max_text_characters = max_text_characters
+        self._safety_mode = safety_mode
 
     async def ingest_pdf(
         self,
@@ -68,6 +71,11 @@ class RAGIngestionService:
             max_pages=self._max_pages,
             max_text_characters=self._max_text_characters,
         )
+        safety_verdict: SafetyVerdict | None = None
+        if self._safety_mode != "off":
+            safety_verdict = evaluate_document(extracted.text)
+            if safety_verdict.is_malicious:
+                raise ValidationError("文档包含疑似注入内容，已拒绝。")
         chunks = chunk_text(
             extracted.text,
             chunk_size=self._chunk_size,
@@ -96,6 +104,14 @@ class RAGIngestionService:
             chunks=chunks,
             embeddings=embeddings,
             owner_key_hash=owner_hash,
+            safety_verdict=(
+                safety_verdict.level if safety_verdict is not None else None
+            ),
+            safety_detail=(
+                {"rule_ids": list(safety_verdict.hit_rule_ids)}
+                if safety_verdict is not None
+                else None
+            ),
         )
         summary = await self._vector_store.get_document_summary(
             document_id, owner_key_hash=owner_hash

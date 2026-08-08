@@ -6,6 +6,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    JSON,
     DateTime,
     ForeignKey,
     Index,
@@ -55,6 +56,9 @@ class RagDocument(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
     embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Prompt-injection safety: NULL = clean (pre-safety documents).
+    safety_verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    safety_detail: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -238,6 +242,16 @@ def migrate_rag_schema(connection: Connection) -> None:
             """
             CREATE INDEX IF NOT EXISTS ix_rag_chunk_search_vector_gin
             ON rag_document_chunks USING GIN (search_vector)
+            """,
+            # Prompt-injection safety (hardening backlog B2): NULL rows
+            # pre-date safety and are treated as clean.
+            """
+            ALTER TABLE rag_documents
+            ADD COLUMN IF NOT EXISTS safety_verdict VARCHAR(16)
+            """,
+            """
+            ALTER TABLE rag_documents
+            ADD COLUMN IF NOT EXISTS safety_detail JSON
             """,
         )
     )

@@ -85,6 +85,8 @@ class HybridRetriever:
         embeddings: list[list[float]],
         *,
         owner_key_hash: str | None = None,
+        safety_verdict: str | None = None,
+        safety_detail: dict[str, object] | None = None,
     ) -> str:
         return await self._vector_store.add_document(
             source_path,
@@ -94,6 +96,8 @@ class HybridRetriever:
             chunks,
             embeddings,
             owner_key_hash=owner_key_hash,
+            safety_verdict=safety_verdict,
+            safety_detail=safety_detail,
         )
 
     async def search(

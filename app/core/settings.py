@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # on the evaluation dataset (Sprint C milestone).
     rag_search_mode: Literal["hybrid", "vector", "keyword"] = "vector"
     rag_rrf_k: int = Field(default=60, ge=1, le=200)
+    # Prompt-injection safety: strict hides suspicious documents from
+    # retrieval; flag ingests them with a marker; off disables checks
+    # (byte-identical legacy behaviour).
+    rag_safety_mode: Literal["strict", "flag", "off"] = "strict"
     # Reranker: RERANKER_API_KEY is loaded from the local .env only and
     # must never be committed; empty key disables reranking (Noop).
     reranker_api_key: SecretStr = SecretStr("")

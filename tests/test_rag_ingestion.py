@@ -34,9 +34,13 @@ class FakeVectorStore:
         embeddings: list[list[float]],
         *,
         owner_key_hash: str | None = None,
+        safety_verdict: str | None = None,
+        safety_detail: dict[str, object] | None = None,
     ) -> str:
         self.added = {
             "source_path": source_path,
+            "safety_verdict": safety_verdict,
+            "safety_detail": safety_detail,
             "content_sha256": content_sha256,
             "embedding_model": embedding_model,
             "embedding_dimensions": embedding_dimensions,

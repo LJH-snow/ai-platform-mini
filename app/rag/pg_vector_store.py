@@ -3,7 +3,7 @@
 import logging
 import re
 
-from sqlalchemy import Select, delete, desc, func, select, text
+from sqlalchemy import Select, delete, desc, func, or_, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
@@ -57,10 +57,12 @@ class PgVectorStore:
         session_factory: async_sessionmaker[AsyncSession],
         embedding_model: str = "nomic-embed-text",
         embedding_dimensions: int = 768,
+        safety_mode: str = "strict",
     ) -> None:
         self._session_factory = session_factory
         self._embedding_model = embedding_model
         self._embedding_dimensions = embedding_dimensions
+        self._safety_mode = safety_mode
 
     async def add_document(
         self,
@@ -72,6 +74,8 @@ class PgVectorStore:
         embeddings: list[list[float]],
         *,
         owner_key_hash: str | None = None,
+        safety_verdict: str | None = None,
+        safety_detail: dict[str, object] | None = None,
     ) -> str:
         """Persist one document and its chunks for exactly one tenant.
 
@@ -140,6 +144,8 @@ class PgVectorStore:
                     content_sha256=content_sha256,
                     embedding_model=embedding_model,
                     embedding_dimensions=embedding_dimensions,
+                    safety_verdict=safety_verdict,
+                    safety_detail=safety_detail,
                 )
                 session.add(document)
                 await session.flush()
@@ -397,6 +403,7 @@ class PgVectorStore:
                         RagDocument.owner_key_hash == owner_hash,
                         RagDocumentChunk.search_vector.is_not(None),
                         RagDocumentChunk.search_vector.op("@@")(tsquery),
+                        *_safety_filter(self._safety_mode),
                     )
                     .order_by(rank_expr.desc())
                     .limit(top_k)
@@ -453,6 +460,7 @@ class PgVectorStore:
                         RagDocument.owner_key_hash == owner_hash,
                         RagDocument.embedding_model == self._embedding_model,
                         RagDocument.embedding_dimensions == self._embedding_dimensions,
+                        *_safety_filter(self._safety_mode),
                     )
                     .order_by(distance_expr.asc())
                     .limit(top_k)
@@ -470,3 +478,19 @@ class PgVectorStore:
                 ]
         except SQLAlchemyError as exc:
             raise RAGStorageUnavailableError("RAG storage unavailable") from exc
+
+
+def _safety_filter(safety_mode: str) -> list[ColumnElement[bool]]:
+    """Retrieval-side safety predicate.
+
+    strict mode hides suspicious documents (NULL rows pre-date safety and
+    count as clean); flag/off modes retrieve everything.
+    """
+    if safety_mode != "strict":
+        return []
+    return [
+        or_(
+            RagDocument.safety_verdict.is_(None),
+            RagDocument.safety_verdict != "suspicious",
+        )
+    ]

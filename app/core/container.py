@@ -188,6 +188,7 @@ def provide_vector_store() -> VectorStore | None:
         session_factory=session_factory,
         embedding_model=settings.rag_embedding_model,
         embedding_dimensions=RAG_EMBEDDING_DIMENSIONS,
+        safety_mode=settings.rag_safety_mode,
     )
     if settings.rag_search_mode == "vector":
         return store
@@ -242,6 +243,7 @@ def provide_rag_ingestion_service() -> RAGIngestionService | None:
         chunk_overlap=settings.rag_chunk_overlap,
         max_pages=settings.rag_max_pdf_pages,
         max_text_characters=settings.rag_max_document_characters,
+        safety_mode=settings.rag_safety_mode,
     )
 
 

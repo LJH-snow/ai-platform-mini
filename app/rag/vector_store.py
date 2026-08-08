@@ -93,6 +93,8 @@ class VectorStore(Protocol):
         embeddings: list[list[float]],
         *,
         owner_key_hash: str | None = None,
+        safety_verdict: str | None = None,
+        safety_detail: dict[str, object] | None = None,
     ) -> str: ...
 
     async def search(
