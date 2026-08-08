@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-
-from app.tools.models import ToolContext  # re-export (defined in tools layer)
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
+
+from app.tools.models import (
+    ToolContext as ToolContext,
+)  # re-export (defined in tools layer)
 
 type AgentMessageRole = Literal["user", "assistant", "tool"]
 
