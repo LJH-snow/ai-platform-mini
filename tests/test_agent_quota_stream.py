@@ -243,8 +243,14 @@ class _BlockingModel:
 class _FailingRenewalQuotaService(_FailingQuotaService):
     reservation_renewal_seconds = 0
 
-    async def extend(self, reservation_id: str, additional_tokens: int) -> None:
-        del reservation_id, additional_tokens
+    async def extend(
+        self,
+        reservation_id: str,
+        additional_tokens: int,
+        *,
+        workspace_id: str | None = None,
+    ) -> None:
+        del reservation_id, additional_tokens, workspace_id
 
     async def renew(self, reservation_id: str) -> bool:
         del reservation_id

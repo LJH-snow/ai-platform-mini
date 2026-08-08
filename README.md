@@ -635,7 +635,9 @@ RATE_LIMIT_PER_MINUTE=60
 # Token quota (0 = disabled)
 QUOTA_DAILY_TOKENS=0
 QUOTA_MONTHLY_TOKENS=0
-# key = per-key limits (default); workspace = workspace-shared limits
+# key = per-key limits (default, byte-identical legacy); workspace =
+# workspace-shared limits (workspace-bound keys aggregate; legacy keys
+# stay key-scoped). Switching writes fresh reservations immediately.
 QUOTA_SCOPE=key
 QUOTA_RESERVATION_TTL_SECONDS=600
 QUOTA_RESERVATION_RENEWAL_SECONDS=60

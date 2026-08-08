@@ -145,9 +145,12 @@ class PostgresQuotaRepository:
                 if reservation_key_row[1] is not None
                 else None
             )
+            lock_value = (
+                f"ws:{stored_workspace}" if stored_workspace is not None else stored_key
+            )
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(:lock)"),
-                {"lock": _advisory_lock_int(stored_key)},
+                {"lock": _advisory_lock_int(lock_value)},
             )
             reservation_result = await session.execute(
                 text(

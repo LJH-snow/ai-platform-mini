@@ -39,6 +39,12 @@ class QuotaService:
 
         reservation_id = uuid.uuid4().hex
         daily_limit, monthly_limit = await self._resolve_limits(workspace_id)
+        # The judgement dimension follows the scope: workspace mode
+        # aggregates by workspace, key mode stays byte-identical even
+        # when the caller supplies a workspace id.
+        dimension_workspace_id = (
+            workspace_id if self._config.quota_scope == "workspace" else None
+        )
 
         result = await self._quota_repo.create_reservation(
             reservation_id=reservation_id,
@@ -48,7 +54,7 @@ class QuotaService:
             daily_limit=daily_limit,
             monthly_limit=monthly_limit,
             reservation_ttl_seconds=self._config.reservation_ttl_seconds,
-            workspace_id=workspace_id,
+            workspace_id=dimension_workspace_id,
             lock_key=self._lock_key(api_key_hash, workspace_id),
         )
 
@@ -83,12 +89,15 @@ class QuotaService:
         if not self._config.enabled or additional_tokens <= 0:
             return
         daily_limit, monthly_limit = await self._resolve_limits(workspace_id)
+        dimension_workspace_id = (
+            workspace_id if self._config.quota_scope == "workspace" else None
+        )
         result = await self._quota_repo.extend_reservation(
             reservation_id=reservation_id,
             additional_tokens=additional_tokens,
             daily_limit=daily_limit,
             monthly_limit=monthly_limit,
-            workspace_id=workspace_id,
+            workspace_id=dimension_workspace_id,
         )
         now = datetime.now(UTC)
         if result is ReservationResult.DAILY_LIMIT:
