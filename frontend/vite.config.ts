@@ -26,10 +26,6 @@ const createDevApiProxy = (): ProxyOptions => {
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
   plugins: [react()],
-  test: {
-    testTimeout: 10_000,
-    hookTimeout: 10_000,
-  },
   ...(command === 'serve'
     ? {
         server: {

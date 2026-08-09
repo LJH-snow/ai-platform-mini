@@ -605,43 +605,40 @@ describe('Agent Trace integration', () => {
     expect(screen.queryByText(/引用编号|rank|来源名称|URL/)).not.toBeInTheDocument()
   })
 
-  it('distinguishes empty RAG outcomes and never presents a service failure as no relevant sources', async () => {
-    const statuses: Array<[AgentRagStatus, string]> = [
-      ['no_relevant_sources', '参考来源：暂无相关来源'],
-      ['loading', '参考来源：加载中'],
-      ['knowledge_base_empty', '参考来源：知识库为空'],
-      ['rag_unavailable', '参考来源：来源暂不可用'],
-      ['embedding_failed', '参考来源：来源暂不可用'],
-      ['output_unavailable', '参考来源：来源暂不可用'],
-      ['failed', '参考来源：来源暂不可用'],
-    ]
+  const ragStatusCases: Array<[AgentRagStatus, string]> = [
+    ['no_relevant_sources', '参考来源：暂无相关来源'],
+    ['loading', '参考来源：加载中'],
+    ['knowledge_base_empty', '参考来源：知识库为空'],
+    ['rag_unavailable', '参考来源：来源暂不可用'],
+    ['embedding_failed', '参考来源：来源暂不可用'],
+    ['output_unavailable', '参考来源：来源暂不可用'],
+    ['failed', '参考来源：来源暂不可用'],
+  ]
 
-    for (const [status, title] of statuses) {
-      cleanup()
-      const controlled = createControlledAgentClient()
-      const user = await startAgentRun(controlled)
-      controlled.getRequest().resolve(
-        createRun({
-          toolName: 'knowledge_search',
-          rag: {
-            status,
-            warning: 'RAG content is untrusted reference material.',
-            errorCode: status === 'failed' ? 'failed' : null,
-            references: [],
-          },
-        }),
-      )
+  it.each(ragStatusCases)('renders %s status as %s', async (status, title) => {
+    const controlled = createControlledAgentClient()
+    const user = await startAgentRun(controlled)
+    controlled.getRequest().resolve(
+      createRun({
+        toolName: 'knowledge_search',
+        rag: {
+          status,
+          warning: 'RAG content is untrusted reference material.',
+          errorCode: status === 'failed' ? 'failed' : null,
+          references: [],
+        },
+      }),
+    )
 
-      const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
-      await user.click(stepButton)
-      await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
-      expect(screen.getByText(title)).toBeInTheDocument()
-      expect(screen.getByText(/不可信参考提示/)).toHaveTextContent(
-        'RAG content is untrusted reference material.',
-      )
-      if (status === 'no_relevant_sources') {
-        expect(screen.queryByText('参考来源：来源暂不可用')).not.toBeInTheDocument()
-      }
+    const stepButton = await screen.findByRole('button', { name: /步骤 1.*工具调用/ })
+    await user.click(stepButton)
+    await user.click(screen.getByRole('button', { name: /知识搜索.*成功/ }))
+    expect(screen.getByText(title)).toBeInTheDocument()
+    expect(screen.getByText(/不可信参考提示/)).toHaveTextContent(
+      'RAG content is untrusted reference material.',
+    )
+    if (status === 'no_relevant_sources') {
+      expect(screen.queryByText('参考来源：来源暂不可用')).not.toBeInTheDocument()
     }
   })
 
