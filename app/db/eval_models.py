@@ -22,6 +22,7 @@ class RAGEvaluationRunTable(Base):
     context_recall_at_k: Mapped[float | None] = mapped_column(Float, nullable=True)
     document_recall_at_k: Mapped[float | None] = mapped_column(Float, nullable=True)
     chunk_recall_at_k: Mapped[float | None] = mapped_column(Float, nullable=True)
+    context_mrr_at_k: Mapped[float | None] = mapped_column(Float, nullable=True)
     answer_correctness_accuracy: Mapped[float | None] = mapped_column(
         Float, nullable=True
     )

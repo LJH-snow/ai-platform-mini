@@ -18,6 +18,7 @@ from app.evals import (
     context_recall_at_k,
     rag_dataset_to_jsonl,
     read_rag_golden_dataset,
+    reciprocal_rank_at_k,
     write_rag_golden_dataset,
 )
 from app.evals.retrievers import (
@@ -120,6 +121,20 @@ def test_context_recall_at_k_is_deterministic_and_validated() -> None:
         context_recall_at_k(("c1",), ("c1",), k=0)
 
 
+def test_reciprocal_rank_at_k_is_deterministic_and_validated() -> None:
+    assert reciprocal_rank_at_k(("d2",), ("d1", "d2")) == pytest.approx(0.5)
+    assert reciprocal_rank_at_k(("d1",), ("d3", "d4")) == 0.0
+    assert reciprocal_rank_at_k(("d1",), ("d1", "d2")) == 1.0
+    assert reciprocal_rank_at_k(("d2",), ("d1", "d2"), k=1) == 0.0
+    assert reciprocal_rank_at_k(("d2",), ("d1", "d1", "d2")) == pytest.approx(0.5)
+    assert reciprocal_rank_at_k(("d1",), ()) == 0.0
+
+    with pytest.raises(ValueError, match="expected_ids"):
+        reciprocal_rank_at_k((), ())
+    with pytest.raises(ValueError, match="positive integer"):
+        reciprocal_rank_at_k(("d1",), ("d1",), k=0)
+
+
 def test_rag_case_jsonl_round_trip_and_fixture_load() -> None:
     cases = (
         RAGEvalCase(
@@ -179,6 +194,9 @@ async def test_rag_runner_computes_case_and_aggregate_metrics() -> None:
     assert report.summary.context_recall_at_k == pytest.approx(0.5)
     assert report.summary.document_recall_at_k == pytest.approx(5 / 7)
     assert report.summary.chunk_recall_at_k == pytest.approx(2.5 / 6)
+    assert report.summary.context_mrr_at_k == pytest.approx(4 / 7)
+    assert report.summary.document_mrr_at_k == pytest.approx(5 / 7)
+    assert report.summary.content_mrr_at_k is None
     assert report.summary.answer_correctness_accuracy == 1.0
     assert report.summary.answer_correctness_case_count == 1
     assert report.summary.average_retrieved_chunks == 1.0
@@ -187,19 +205,28 @@ async def test_rag_runner_computes_case_and_aggregate_metrics() -> None:
     assert by_id["rag-full-hit"].context_recall_at_k == 1.0
     assert by_id["rag-full-hit"].document_recall_at_k == 1.0
     assert by_id["rag-partial-hit"].context_recall_at_k == pytest.approx(0.5)
+    assert by_id["rag-partial-hit"].chunk_recall_at_k == pytest.approx(0.5)
+    assert by_id["rag-partial-hit"].chunk_mrr_at_k == 1.0
     assert by_id["rag-doc-level"].context_recall_at_k == 1.0
     assert by_id["rag-no-hit"].context_recall_at_k == 0.0
     assert by_id["rag-k-truncated"].context_recall_at_k == 0.0
+    assert by_id["rag-k-truncated"].context_mrr_at_k == 0.0
+    assert by_id["rag-k-truncated"].document_mrr_at_k == 1.0
     assert by_id["rag-k-truncated"].retrieved_count == 1
     assert by_id["rag-answer-check"].answer_correct is True
     assert by_id["rag-answer-check"].context_recall_at_k == 1.0
+    assert by_id["rag-full-hit"].context_mrr_at_k == 1.0
 
     assert by_id["rag-no-sources"].status == "no_sources"
     assert by_id["rag-no-sources"].success is False
     assert by_id["rag-no-sources"].context_recall_at_k == 0.0
+    assert by_id["rag-no-sources"].context_mrr_at_k == 0.0
+    assert by_id["rag-no-hit"].document_mrr_at_k == 0.0
     assert by_id["rag-failed"].status == "failed"
     assert by_id["rag-failed"].error == "RuntimeError"
     assert by_id["rag-failed"].context_recall_at_k is None
+    assert by_id["rag-failed"].context_mrr_at_k is None
+    assert by_id["rag-failed"].document_mrr_at_k is None
 
 
 @pytest.mark.asyncio
@@ -223,6 +250,7 @@ async def test_rag_runner_fail_fast_and_report_serialization_are_safe() -> None:
     serialized = full.to_json()
     payload = json.loads(serialized)
     assert payload["summary"]["case_count"] == 8
+    assert "context_mrr_at_k" in payload["summary"]
     assert '"content":' not in serialized
     assert "owner_key_hash" not in serialized
     assert payload["results"][0]["expected_chunk_ids"]
@@ -467,6 +495,10 @@ async def test_rag_ci_regression_meets_thresholds() -> None:
     assert summary.context_recall_at_k >= 0.4
     assert summary.document_recall_at_k is not None
     assert summary.document_recall_at_k >= 0.4
+    assert summary.context_mrr_at_k is not None
+    assert summary.context_mrr_at_k >= 0.4
+    assert summary.document_mrr_at_k is not None
+    assert summary.document_mrr_at_k >= 0.4
     assert summary.chunk_recall_at_k is not None
     assert summary.chunk_recall_at_k >= 0.2
     assert summary.answer_correctness_accuracy == 1.0

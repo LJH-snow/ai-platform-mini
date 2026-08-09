@@ -53,8 +53,30 @@ async def test_content_expectation_hits_when_reference_contains_fragment() -> No
     report = await runner.run([case])
 
     assert report.results[0].content_hit is True
+    assert report.results[0].content_mrr_at_k == 1.0
     assert report.summary.content_hit_rate == 1.0
+    assert report.summary.content_mrr_at_k == 1.0
     assert report.summary.content_expected_count == 1
+
+
+async def test_content_expectation_mrr_rank_two_hit() -> None:
+    case = RAGEvalCase(
+        case_id="ci-rank2",
+        query="E10023 错误码",
+        expected_content_contains="E10023",
+    )
+    runner = RAGEvaluationRunner(
+        _retrieve(
+            _reference("c1", "完全无关的文本"),
+            _reference("c2", "E10023 错误码处理指南"),
+        )
+    )
+
+    report = await runner.run([case])
+
+    assert report.results[0].content_hit is True
+    assert report.results[0].content_mrr_at_k == pytest.approx(0.5)
+    assert report.summary.content_mrr_at_k == pytest.approx(0.5)
 
 
 async def test_content_expectation_misses_when_fragment_absent() -> None:
@@ -68,7 +90,9 @@ async def test_content_expectation_misses_when_fragment_absent() -> None:
     report = await runner.run([case])
 
     assert report.results[0].content_hit is False
+    assert report.results[0].content_mrr_at_k == 0.0
     assert report.summary.content_hit_rate == 0.0
+    assert report.summary.content_mrr_at_k == 0.0
 
 
 async def test_content_expectation_ignored_when_not_configured() -> None:
@@ -78,7 +102,9 @@ async def test_content_expectation_ignored_when_not_configured() -> None:
     report = await runner.run([case])
 
     assert report.results[0].content_hit is None
+    assert report.results[0].content_mrr_at_k is None
     assert report.summary.content_hit_rate is None
+    assert report.summary.content_mrr_at_k is None
     assert report.summary.content_expected_count == 0
 
 

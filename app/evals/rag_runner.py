@@ -16,6 +16,7 @@ from app.evals.rag_models import (
     RetrievalOutcome,
     RetrievalReference,
     context_recall_at_k,
+    reciprocal_rank_at_k,
 )
 from app.evals.stats import average, percentile
 
@@ -100,6 +101,24 @@ def _evaluate_rag_case(
         else None
     )
     context_recall = chunk_recall if case.chunk_ids else document_recall
+    document_mrr = (
+        reciprocal_rank_at_k(case.document_ids, retrieved_documents)
+        if case.document_ids
+        else None
+    )
+    chunk_mrr = (
+        reciprocal_rank_at_k(case.chunk_ids, retrieved_chunks)
+        if case.chunk_ids
+        else None
+    )
+    context_mrr = chunk_mrr if case.chunk_ids else document_mrr
+    content_mrr: float | None = None
+    if case.expected_content_contains:
+        content_mrr = 0.0
+        for rank, reference in enumerate(selected, start=1):
+            if case.expected_content_contains in (reference.content or ""):
+                content_mrr = 1.0 / rank
+                break
     answer_correct = (
         None
         if case.answer_fragments is None
@@ -123,6 +142,10 @@ def _evaluate_rag_case(
         document_recall_at_k=document_recall,
         chunk_recall_at_k=chunk_recall,
         context_recall_at_k=context_recall,
+        document_mrr_at_k=document_mrr,
+        chunk_mrr_at_k=chunk_mrr,
+        context_mrr_at_k=context_mrr,
+        content_mrr_at_k=content_mrr,
         answer_correct=answer_correct,
         content_hit=content_hit,
         top_k=case.top_k,
@@ -151,6 +174,10 @@ def _failed_rag_case_result(
         document_recall_at_k=None,
         chunk_recall_at_k=None,
         context_recall_at_k=None,
+        document_mrr_at_k=None,
+        chunk_mrr_at_k=None,
+        context_mrr_at_k=None,
+        content_mrr_at_k=None,
         answer_correct=(False if case.answer_fragments is not None else None),
         top_k=case.top_k,
         latency_ms=latency_ms,
@@ -211,6 +238,15 @@ def _build_rag_report(results: tuple[RAGEvalCaseResult, ...]) -> RAGReport:
         p95_latency_ms=percentile(
             [result.latency_ms for result in results],
             percentile=0.95,
+        ),
+        document_mrr_at_k=_average_metric(
+            [result.document_mrr_at_k for result in results]
+        ),
+        context_mrr_at_k=_average_metric(
+            [result.context_mrr_at_k for result in results]
+        ),
+        content_mrr_at_k=_average_metric(
+            [result.content_mrr_at_k for result in results]
         ),
         content_hit_rate=_average_bool(
             [result.content_hit for result in results if result.content_hit is not None]

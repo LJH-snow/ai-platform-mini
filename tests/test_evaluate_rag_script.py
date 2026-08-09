@@ -190,6 +190,9 @@ def _sample_summary() -> RAGSummary:
         answer_correctness_case_count=0,
         average_retrieved_chunks=0.0,
         p95_latency_ms=1.0,
+        document_mrr_at_k=None,
+        context_mrr_at_k=None,
+        content_mrr_at_k=None,
     )
 
 
@@ -206,6 +209,10 @@ def test_rag_script_markdown_escapes_user_fields() -> None:
         document_recall_at_k=0.0,
         chunk_recall_at_k=0.0,
         context_recall_at_k=0.0,
+        document_mrr_at_k=0.0,
+        chunk_mrr_at_k=0.0,
+        context_mrr_at_k=0.0,
+        content_mrr_at_k=0.0,
         answer_correct=None,
         top_k=None,
         latency_ms=1.0,
@@ -225,6 +232,12 @@ def test_rag_script_markdown_escapes_user_fields() -> None:
     assert "p \\| q" in markdown
     assert "\\n" in markdown
     assert "\\r" in markdown
+    assert "- Context MRR@k:" in markdown
+    assert "- Document MRR@k:" in markdown
+    assert "- Content MRR@k:" in markdown
+    assert "- Context MRR: 0.000" in markdown
+    assert "- Document MRR: 0.000" in markdown
+    assert "- Content MRR: 0.000" in markdown
     assert "`c`" not in markdown
     assert "`x`" not in markdown
 
@@ -241,6 +254,9 @@ async def test_rag_script_persists_run_record(tmp_path: Path) -> None:
             context_recall_at_k=0.6,
             document_recall_at_k=0.7,
             chunk_recall_at_k=0.8,
+            document_mrr_at_k=0.7,
+            context_mrr_at_k=0.6,
+            content_mrr_at_k=None,
             answer_correctness_accuracy=1.0,
             answer_correctness_case_count=1,
             average_retrieved_chunks=1.5,
@@ -257,6 +273,7 @@ async def test_rag_script_persists_run_record(tmp_path: Path) -> None:
         context_recall_at_k=report.summary.context_recall_at_k,
         document_recall_at_k=report.summary.document_recall_at_k,
         chunk_recall_at_k=report.summary.chunk_recall_at_k,
+        context_mrr_at_k=report.summary.context_mrr_at_k,
         answer_correctness_accuracy=report.summary.answer_correctness_accuracy,
         answer_correctness_case_count=report.summary.answer_correctness_case_count,
         average_retrieved_chunks=report.summary.average_retrieved_chunks,
@@ -269,6 +286,7 @@ async def test_rag_script_persists_run_record(tmp_path: Path) -> None:
     assert saved.retriever == "embedding"
     assert saved.case_count == 2
     assert saved.retrieval_success_rate == 0.5
+    assert saved.context_mrr_at_k == report.summary.context_mrr_at_k
     assert saved.created_at is not None
 
     recent = await repo.list_recent(limit=10)

@@ -18,6 +18,7 @@ class RAGEvaluationRun:
     context_recall_at_k: float | None
     document_recall_at_k: float | None
     chunk_recall_at_k: float | None
+    context_mrr_at_k: float | None
     answer_correctness_accuracy: float | None
     answer_correctness_case_count: int
     average_retrieved_chunks: float

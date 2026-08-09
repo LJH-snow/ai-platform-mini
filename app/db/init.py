@@ -220,6 +220,30 @@ async def migrate_benchmark_schema(engine: AsyncEngine) -> None:
         logger.info("migrate_benchmark_schema: added workspace_id column")
 
 
+async def migrate_rag_evals_schema(engine: AsyncEngine) -> None:
+    """Idempotent migration adding context MRR to RAG evaluation runs."""
+    async with engine.begin() as conn:
+        if not await _table_exists(conn, "rag_evaluation_runs"):
+            return
+        result = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'rag_evaluation_runs' "
+                "AND column_name = 'context_mrr_at_k' "
+                "AND table_schema = current_schema()"
+            )
+        )
+        if result.first() is not None:
+            return
+        await conn.execute(
+            text(
+                "ALTER TABLE rag_evaluation_runs "
+                "ADD COLUMN context_mrr_at_k DOUBLE PRECISION"
+            )
+        )
+        logger.info("migrate_rag_evals_schema: added context_mrr_at_k column")
+
+
 async def migrate_quota_schema(engine: AsyncEngine) -> None:
     """Idempotent migration adding workspace scoping to quota reservations."""
     async with engine.begin() as conn:
@@ -361,6 +385,8 @@ async def init_db(
         await migrate_auth_schema(_engine)
         # Upgrade pre-existing benchmark tables that predate workspace scoping.
         await migrate_benchmark_schema(_engine)
+        # Upgrade pre-existing RAG evaluation runs that predate context MRR.
+        await migrate_rag_evals_schema(_engine)
         # Upgrade pre-existing run records that predate workspace scoping.
         await migrate_run_records_schema(_engine)
         # Upgrade pre-existing usage rows that predate workspace scoping.

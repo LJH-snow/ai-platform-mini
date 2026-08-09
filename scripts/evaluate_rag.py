@@ -406,6 +406,13 @@ def _build_markdown(
         f"- Context recall@k: {_format_metric(summary.context_recall_at_k)}",
         f"- Document recall@k: {_format_metric(summary.document_recall_at_k)}",
         f"- Chunk recall@k: {_format_metric(summary.chunk_recall_at_k)}",
+        f"- Context MRR@k: {_format_metric(summary.context_mrr_at_k)}",
+        f"- Document MRR@k: {_format_metric(summary.document_mrr_at_k)}",
+        (
+            "- Content MRR@k: "
+            f"{_format_metric(summary.content_mrr_at_k)}"
+            f" ({summary.content_expected_count} content cases)"
+        ),
         (
             "- Answer correctness accuracy: "
             f"{_format_metric(summary.answer_correctness_accuracy)}"
@@ -448,6 +455,9 @@ def _build_markdown(
         lines.append(
             f"- Retrieved documents: `{_format_ids(result.retrieved_document_ids)}`"
         )
+        lines.append(f"- Context MRR: {_format_metric(result.context_mrr_at_k)}")
+        lines.append(f"- Document MRR: {_format_metric(result.document_mrr_at_k)}")
+        lines.append(f"- Content MRR: {_format_metric(result.content_mrr_at_k)}")
         if result.error is not None:
             lines.append(f"- Error: `{_escape_markdown(result.error)}`")
         lines.append("")
@@ -521,6 +531,7 @@ async def _persist_run(
         context_recall_at_k=summary.context_recall_at_k,
         document_recall_at_k=summary.document_recall_at_k,
         chunk_recall_at_k=summary.chunk_recall_at_k,
+        context_mrr_at_k=summary.context_mrr_at_k,
         answer_correctness_accuracy=summary.answer_correctness_accuracy,
         answer_correctness_case_count=summary.answer_correctness_case_count,
         average_retrieved_chunks=summary.average_retrieved_chunks,
