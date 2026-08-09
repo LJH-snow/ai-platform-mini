@@ -171,3 +171,61 @@ describe('createWorkflowClient', () => {
     await expect(client.getStatus('abc')).rejects.toBeInstanceOf(WorkflowApiError)
   })
 })
+
+describe('listRuns', () => {
+  it('returns the raw array without single-status parsing', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            thread_id: 't-2',
+            status: 'completed',
+            stage: 'completed',
+            filename: 'two.pdf',
+            report_topic: null,
+            created_at: '2026-01-02T00:00:00Z',
+          },
+          {
+            thread_id: 't-1',
+            status: 'pending_approval',
+            stage: 'awaiting_approval',
+            filename: 'one.pdf',
+            report_topic: 'Topic',
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ]),
+        { status: 200 },
+      ),
+    )
+
+    const client = createWorkflowClient({
+      apiBaseUrl: 'http://test',
+      apiKey: 'k',
+      fetchImpl,
+    })
+    const runs = await client.listRuns(20)
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://test/api/v1/workflows?limit=20',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer k' }) }),
+    )
+    expect(runs).toHaveLength(2)
+    expect(runs[0]).toEqual({
+      threadId: 't-2',
+      status: 'completed',
+      stage: 'completed',
+      filename: 'two.pdf',
+      reportTopic: null,
+      createdAt: '2026-01-02T00:00:00Z',
+    })
+  })
+
+  it('returns an empty list when the payload is not an array', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ detail: 'Not Found' }), { status: 404 }),
+    )
+    const client = createWorkflowClient({ apiBaseUrl: 'http://test', apiKey: 'k', fetchImpl })
+
+    await expect(client.listRuns(20)).rejects.toThrow(WorkflowApiError)
+  })
+})

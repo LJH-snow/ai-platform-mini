@@ -27,7 +27,6 @@ from app.exceptions.base import (
     WorkflowNotFoundError,
 )
 from app.rag.pdf_extractor import normalize_pdf_filename
-from app.workflows.models import WorkflowRun
 from app.workflows.models import WorkflowRun, WorkflowRunStage, WorkflowRunStatus
 from app.workflows.pdf_report import PDFReportState, PDFReportWorkflow
 from app.workflows.repository import WorkflowRunRepository

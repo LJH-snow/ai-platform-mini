@@ -107,13 +107,13 @@ const parseStatus = (payload: unknown): WorkflowStatus => {
   return result
 }
 
-const jsonRequest = async (
+const rawRequest = async (
   fetchImpl: typeof fetch,
   baseUrl: string | undefined,
   apiKey: string | undefined,
   path: string,
   init: RequestInit = {},
-): Promise<WorkflowStatus> => {
+): Promise<unknown> => {
   let response: Response
   try {
     response = await fetchImpl(joinUrl(baseUrl, path), {
@@ -139,12 +139,19 @@ const jsonRequest = async (
   }
 
   try {
-    const payload = await response.json()
-    return parseStatus(payload)
+    return await response.json()
   } catch {
     throw new WorkflowApiError('工作流服务返回了无法识别的响应。', 0)
   }
 }
+
+const jsonRequest = async (
+  fetchImpl: typeof fetch,
+  baseUrl: string | undefined,
+  apiKey: string | undefined,
+  path: string,
+  init: RequestInit = {},
+): Promise<WorkflowStatus> => parseStatus(await rawRequest(fetchImpl, baseUrl, apiKey, path, init))
 
 export const createWorkflowClient = (options: WorkflowClientOptions = {}) => {
   const fetchImpl = options.fetchImpl ?? fetch
@@ -166,7 +173,7 @@ export const createWorkflowClient = (options: WorkflowClientOptions = {}) => {
     },
 
     async listRuns(limit = 20): Promise<WorkflowRunSummary[]> {
-      const records = await jsonRequest(
+      const records = await rawRequest(
         fetchImpl,
         apiBaseUrl,
         apiKey,

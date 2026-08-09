@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Annotated
-
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from pydantic import BaseModel
