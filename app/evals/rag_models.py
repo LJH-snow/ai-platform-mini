@@ -59,6 +59,38 @@ def context_recall_at_k(
     return hits / len(expected)
 
 
+def reciprocal_rank_at_k(
+    expected_ids: Sequence[str],
+    retrieved_ids: Sequence[str],
+    *,
+    k: int | None = None,
+) -> float:
+    """Return the reciprocal rank of the first expected hit within top-k.
+
+    Follows TREC first-hit semantics: the score is 1 divided by the 1-based
+    rank of the first retrieved ID that matches an expected ID, or 0.0 when
+    no expected ID is found. Retrieved IDs are de-duplicated in first-seen
+    order so repeated references cannot inflate the rank. When ``k`` is
+    omitted, all retrieved IDs are considered.
+    """
+
+    if k is not None:
+        if not isinstance(k, int) or isinstance(k, bool) or k <= 0:
+            raise ValueError("k must be a positive integer when provided")
+    if any(not isinstance(item, str) or not item.strip() for item in expected_ids):
+        raise ValueError("expected_ids must contain non-empty strings")
+    if any(not isinstance(item, str) or not item.strip() for item in retrieved_ids):
+        raise ValueError("retrieved_ids must contain non-empty strings")
+    expected = set(expected_ids)
+    if not expected:
+        raise ValueError("expected_ids must not be empty")
+    selected = retrieved_ids if k is None else retrieved_ids[:k]
+    for rank, retrieved_id in enumerate(dict.fromkeys(selected), start=1):
+        if retrieved_id in expected:
+            return 1.0 / rank
+    return 0.0
+
+
 @dataclass(frozen=True)
 class RAGEvalCase:
     """One serializable golden expectation for RAG retrieval quality.
@@ -351,6 +383,10 @@ class RAGEvalCaseResult:
     document_recall_at_k: float | None
     chunk_recall_at_k: float | None
     context_recall_at_k: float | None
+    document_mrr_at_k: float | None
+    chunk_mrr_at_k: float | None
+    context_mrr_at_k: float | None
+    content_mrr_at_k: float | None
     answer_correct: bool | None
     top_k: int | None
     latency_ms: float
@@ -375,6 +411,10 @@ class RAGEvalCaseResult:
             "document_recall_at_k": self.document_recall_at_k,
             "chunk_recall_at_k": self.chunk_recall_at_k,
             "context_recall_at_k": self.context_recall_at_k,
+            "document_mrr_at_k": self.document_mrr_at_k,
+            "chunk_mrr_at_k": self.chunk_mrr_at_k,
+            "context_mrr_at_k": self.context_mrr_at_k,
+            "content_mrr_at_k": self.content_mrr_at_k,
             "answer_correct": self.answer_correct,
             "top_k": self.top_k,
             "latency_ms": self.latency_ms,
@@ -396,6 +436,9 @@ class RAGSummary:
     answer_correctness_case_count: int
     average_retrieved_chunks: float
     p95_latency_ms: float
+    document_mrr_at_k: float | None
+    context_mrr_at_k: float | None
+    content_mrr_at_k: float | None
     content_hit_rate: float | None = None
     content_expected_count: int = 0
 
@@ -413,6 +456,9 @@ class RAGSummary:
             "answer_correctness_case_count": self.answer_correctness_case_count,
             "average_retrieved_chunks": self.average_retrieved_chunks,
             "p95_latency_ms": self.p95_latency_ms,
+            "document_mrr_at_k": self.document_mrr_at_k,
+            "context_mrr_at_k": self.context_mrr_at_k,
+            "content_mrr_at_k": self.content_mrr_at_k,
             "content_hit_rate": self.content_hit_rate,
             "content_expected_count": self.content_expected_count,
         }

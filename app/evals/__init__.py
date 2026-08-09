@@ -41,6 +41,7 @@ from app.evals.rag_models import (
     RetrievalOutcome,
     RetrievalReference,
     context_recall_at_k,
+    reciprocal_rank_at_k,
 )
 from app.evals.rag_runner import RAGEvaluationRunner, RunRAGCase
 from app.evals.repository import RAGEvaluationRepository, RAGEvaluationRun
@@ -90,6 +91,7 @@ __all__ = [
     "rag_dataset_to_jsonl",
     "read_golden_dataset",
     "read_rag_golden_dataset",
+    "reciprocal_rank_at_k",
     "save_golden_dataset",
     "save_rag_golden_dataset",
     "validate_golden_dataset",

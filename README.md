@@ -217,6 +217,9 @@ flowchart TB
 - **RAG 评估**：`context_recall_at_k` / `document_recall_at_k` /
   `chunk_recall_at_k`、检索成功率、p95 延迟；`evaluate_rag.py --compare`
   对 vector 与 hybrid 做相对门禁（CI `rag-golden` job 执行，防平凡真）
+- **RAG MRR@k**：`context/document/content MRR@k`（TREC first-hit 语义，
+  1/首个命中位置，未命中为 0）；`context_mrr_at_k` 落
+  `rag_evaluation_runs` 表持久化
 - **CI 回归 + 报表持久化**：`rag_evaluation_runs` 表持久化每次评估结果，
   CI 断言检索成功率/召回阈值；默认不引入 RAGAS（确定性优先，LLM judge
   留作可选扩展）
