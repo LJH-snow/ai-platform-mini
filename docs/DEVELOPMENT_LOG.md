@@ -575,3 +575,34 @@ OpenTelemetry metrics 与 traces 应共用同一配置入口（`TELEMETRY_ENABLE
   响应中的 LLM/Tool span 也能关联到正确的 request_id。`_instrument_stream` 的
   status_code bug 是典型的"正常路径和异常路径走同一 finally 分支但只用正常路径
   变量"的陷阱，修复方案用局部变量追踪有效状态，在 finally 中按条件分支。
+
+### Sprint E2 P1（Workflow Builder 引擎）
+
+- 新增 `app/workflows/engine/` 新引擎包（通用编排，与现有固定 PDF 工作流
+  `app/workflows/` 平级且完全独立）：`models.py`（`NodeType`/`WorkflowNode`/
+  `WorkflowEdge`/`WorkflowDefinition` + `from_dict`/`to_dict`、`NodeResult`、
+  `WorkflowRunResult`、`truncate_summary` 摘要截断纯函数）、`validation.py`
+  （`validate_definition` 中文错误消息、Kahn 拓扑无环、入边 ≤1、condition
+  branches 校验、模板引用存在性 + 拓扑序早于引用者、条件表达式三字面形式
+  正则校验；`render_template`/`evaluate_condition` 纯函数）、`executor.py`
+  （`NodeExecutor` Protocol 注入边界、`WorkflowEngine` 拓扑序串行执行、
+  condition 分支选择后仅执行选中目标、节点失败即停、output 节点值作为最终
+  输出）。
+- 分支边裁定：条件节点分支只由 `config.branches` 表达，不重复出现在
+  `edges`；校验与拓扑排序把 branch target 计入图边，若分支边重复出现在
+  edges 会因目标节点入边 >1 在校验期被拒绝——双源不一致在定义期拦截。
+- 引擎零依赖：不 import 任何服务实现（ChatService/RAGService/ToolExecutor/
+  AgentService 均不出现），所有外部能力经 `NodeExecutor` Protocol 注入；
+  未注册节点类型 → failed run + 中文报错。
+- 新增 `tests/test_workflow_engine.py` 30 个测试（14 校验 + 3 模板 + 5 条件 +
+  7 引擎 + roundtrip/truncate），全套 941 passed 基线零变化；ruff/mypy 全绿。
+
+#### Sprint E2 P1 学习总结
+
+工作流编排的第一波重点是"把不确定性挡在校验期"：拓扑排序、模板引用存在性、
+条件表达式白名单都在执行前 fail-fast，运行时只剩确定性执行路径。条件分支用
+`branches` 单一事实源、edges 只放无条件边，靠入边 ≤1 校验天然拒绝"两处都写"
+的不一致，比运行时检查更早暴露错误。引擎与服务的解耦通过 Protocol 注入完成，
+fake executor 让全部执行语义（分支选择、失败停止、摘要截断）都可以无外部依赖
+单测。摘要截断按字符而非字节计算，保证 CJK 文本 256 字符边界安全；截断标记
+`...[truncated]` 让审计记录可读且不落原始大 payload。

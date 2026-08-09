@@ -789,3 +789,6 @@ Sprint 1–16 的逐条交付、学习总结与 Code Review 沉淀见
    Docker 演示栈、Benchmark 前端
 5. **Sprint D/E**：Run 回放与用量仪表盘、共享配额、Billing/计划/Audit、
    工作流历史、用量导出
+6. **Sprint E2（进行中）**：Workflow Builder——通用编排引擎（定义模型 +
+   校验器 + 拓扑执行引擎，纯注入，P1 已完成），后续 P2 API/持久化、P3
+   React Flow 可视化编排
