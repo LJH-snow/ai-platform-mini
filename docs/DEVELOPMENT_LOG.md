@@ -606,3 +606,35 @@ OpenTelemetry metrics 与 traces 应共用同一配置入口（`TELEMETRY_ENABLE
 fake executor 让全部执行语义（分支选择、失败停止、摘要截断）都可以无外部依赖
 单测。摘要截断按字符而非字节计算，保证 CJK 文本 256 字符边界安全；截断标记
 `...[truncated]` 让审计记录可读且不落原始大 payload。
+
+### Sprint E2 P2（Workflow Builder API + 双存储 + 真实执行器）
+
+- 新增 `app/workflow_builder/` 业务包：`models.py`（WorkflowRecord /
+  WorkflowRunRecord）、`repository.py`（InMemory + Postgres 双实现，
+  `workflows` 与 `workflow_builder_runs` 两表，避开固定 PDF 流程的
+  `workflow_runs` 表）、`service.py`（CRUD / publish / unpublish / delete /
+  run + 审计）、`executors.py`（LLM / Knowledge / Tool / Agent 四类真实
+  NodeExecutor）、`execution_context.py`（用 ContextVar 注入单次运行的
+  workspace/api_key/request 上下文，引擎保持纯注入边界）。
+- 新增 `/api/v1/workflow-builder/workflows` 路由：创建/列表/详情/更新/
+  发布/取消发布/删除/试运行/运行历史；独立前缀避免与既有 PDF
+  `/api/v1/workflows` 路由的 `GET /{thread_id}` 冲突。
+- 发布即冻结：publish 校验后递增版本并保存快照，published 状态禁止直接
+  编辑/删除；每次运行在 `workflow_builder_runs` 落定义快照，后续编辑不
+  影响历史记录；`CancelledError` 持久化为 cancelled 后重新抛出。
+- Tool/Agent 节点在保存前做 workspace 级校验（工具注册表、工具启用状态、
+  Agent 存在性与启用状态），把运行期失败提前到定义期拦截。
+- 新增 `tests/test_workflow_builder.py` 与 `tests/test_workflow_builder_api.py`，
+  fakes 统一放 `tests/workflow_builder_fakes.py`（与 `tests/workflow_fakes.py`
+  同约定），覆盖 InMemory 仓储、真实执行器、服务语义、API 隔离/409/422、
+  发布快照与审计。
+
+#### Sprint E2 P2 学习总结
+
+通用 Workflow Builder 的关键教训是命名空间隔离：路由前缀用
+`/workflow-builder`，运行表用 `workflow_builder_runs`，从入口到存储都不与
+固定 PDF 流程抢地址。发布态冻结 + 运行快照把“定义可变”和“历史可回溯”分开，
+试运行始终有当时的定义可审计。把 Tool/Agent 的工作空间校验移到保存期，能
+提前拦截跨租户引用和禁用工具，而不是等执行时失败。真实执行器通过 ContextVar
+拿运行上下文，既守住引擎纯注入边界，又让每个 run 带上正确的 workspace/api_key。
+fakes 与 `workflow_fakes` 一样放进 `tests/`，避免根目录散落测试辅助模块。

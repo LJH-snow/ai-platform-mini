@@ -43,7 +43,16 @@ if TYPE_CHECKING:
     from app.services.agent_service import AgentService
     from app.services.chat_service import ChatService
     from app.services.workflow_service import PDFReportWorkflowService
+    from app.tools.registry import ToolRegistry
+    from app.workflow_builder.repository import (
+        WorkflowRepository,
+    )
+    from app.workflow_builder.repository import (
+        WorkflowRunRepository as BuilderWorkflowRunRepository,
+    )
+    from app.workflow_builder.service import WorkflowBuilderService
     from app.workflows.checkpointer import PostgresWorkflowCheckpointer
+    from app.workflows.engine.executor import WorkflowEngine
 
 
 @lru_cache
@@ -443,6 +452,32 @@ def provide_prompt_registry() -> PromptRegistryService:
 
 
 @lru_cache
+def provide_tool_registry() -> ToolRegistry:
+    """Provide the single runtime ToolRegistry used by validation and tools.
+
+    Built from the same seeds as the agent whitelist (calculator +
+    knowledge_search + MCP tools) so workflow-builder validation and the
+    runtime tool surface can never drift apart. Must NOT call
+    provide_agent_service() here to avoid a circular import.
+    """
+    from app.tools.calculator import CalculatorTool
+    from app.tools.registry import ToolRegistry
+
+    registry = ToolRegistry([CalculatorTool()])
+    rag_service = provide_rag_service()
+    if rag_service is not None:
+        from app.tools.knowledge_search import KnowledgeSearchTool
+
+        registry.register(KnowledgeSearchTool(rag_service=rag_service))
+    # MCP tools are also valid agent whitelist entries; register them so
+    # create/update tool_names validation matches the runtime registry.
+    # provide_mcp_manager() only depends on Settings, so no cycle here.
+    for tool in provide_mcp_manager().list_tools():
+        registry.register(tool)
+    return registry
+
+
+@lru_cache
 def provide_agent_definition_service() -> AgentDefinitionService:
     """Provide AgentDefinitionService with appropriate storage backend."""
     from app.agent_config.repository import (
@@ -459,25 +494,9 @@ def provide_agent_definition_service() -> AgentDefinitionService:
         )
     else:
         repo = InMemoryAgentDefinitionRepository()
-    # Build a lightweight ToolRegistry from seeds — must NOT call
-    # provide_agent_service() here to avoid a circular import.
-    from app.tools.calculator import CalculatorTool
-    from app.tools.registry import ToolRegistry
-
-    tool_registry = ToolRegistry([CalculatorTool()])
-    rag_service = provide_rag_service()
-    if rag_service is not None:
-        from app.tools.knowledge_search import KnowledgeSearchTool
-
-        tool_registry.register(KnowledgeSearchTool(rag_service=rag_service))
-    # MCP tools are also valid agent whitelist entries; register them so
-    # create/update tool_names validation matches the runtime registry.
-    # provide_mcp_manager() only depends on Settings, so no cycle here.
-    for tool in provide_mcp_manager().list_tools():
-        tool_registry.register(tool)
     return AgentDefinitionService(
         repository=repo,
-        tool_registry=tool_registry,
+        tool_registry=provide_tool_registry(),
         prompt_registry=provide_prompt_registry(),
         audit=provide_audit_service(),
         entitlement=provide_entitlement_service(),
@@ -509,6 +528,80 @@ def provide_agent_benchmark_runner() -> AgentBenchmarkRunner:
     )
 
 
+@lru_cache
+def provide_workflow_builder_repositories() -> tuple[
+    WorkflowRepository, BuilderWorkflowRunRepository
+]:
+    """Provide builder repositories (workflow + run) for the active backend."""
+    from app.workflow_builder.repository import (
+        InMemoryWorkflowRepository,
+        InMemoryWorkflowRunRepository,
+        PostgresWorkflowRepository,
+        PostgresWorkflowRunRepository,
+    )
+
+    settings = get_settings()
+    if settings.auth_storage == "postgres":
+        session_factory = provide_session_factory()
+        return PostgresWorkflowRepository(
+            session_factory
+        ), PostgresWorkflowRunRepository(session_factory)
+    return InMemoryWorkflowRepository(), InMemoryWorkflowRunRepository()
+
+
+@lru_cache
+def provide_workflow_builder_engine() -> WorkflowEngine:
+    """Provide the WorkflowEngine wired with the four real node executors.
+
+    input/condition/output nodes are handled natively by the engine; the
+    per-run workspace/api_key context flows to the executors through the
+    ``WorkflowExecutionContext`` ContextVar (the engine's context argument
+    is frozen to ``{}`` by P1 semantics).
+    """
+    from app.tools.executor import ToolExecutor
+    from app.workflow_builder.executors import (
+        AgentNodeExecutor,
+        KnowledgeNodeExecutor,
+        LlmNodeExecutor,
+        ToolNodeExecutor,
+    )
+    from app.workflows.engine.executor import WorkflowEngine
+    from app.workflows.engine.models import NodeType
+
+    return WorkflowEngine(
+        {
+            NodeType.LLM: LlmNodeExecutor(provide_chat_service()),
+            NodeType.KNOWLEDGE: KnowledgeNodeExecutor(provide_rag_service()),
+            NodeType.TOOL: ToolNodeExecutor(
+                ToolExecutor(
+                    provide_tool_registry(),
+                    granted_permissions=provide_mcp_manager().granted_permissions(),
+                )
+            ),
+            NodeType.AGENT: AgentNodeExecutor(
+                provide_agent_service(),
+                provide_agent_definition_service(),
+            ),
+        }
+    )
+
+
+@lru_cache
+def provide_workflow_builder_service() -> WorkflowBuilderService:
+    """Provide the WorkflowBuilderService with the real engine + storage."""
+    from app.workflow_builder.service import WorkflowBuilderService
+
+    workflow_repo, run_repo = provide_workflow_builder_repositories()
+    return WorkflowBuilderService(
+        workflow_repository=workflow_repo,
+        run_repository=run_repo,
+        engine=provide_workflow_builder_engine(),
+        tool_registry=provide_tool_registry(),
+        agent_definition_service=provide_agent_definition_service(),
+        audit=provide_audit_service(),
+    )
+
+
 def clear_container_cache() -> None:
     """Clear all lru_cache'd provider factories across the application.
 
@@ -530,6 +623,10 @@ def clear_container_cache() -> None:
 
     # Clear in reverse dependency order: dependents before their deps.
     provide_agent_benchmark_runner.cache_clear()
+    provide_workflow_builder_service.cache_clear()
+    provide_workflow_builder_engine.cache_clear()
+    provide_workflow_builder_repositories.cache_clear()
+    provide_tool_registry.cache_clear()
     provide_agent_definition_service.cache_clear()
     provide_prompt_registry.cache_clear()
     provide_entitlement_service.cache_clear()

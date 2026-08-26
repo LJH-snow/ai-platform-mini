@@ -31,6 +31,10 @@ from app.db.user_models import (
     WorkspaceMemberTable,
     WorkspaceTable,
 )
+from app.db.workflow_builder_models import (
+    WorkflowBuilderRunTable,
+    WorkflowTable,
+)
 from app.db.workflow_models import WorkflowRunTable
 
 logger = logging.getLogger(__name__)
@@ -56,6 +60,8 @@ _CORE_TABLES = [
     ConversationThreadTable,
     ConversationMessageTable,
     WorkflowRunTable,
+    WorkflowTable,
+    WorkflowBuilderRunTable,
     RAGEvaluationRunTable,
 ]
 
