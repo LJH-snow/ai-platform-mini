@@ -172,6 +172,7 @@ class WorkflowEngine:
             text = json.dumps(dict(variables_inputs(variables)), ensure_ascii=False)
             return NodeOutput(
                 output=text,
+                input_summary=truncate_summary(text),
                 output_summary=truncate_summary(text),
             )
         if node.type is NodeType.CONDITION:

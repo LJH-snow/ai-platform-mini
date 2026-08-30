@@ -167,6 +167,18 @@ flowchart TB
 - 不替换、不修改现有 `AgentRuntime` 与 Chat/Agent/OpenAI API；主 Agent 链路
   仍由自研 `AgentRuntime` 负责
 
+### Workflow Builder（通用可视化编排）
+
+- 通用串行 DAG 编排，与固定 PDF 工作流命名空间隔离：`app/workflows/engine/`
+  负责定义校验与执行引擎，`app/workflow_builder/` 提供 API/双存储/真实节点
+  执行器，React Flow 前端负责画布交互
+- 节点类型：`input` / `llm` / `knowledge` / `tool` / `condition` / `agent` /
+  `output`；保存前校验 DAG 无环、入边 ≤1、条件表达式三字面形式、模板引用
+  存在性与拓扑序；发布冻结版本，试运行落 run 快照
+- 前端入口：左侧导航 `Workflow Builder`，支持新建/编辑节点、画布连线、节点
+  配置表单、本地校验、保存/发布/取消发布/删除，以及 JSON 试运行并查看
+  `node_results` 时间线
+
 ### 多租户平台化：身份 / 工作空间 / 计费 / 审计
 
 - **身份**：`POST /api/v1/auth/register`、`POST /api/v1/auth/login`、
@@ -415,6 +427,16 @@ GitHub Actions（`.github/workflows/ci.yml`）4 个 job：
 | GET | `/api/v1/workflows/{thread_id}` | 工作流状态 |
 | POST | `/api/v1/workflows/{thread_id}/approve` | 批准并生成报告 |
 | POST | `/api/v1/workflows/{thread_id}/reject` | 带反馈拒绝并重新分析 |
+| POST | `/api/v1/workflow-builder/workflows` | 创建 Workflow Builder 草稿 |
+| GET | `/api/v1/workflow-builder/workflows` | Workflow Builder 列表 |
+| GET | `/api/v1/workflow-builder/workflows/{workflow_id}` | Workflow Builder 详情 |
+| PUT | `/api/v1/workflow-builder/workflows/{workflow_id}` | 更新 Workflow Builder 草稿 |
+| POST | `/api/v1/workflow-builder/workflows/{workflow_id}/publish` | 发布 Workflow Builder 版本 |
+| POST | `/api/v1/workflow-builder/workflows/{workflow_id}/unpublish` | 取消发布 |
+| POST | `/api/v1/workflow-builder/workflows/{workflow_id}/runs` | 试运行/运行工作流 |
+| GET | `/api/v1/workflow-builder/workflows/{workflow_id}/runs` | Workflow Builder 运行历史 |
+| GET | `/api/v1/workflow-builder/workflows/runs/{run_id}` | Workflow Builder 运行详情 |
+| DELETE | `/api/v1/workflow-builder/workflows/{workflow_id}` | 删除草稿 |
 
 ### Usage / Billing
 
@@ -730,11 +752,12 @@ app/
 ├── services/        # 业务逻辑
 ├── tools/           # Tool Protocol/Registry/Executor + 内置工具
 ├── usage/           # Token 用量（repository/service/collector）
-├── workflows/       # LangGraph PDF 报告工作流（graph/checkpointer/serde）
+├── workflow_builder/ # 通用 Workflow Builder API/双存储/真实节点执行器
+├── workflows/       # 固定 PDF 工作流；engine/ 为通用编排引擎
 └── main.py
 
 frontend/
-├── src/             # React 19 + TS（platform/admin/auth/agent/chat/workflow）
+├── src/             # React 19 + TS（platform/admin/auth/agent/chat/workflow/workflow-builder）
 ├── e2e/             # Playwright 端到端测试
 └── scripts/         # a11y smoke（真实 Chromium + axe）
 
@@ -789,7 +812,7 @@ Sprint 1–16 的逐条交付、学习总结与 Code Review 沉淀见
    Docker 演示栈、Benchmark 前端
 5. **Sprint D/E**：Run 回放与用量仪表盘、共享配额、Billing/计划/Audit、
    工作流历史、用量导出
-6. **Sprint E2（进行中）**：Workflow Builder——通用编排引擎（P1 已完成），
-   P2 完成 `/api/v1/workflow-builder` API、InMemory/Postgres 双存储与
-   LLM/Knowledge/Tool/Agent 四类真实节点执行器，后续 P3 React Flow
-   可视化编排
+6. **Sprint E2（已完成）**：Workflow Builder——P1 通用编排引擎、P2
+   `/api/v1/workflow-builder` API + InMemory/Postgres 双存储 + 真实节点执行器、
+   P3 React Flow 可视化编排全部完成（画布、节点配置、保存/发布/试运行、
+   `node_results` 时间线）

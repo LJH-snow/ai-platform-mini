@@ -638,3 +638,35 @@ fake executor 让全部执行语义（分支选择、失败停止、摘要截断
 提前拦截跨租户引用和禁用工具，而不是等执行时失败。真实执行器通过 ContextVar
 拿运行上下文，既守住引擎纯注入边界，又让每个 run 带上正确的 workspace/api_key。
 fakes 与 `workflow_fakes` 一样放进 `tests/`，避免根目录散落测试辅助模块。
+
+### Sprint E2 P3（Workflow Builder React Flow 前端）
+
+- 新增 `frontend/src/workflow-builder/`：`WorkflowBuilder.tsx` /
+  `WorkflowBuilder.css` / `canvas.ts` / `client.ts` / `types.ts`，并在
+  `frontend/src/App.tsx` 接入 `Workflow Builder` 导航与页面分支；安装
+  `@xyflow/react@12.11.5`。
+- 画布支持 7 种节点拖拽/点击添加、连线校验、选中节点配置表单（LLM /
+  知识库 / 工具 / 条件 / Agent / 输出）、删除节点，以及本地
+  `validateDefinitionForSave` 拦截缺模板、入边 >1、条件分支冲突和环。
+- 页面支持新建/保存草稿、更新、发布、取消发布、删除、JSON 试运行、运行历史
+  和 `node_results` 时间线；发布态在 UI 内禁止直接修改/删除，行为与后端一致。
+- 新增前端测试 `WorkflowBuilder.test.tsx` / `canvas.test.ts` / `client.test.ts`，
+  当前前端 21 个测试文件、257 个测试全部通过；TypeScript、Oxlint、Prettier、
+  Vite build 全绿。
+- 真实验证：使用内存后端完成注册 → CRUD → publish v2 → run completed →
+  history/detail → unpublish → delete；Playwright 桌面 1440x1000 与移动端
+  390x844 完成注册/新建/保存/发布/试运行，无横向溢出、无 console 警告。
+- 修复引擎摘要缺陷：`input` 节点未显式设置 `input_summary` 时会把
+  `canvas_position` 配置写成输入摘要；现在 input 节点摘要显示真实试运行输入，
+  并在 `tests/test_workflow_engine.py` 增加回归测试。
+
+#### Sprint E2 P3 学习总结
+
+P3 的关键是把后端确定的图模型映射为 React Flow 画布而不引入第二套执行语义：
+`canvas.ts` 负责定义与画布互转，`WorkflowBuilder` 只做交互和本地校验。条件节点
+保持设计决策，分支只通过 `config.branches` 配置，普通连线校验会把入边和分支
+目标冲突挡在保存前。试运行时间线直接展示后端 `node_results`，节点完成、失败和
+摘要都来自真实 run，不在前端补造状态。浏览器回归发现 input 节点摘要会落成
+`canvas_position` 配置而不是用户输入，根因在引擎默认摘要策略，修复放在后端并
+补单测，避免让 UI 侧掩盖数据语义。最终用真实 API + 桌面/移动端 Playwright
+全链路验证保存、发布、试运行和历史回看，证明前端只是编排能力的可视化边界。

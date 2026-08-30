@@ -1,6 +1,6 @@
 # Sprint E2：Workflow Builder（可视化编排，对标 Dify）
 
-状态：设计文档（待 review）
+状态：已完成（P1 引擎 / P2 API 与双存储 / P3 React Flow 前端）
 前置：Sprint E1 已闭环（Billing/Audit）；固定 PDF 工作流（app/workflows/）已有 checkpointer/运行状态机/协议化模型可复用；Agent/RAG/Tool 能力全部现成（作为节点复用）
 
 ---

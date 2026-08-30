@@ -49,11 +49,28 @@ import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
 import { createWorkflowClient } from './workflow/client.ts'
 import { WorkflowPanel } from './workflow/WorkflowPanel.tsx'
+import { WorkflowBuilder } from './workflow-builder/WorkflowBuilder.tsx'
+import { createWorkflowBuilderClient } from './workflow-builder/client.ts'
 import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
 type ConsoleMode = 'chat' | 'agent'
-type AppPage = 'dashboard' | 'console' | 'knowledge' | 'prompts' | 'models' | 'workflow' | 'admin' | 'members' | 'agents' | 'tools' | 'run' | 'usage' | 'runs' | 'billing'
+type AppPage =
+  | 'dashboard'
+  | 'console'
+  | 'knowledge'
+  | 'prompts'
+  | 'models'
+  | 'workflow'
+  | 'workflow-builder'
+  | 'admin'
+  | 'members'
+  | 'agents'
+  | 'tools'
+  | 'run'
+  | 'usage'
+  | 'runs'
+  | 'billing'
 type RequestStatus =
   | 'idle'
   | 'sending'
@@ -586,6 +603,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const workflowClient = useMemo(
     () =>
       createWorkflowClient({
+        apiBaseUrl: runtimeConfig.apiBaseUrl,
+        apiKey: effectiveApiKey,
+      }),
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
+  )
+  const workflowBuilderClient = useMemo(
+    () =>
+      createWorkflowBuilderClient({
         apiBaseUrl: runtimeConfig.apiBaseUrl,
         apiKey: effectiveApiKey,
       }),
@@ -1260,6 +1285,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       { id: 'dashboard', label: '平台概览', shortLabel: '概览' },
       { id: 'console', label: '对话工作台', shortLabel: '对话' },
       { id: 'workflow', label: 'PDF 工作流', shortLabel: '工作流' },
+      { id: 'workflow-builder', label: 'Workflow Builder', shortLabel: '编排' },
       { id: 'knowledge', label: '知识库', shortLabel: 'RAG' },
       { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
       { id: 'agents', label: 'Agent Studio', shortLabel: 'Agent' },
@@ -1486,11 +1512,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   }
   if (page === 'run' && replayRunId !== null) {
     return renderPlatformShell(
-      <RunDetail
-        client={configClient}
-        runId={replayRunId}
-        onBack={() => setPage('console')}
-      />,
+      <RunDetail client={configClient} runId={replayRunId} onBack={() => setPage('console')} />,
     )
   }
   if (page === 'models') {
@@ -1501,6 +1523,15 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   if (page === 'workflow') {
     return renderPlatformShell(
       <WorkflowPanel apiKeyConfigured={Boolean(effectiveApiKey)} client={workflowClient} />,
+    )
+  }
+  if (page === 'workflow-builder') {
+    return renderPlatformShell(
+      <WorkflowBuilder
+        apiKeyConfigured={Boolean(effectiveApiKey)}
+        client={workflowBuilderClient}
+        configClient={configClient}
+      />,
     )
   }
   if (page === 'members') {

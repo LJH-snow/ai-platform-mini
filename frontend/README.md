@@ -1,6 +1,6 @@
 # AI Platform Mini Frontend
 
-基于 Vite + React + TypeScript 的 AI 应用平台前端。当前包含平台概览、Chat SSE、Agent Run、RAG 知识库、Prompt Studio、模型目录和管理员审计入口；在保留阶段 2—5 能力的基础上，接入真实 Agent SSE、实时 Trace、Tool/RAG 状态和错误恢复边界。
+基于 Vite + React + TypeScript 的 AI 应用平台前端。当前包含平台概览、Chat SSE、Agent Run、RAG 知识库、Prompt Studio、模型目录、Workflow Builder 和管理员审计入口；在保留阶段 2—5 能力的基础上，接入真实 Agent SSE、实时 Trace、Tool/RAG 状态和错误恢复边界。
 
 ## HR 演示重点
 
@@ -152,6 +152,7 @@ npm run dev
 - **对话工作台**：继续使用真实 Chat SSE / Agent SSE，展示 Agent Trace、Tool Call、RAG 来源、Request ID 和错误恢复。
 - **Prompt Studio**：编辑四个内置模板，保存到浏览器 `localStorage`，并将演示问题带入对话工作台。
 - **模型目录**：调用 `/api/v1/models` 读取真实模型，不展示后端尚未实现的启动、停止、删除按钮。
+- **Workflow Builder**：React Flow 画布可视化编排 7 类节点，支持连线校验、节点配置、本地校验、保存/发布/取消发布/删除和试运行 `node_results` 时间线。
 - **管理员后台**：复用现有管理员 Key、Token 用量和 Agent Run 审计流程。
 
 如果没有 API Key，平台会显示需要配置的状态，不会把未验证的模型、请求次数或延迟写成真实指标。生产环境仍建议通过同源 BFF 或服务端代理持有高权限密钥。

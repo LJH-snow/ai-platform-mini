@@ -426,6 +426,26 @@ async def test_engine_full_pipeline_selects_condition_branch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_engine_input_node_summary_uses_user_input_not_config() -> None:
+    """input node summaries expose run inputs, never onboarding config."""
+    simple = definition(
+        [
+            node("n1", NodeType.INPUT, {"canvas_position": {"x": 0, "y": 0}}),
+            node("n2", NodeType.OUTPUT, {"output_template": "{{input.text}}"}),
+        ],
+        [edge("n1", "n2")],
+    )
+    engine = WorkflowEngine({})
+
+    result = await engine.run(simple, {"text": "hello"})
+
+    assert result.status is RunStatus.COMPLETED
+    input_result = result.node_results[0]
+    assert input_result.input_summary == '{"text": "hello"}'
+    assert input_result.output_summary == '{"text": "hello"}'
+
+
+@pytest.mark.asyncio
 async def test_engine_passes_previous_node_output_to_next_executor() -> None:
     """前一节点 output 在后一节点 prompt_template/变量中可用。"""
     llm_executor = RecordingExecutor(
