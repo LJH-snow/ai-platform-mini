@@ -32,6 +32,9 @@ from app.exceptions.base import (
     RAGUnavailableError,
     ValidationError,
 )
+from app.memory.models import MemoryItem
+from app.memory.service import MemoryService
+from app.memory.tenant import resolve_memory_owner_scope
 from app.observability.context import attach_request_id
 from app.observability.tracing import (
     get_tracer,
@@ -112,12 +115,14 @@ class _ChatServiceAgentModel:
         request: AgentRunRequest,
         tool_schemas: Sequence[Mapping[str, object]] = (),
         base_prompt: str | None = None,
+        memory_items: Sequence[MemoryItem] = (),
     ) -> None:
         self._chat_service = chat_service
         self._request = request
         self._tool_schemas = tuple(tool_schemas)
         self._require_knowledge_search = request.preset == "rag"
         self._base_prompt = base_prompt or self._default_base_prompt()
+        self._memory_items = tuple(memory_items)
         self.prompt_tokens: int | None = 0
         self.completion_tokens: int | None = 0
         self.actual_model = request.model or chat_service.default_model
@@ -307,9 +312,24 @@ class _ChatServiceAgentModel:
         tools_prompt = "\n\nAvailable tools:\n" + json.dumps(
             list(self._tool_schemas), ensure_ascii=False, sort_keys=True
         )
+        memory_block = self._build_memory_block()
+        base_prompt = f"{self._base_prompt}{tools_prompt}{memory_block}"
         if self._request.system_prompt:
-            return f"{self._request.system_prompt}\n\n{self._base_prompt}{tools_prompt}"
-        return f"{self._base_prompt}{tools_prompt}"
+            return f"{self._request.system_prompt}\n\n{base_prompt}"
+        return base_prompt
+
+    def _build_memory_block(self) -> str:
+        if not self._memory_items:
+            return ""
+        lines = [
+            f"- [{item.kind.value}] confidence={item.confidence:.1f}: "
+            f"{item.content[:512]}"
+            for item in self._memory_items
+        ]
+        return (
+            "\n\nLong-term memory (trusted, explicitly stored user context):\n"
+            + "\n".join(lines)
+        )
 
     def _build_transcript(self, state: AgentState) -> str:
         history = "\n".join(
@@ -395,6 +415,7 @@ class AgentService:
         recorder_factory: RunTraceRecorderFactory | None = None,
         prompt_registry: PromptRegistryService | None = None,
         agent_definition_service: AgentDefinitionService | None = None,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self._chat_service = chat_service
         self._quota_service = quota_service
@@ -413,6 +434,7 @@ class AgentService:
         )
         self._prompt_registry = prompt_registry
         self._agent_definition_service = agent_definition_service
+        self._memory_service = memory_service
 
     async def run(
         self,
@@ -541,6 +563,12 @@ class AgentService:
                 "The RAG preset requires RAG to be enabled and the "
                 "knowledge_search tool to be available."
             )
+        memory_items: Sequence[MemoryItem] = ()
+        if self._memory_service is not None:
+            memory_items = await self._memory_service.retrieve_for_agent(
+                resolve_memory_owner_scope(context.identity),
+                request.message,
+            )
         resolved_request = (
             request
             if run_model == request.model
@@ -551,6 +579,7 @@ class AgentService:
             resolved_request,
             run_registry.export_schemas(),
             base_prompt=base_prompt,
+            memory_items=memory_items,
         )
         initial_state = AgentState(
             run_id="quota-estimate",

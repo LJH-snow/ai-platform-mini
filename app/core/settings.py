@@ -43,8 +43,12 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     auth_storage: Literal["memory", "postgres"] = "memory"
     conversation_storage: Literal["memory", "postgres"] = "memory"
+    memory_storage: Literal["memory", "postgres"] = "memory"
     workflow_storage: Literal["memory", "postgres"] = "memory"
     initial_api_key: SecretStr = SecretStr("")
+
+    memory_context_items: int = Field(default=5, ge=0, le=20)
+    memory_context_max_chars: int = Field(default=3000, ge=100, le=20000)
 
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 60
@@ -147,6 +151,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"conversation_storage must be one of {allowed}, got '{v}'"
             )
+        return v
+
+    @field_validator("memory_storage")
+    @classmethod
+    def validate_memory_storage(cls, v: str) -> str:
+        allowed = {"memory", "postgres"}
+        if v not in allowed:
+            raise ValueError(f"memory_storage must be one of {allowed}, got '{v}'")
         return v
 
     @field_validator("workflow_storage")

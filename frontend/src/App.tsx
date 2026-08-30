@@ -51,6 +51,8 @@ import { createWorkflowClient } from './workflow/client.ts'
 import { WorkflowPanel } from './workflow/WorkflowPanel.tsx'
 import { WorkflowBuilder } from './workflow-builder/WorkflowBuilder.tsx'
 import { createWorkflowBuilderClient } from './workflow-builder/client.ts'
+import { MemoryPanel } from './memory/MemoryPanel.tsx'
+import { createMemoryClient } from './memory/client.ts'
 import { getRuntimeConfig } from './chat/config.ts'
 import type { ChatApiMessage, ChatMessage, ConversationSummary } from './chat/types.ts'
 
@@ -63,6 +65,7 @@ type AppPage =
   | 'models'
   | 'workflow'
   | 'workflow-builder'
+  | 'memory'
   | 'admin'
   | 'members'
   | 'agents'
@@ -611,6 +614,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const workflowBuilderClient = useMemo(
     () =>
       createWorkflowBuilderClient({
+        apiBaseUrl: runtimeConfig.apiBaseUrl,
+        apiKey: effectiveApiKey,
+      }),
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
+  )
+  const memoryClient = useMemo(
+    () =>
+      createMemoryClient({
         apiBaseUrl: runtimeConfig.apiBaseUrl,
         apiKey: effectiveApiKey,
       }),
@@ -1286,6 +1297,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       { id: 'console', label: '对话工作台', shortLabel: '对话' },
       { id: 'workflow', label: 'PDF 工作流', shortLabel: '工作流' },
       { id: 'workflow-builder', label: 'Workflow Builder', shortLabel: '编排' },
+      { id: 'memory', label: '长期记忆', shortLabel: '记忆' },
       { id: 'knowledge', label: '知识库', shortLabel: 'RAG' },
       { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
       { id: 'agents', label: 'Agent Studio', shortLabel: 'Agent' },
@@ -1531,6 +1543,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
         apiKeyConfigured={Boolean(effectiveApiKey)}
         client={workflowBuilderClient}
         configClient={configClient}
+      />,
+    )
+  }
+  if (page === 'memory') {
+    return renderPlatformShell(
+      <MemoryPanel
+        apiKeyConfigured={Boolean(effectiveApiKey)}
+        client={memoryClient}
       />,
     )
   }

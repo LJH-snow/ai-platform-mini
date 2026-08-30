@@ -10,6 +10,9 @@ from app.conversations.memory_repository import InMemoryConversationRepository
 from app.conversations.repository import ConversationRepository
 from app.conversations.service import ConversationService
 from app.core.settings import RAG_EMBEDDING_DIMENSIONS, get_settings
+from app.memory.memory_repository import InMemoryMemoryRepository
+from app.memory.repository import MemoryRepository
+from app.memory.service import MemoryService
 from app.providers.base import LLMProvider
 from app.providers.factory import create_llm_provider
 from app.quota.memory_repository import InMemoryQuotaRepository
@@ -113,6 +116,26 @@ def provide_conversation_repository() -> ConversationRepository:
 @lru_cache
 def provide_conversation_service() -> ConversationService:
     return ConversationService(repository=provide_conversation_repository())
+
+
+@lru_cache
+def provide_memory_repository() -> MemoryRepository:
+    settings = get_settings()
+    if settings.memory_storage == "postgres":
+        from app.memory.postgres_repository import PostgresMemoryRepository
+
+        return PostgresMemoryRepository(provide_session_factory())
+    return InMemoryMemoryRepository()
+
+
+@lru_cache
+def provide_memory_service() -> MemoryService:
+    settings = get_settings()
+    return MemoryService(
+        repository=provide_memory_repository(),
+        context_limit=settings.memory_context_items,
+        context_max_chars=settings.memory_context_max_chars,
+    )
 
 
 @lru_cache
@@ -378,6 +401,7 @@ def provide_agent_service() -> AgentService:
         granted_permissions=mcp_manager.granted_permissions(),
         prompt_registry=provide_prompt_registry(),
         agent_definition_service=provide_agent_definition_service(),
+        memory_service=provide_memory_service(),
     )
 
 
@@ -633,6 +657,8 @@ def clear_container_cache() -> None:
     provide_plan_service.cache_clear()
     provide_billing_repository.cache_clear()
     provide_audit_service.cache_clear()
+    provide_memory_service.cache_clear()
+    provide_memory_repository.cache_clear()
     provide_agent_service.cache_clear()
     provide_agent_run_record_service.cache_clear()
     provide_workflow_service.cache_clear()

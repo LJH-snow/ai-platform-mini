@@ -1,0 +1,257 @@
+.memoryPanel {
+  min-height: 0;
+}
+
+.memoryPanelHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+
+.memoryPanelHeader h2 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.memoryPanelHeader p {
+  margin: 0;
+  color: #6b7280;
+}
+
+.memorySearch {
+  display: flex;
+  gap: 8px;
+  min-width: 280px;
+}
+
+.memorySearch input,
+.memoryForm input,
+.memoryForm textarea,
+.memoryForm select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+}
+
+.memorySearch input {
+  height: 38px;
+  padding: 0 12px;
+}
+
+.memoryPanel button {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  cursor: pointer;
+}
+
+.memoryPanel button:hover,
+.memoryPanel button:focus-visible {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.memoryPanel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.memoryPanel .memorySearch button {
+  height: 38px;
+  padding: 0 14px;
+}
+
+.memoryNotice,
+.memoryError {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+}
+
+.memoryNotice {
+  background: #ecfdf5;
+  color: #065f46;
+}
+
+.memoryError {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.memoryLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  align-items: start;
+}
+
+.memoryListSection {
+  min-width: 0;
+}
+
+.memoryListToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  margin-bottom: 8px;
+}
+
+.memoryListToolbar button {
+  padding: 6px 10px;
+}
+
+.memoryEmpty {
+  padding: 36px 16px;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+  color: #6b7280;
+  text-align: center;
+}
+
+.memoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memoryItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.memoryItemMain {
+  min-width: 0;
+}
+
+.memoryItemMain p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.memoryItemMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.memoryKind {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #ffffff;
+}
+
+.memoryKind-fact {
+  background: #2563eb;
+}
+
+.memoryKind-preference {
+  background: #7c3aed;
+}
+
+.memoryKind-instruction {
+  background: #059669;
+}
+
+.memoryItemActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memoryItemActions button {
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.memoryForm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.memoryForm h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.memoryForm label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #374151;
+}
+
+.memoryForm textarea {
+  min-height: 110px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.memoryForm input,
+.memoryForm select {
+  height: 38px;
+  padding: 0 10px;
+}
+
+.memoryFormRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.memoryFormActions {
+  display: flex;
+  gap: 8px;
+}
+
+.memoryFormActions button {
+  flex: 1;
+  padding: 9px 12px;
+}
+
+@media (max-width: 900px) {
+  .memoryPanelHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .memorySearch {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .memoryLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .memoryItem {
+    grid-template-columns: 1fr;
+  }
+
+  .memoryItemActions {
+    flex-direction: row;
+  }
+}

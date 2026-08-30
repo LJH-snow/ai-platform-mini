@@ -1388,3 +1388,93 @@ async def test_agent_service_preserves_unknown_provider_usage() -> None:
     assert isinstance(recorded, ChatResponse)
     assert recorded.prompt_tokens is None
     assert recorded.completion_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_agent_model_includes_long_term_memory_in_system_prompt() -> None:
+    from app.memory.models import MemoryItem, MemoryKind
+    from app.schemas.chat import ChatRequest
+
+    chat_service = _FakeChatService()
+    adapter = _ChatServiceAgentModel(
+        chat_service,  # type: ignore[arg-type]
+        AgentRunRequest(message="hello", model="test-model"),
+        memory_items=[
+            MemoryItem(
+                id="memory-1",
+                owner_scope="owner",
+                content="用户偏好中文回答",
+                kind=MemoryKind.PREFERENCE,
+            )
+        ],
+    )
+
+    await adapter.decide(AgentState(run_id="run-1", user_input="hello"))
+
+    request = chat_service.requests[0]
+    assert isinstance(request, ChatRequest)
+    assert request.system_prompt is not None
+    assert "Long-term memory" in request.system_prompt
+    assert "用户偏好中文回答" in request.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_agent_service_loads_memory_for_context_preparation() -> None:
+    from app.auth.identity import IdentityContext
+    from app.memory.models import MemoryItem, MemoryKind
+    from app.memory.tenant import resolve_memory_owner_scope
+    from app.schemas.chat import ChatRequest
+
+    class MemoryServiceStub:
+        def __init__(self) -> None:
+            self.owners: list[str] = []
+
+        async def retrieve_for_agent(
+            self,
+            owner_scope: str,
+            query: str,
+            *,
+            limit: int | None = None,
+            max_chars: int | None = None,
+        ) -> tuple[MemoryItem, ...]:
+            del query, limit, max_chars
+            self.owners.append(owner_scope)
+            return (
+                MemoryItem(
+                    id="memory-1",
+                    owner_scope=owner_scope,
+                    content="汇报时先给结论",
+                    kind=MemoryKind.INSTRUCTION,
+                ),
+            )
+
+    memory = MemoryServiceStub()
+    chat_service = _FakeChatService()
+    service = AgentService(
+        chat_service=chat_service,  # type: ignore[arg-type]
+        quota_service=_FakeQuotaService(),  # type: ignore[arg-type]
+        usage_collector=_FakeUsageCollector(),  # type: ignore[arg-type]
+        memory_service=memory,  # type: ignore[arg-type]
+    )
+    identity = IdentityContext(
+        user_id="user-1",
+        workspace_id="workspace-1",
+        api_key_id="key-1",
+        api_key_hash=hash_api_key("sk-test"),
+        role="owner",
+    )
+
+    outcome = await service.run(
+        AgentRunRequest(message="汇报项目", model="test-model"),
+        context=RequestContext(
+            request_id="request-1", api_key="hashed", identity=identity
+        ),
+        api_key=APIKey(key="hashed", name="test"),
+    )
+
+    assert outcome.result.answer == "hello"
+    assert memory.owners == [resolve_memory_owner_scope(identity)]
+    request = chat_service.requests[0]
+    assert isinstance(request, ChatRequest)
+    assert request.system_prompt is not None
+    assert "汇报时先给结论" in request.system_prompt

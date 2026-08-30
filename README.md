@@ -136,6 +136,8 @@ flowchart TB
 - Agent 定义落库：`Agent = Model + Prompt(版本) + Tools(白名单)`，支持
   workspace 级工具启用开关、Prompt 版本激活/回滚/钉扎、Agent Benchmark
   （Tool Call Accuracy / Task Completion Rate / Average Steps / Latency）
+- 长期记忆：显式保存事实/偏好/指令，按“用户 + 工作空间”严格隔离；Agent Run
+  自动检索相关记忆并注入系统 Prompt，模型猜测不会自动写入永久记忆
 
 ### RAG 检索增强与安全
 
@@ -438,6 +440,16 @@ GitHub Actions（`.github/workflows/ci.yml`）4 个 job：
 | GET | `/api/v1/workflow-builder/workflows/runs/{run_id}` | Workflow Builder 运行详情 |
 | DELETE | `/api/v1/workflow-builder/workflows/{workflow_id}` | 删除草稿 |
 
+### 长期记忆
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| GET | `/api/v1/memory` | 检索/列表长期记忆（`q` 可选） |
+| POST | `/api/v1/memory` | 显式保存长期记忆 |
+| GET | `/api/v1/memory/{memory_id}` | 长期记忆详情 |
+| PATCH | `/api/v1/memory/{memory_id}` | 更新长期记忆 |
+| DELETE | `/api/v1/memory/{memory_id}` | 删除长期记忆（204） |
+
 ### Usage / Billing
 
 | Method | Path | Description |
@@ -560,6 +572,19 @@ assistant 消息。
   `CONVERSATION_NOT_FOUND`
 - 前端刷新时从 `sessionStorage` 恢复 `thread_id` 并回填历史；404 表示线程
   失效，下一次提问自动新建线程
+
+### 长期记忆
+
+- `POST /api/v1/memory` 显式保存、`GET /api/v1/memory` 检索/列表、
+  `GET/PATCH/DELETE /api/v1/memory/{memory_id}` 查看/更新/删除
+- 记忆类型：`fact`（事实）、`preference`（偏好）、`instruction`（指令）；
+  保留来源、置信度、最后使用时间与 JSON metadata
+- 隔离键为 `sha256(workspace_id:user_id)`（工作空间用户）或 legacy API Key
+  hash；跨用户/跨 Key/跨工作空间统一 404，Repository 层强制过滤
+- Agent Service 在上下文准备阶段检索最多 `MEMORY_CONTEXT_ITEMS` 条记忆并
+  注入 system prompt；默认不自动保存模型猜测，所有长期记忆来自显式写入口
+- 配置：`MEMORY_STORAGE=memory|postgres`、`MEMORY_CONTEXT_ITEMS=5`、
+  `MEMORY_CONTEXT_MAX_CHARS=3000`；前端左侧导航 `长期记忆` 提供管理入口
 
 ### Agent 定义与 Prompt Registry
 
@@ -739,6 +764,7 @@ app/
 ├── db/              # 数据库（模型/session/init）
 ├── evals/           # Golden + RAG 评估（runner/JSONL/报告/基准）
 ├── exceptions/      # Provider 特定 + 领域异常
+├── memory/          # 长期记忆（owner 隔离/repository/service/检索）
 ├── mcp/             # MCP stdio 客户端 / 工具适配 / 管理器
 ├── middleware/      # Context 中间件（request_id）
 ├── observability/   # OpenTelemetry（tracing + metrics + middleware）
@@ -757,7 +783,8 @@ app/
 └── main.py
 
 frontend/
-├── src/             # React 19 + TS（platform/admin/auth/agent/chat/workflow/workflow-builder）
+├── src/             # React 19 + TS（platform/admin/auth/agent/chat/workflow/
+│                    #   workflow-builder + memory 长期记忆管理）
 ├── e2e/             # Playwright 端到端测试
 └── scripts/         # a11y smoke（真实 Chromium + axe）
 
@@ -816,3 +843,5 @@ Sprint 1–16 的逐条交付、学习总结与 Code Review 沉淀见
    `/api/v1/workflow-builder` API + InMemory/Postgres 双存储 + 真实节点执行器、
    P3 React Flow 可视化编排全部完成（画布、节点配置、保存/发布/试运行、
    `node_results` 时间线）
+7. **Sprint M1（已完成）**：长期记忆——内存/Postgres 双存储、显式 CRUD、
+   用户/工作空间隔离、Agent 上下文检索注入、前端管理入口

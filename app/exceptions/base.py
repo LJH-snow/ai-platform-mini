@@ -26,6 +26,10 @@ class ConversationNotFoundError(AppError):
     """Raised when a conversation thread is missing or not owned by the caller."""
 
 
+class MemoryNotFoundError(AppError):
+    """Raised when a long-term memory item is missing or not owned by the caller."""
+
+
 class WorkflowNotFoundError(AppError):
     """Raised when a workflow thread is missing or not owned by the caller."""
 

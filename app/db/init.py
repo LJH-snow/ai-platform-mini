@@ -17,6 +17,7 @@ from app.db.conversation_models import (
     ConversationThreadTable,
 )
 from app.db.eval_models import RAGEvaluationRunTable
+from app.db.memory_models import MemoryItemTable
 from app.db.models import (
     AgentRunRecordTable,
     APIKeyTable,
@@ -63,6 +64,7 @@ _CORE_TABLES = [
     WorkflowTable,
     WorkflowBuilderRunTable,
     RAGEvaluationRunTable,
+    MemoryItemTable,
 ]
 
 _engine: AsyncEngine | None = None

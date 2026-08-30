@@ -10,6 +10,7 @@ from app.exceptions.base import (
     ConflictError,
     ConversationNotFoundError,
     KnowledgeBaseEmptyError,
+    MemoryNotFoundError,
     ModelNotFoundError,
     NoRelevantContextError,
     ProviderError,
@@ -162,6 +163,17 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=404,
             content=_error_payload(request, ErrorCode.CONVERSATION_NOT_FOUND, str(exc)),
+        )
+
+    @app.exception_handler(MemoryNotFoundError)
+    async def handle_memory_not_found(
+        request: Request, exc: MemoryNotFoundError
+    ) -> JSONResponse:
+        request_id = _get_request_id(request)
+        logger.warning("request_id=%s memory_not_found %s", request_id, exc)
+        return JSONResponse(
+            status_code=404,
+            content=_error_payload(request, ErrorCode.MEMORY_NOT_FOUND, str(exc)),
         )
 
     @app.exception_handler(WorkflowNotFoundError)

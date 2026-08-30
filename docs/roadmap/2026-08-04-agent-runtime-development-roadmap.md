@@ -279,6 +279,14 @@ stdio demo fixture，不依赖外网或第三方 MCP SDK，也没有注册到生
 
 ## Sprint 12：Session 与 Memory（2026-09-01—2026-09-07）
 
+### 实际状态（2026-08-30）
+
+长期记忆 MVP 已完成：`app/memory/` 提供内存/Postgres 双存储、显式
+fact/preference/instruction CRUD、用户+工作空间隔离和确定性关键词召回；
+Agent Service 在上下文准备阶段注入相关记忆，前端 `长期记忆` 页可管理。
+会话窗口/自动摘要部分仍沿用现有服务端 conversation history，未引入模型
+自动总结写入。
+
 ### 目标
 
 先解决可靠的会话上下文，再实现受控的长期记忆。

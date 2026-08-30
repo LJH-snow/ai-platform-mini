@@ -16,6 +16,7 @@ from app.api.billing import router as billing_router
 from app.api.chat import router as chat_router
 from app.api.conversations import router as conversations_router
 from app.api.health import router as health_router
+from app.api.memory import router as memory_router
 from app.api.models import router as models_router
 from app.api.openai import router as openai_router
 from app.api.prompts import router as prompts_router
@@ -88,6 +89,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if (
             settings.auth_storage == "postgres"
             or settings.conversation_storage == "postgres"
+            or settings.memory_storage == "postgres"
             or settings.rag_enabled
             or settings.workflow_storage == "postgres"
         ):
@@ -308,6 +310,7 @@ def create_app() -> FastAPI:
     app.include_router(models_router)
     app.include_router(chat_router)
     app.include_router(conversations_router)
+    app.include_router(memory_router)
     app.include_router(agent_router)
     app.include_router(openai_router)
     app.include_router(rag_router)

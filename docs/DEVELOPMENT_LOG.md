@@ -670,3 +670,30 @@ P3 的关键是把后端确定的图模型映射为 React Flow 画布而不引�
 `canvas_position` 配置而不是用户输入，根因在引擎默认摘要策略，修复放在后端并
 补单测，避免让 UI 侧掩盖数据语义。最终用真实 API + 桌面/移动端 Playwright
 全链路验证保存、发布、试运行和历史回看，证明前端只是编排能力的可视化边界。
+
+### Sprint M1（长期记忆）
+
+- 新增 `app/memory/`：`models.py` / `repository.py` /
+  `memory_repository.py` / `postgres_repository.py` / `service.py` /
+  `tenant.py`，实现事实/偏好/指令三类记忆的内存与 PostgreSQL 双存储。
+- 新增 `MemoryItemTable`、`/api/v1/memory` CRUD 与检索端点；隔离键取
+  `sha256(workspace_id:user_id)`，legacy API Key 仍按 key hash 隔离，
+  Repository 查询强制 owner 过滤。
+- Agent Service 在上下文准备阶段通过 `MemoryService.retrieve_for_agent`
+  做确定性关键词召回，并把相关记忆注入 `_ChatServiceAgentModel` 的
+  system prompt；`MEMORY_CONTEXT_ITEMS` / `MEMORY_CONTEXT_MAX_CHARS` 控制
+  上下限，模型猜测默认不会自动写入永久记忆。
+- 前端新增 `frontend/src/memory/`：`MemoryPanel` 支持检索、列表、保存、
+  编辑、删除和置信度设置；`App.tsx` 左侧导航新增 `长期记忆` 页面。
+- 新增测试：后端服务/API/租户隔离/Agent 接入，前端 client/panel；全量
+  pytest、Ruff、mypy、Vite typecheck/lint/test/build 全绿。
+
+#### Sprint M1 学习总结
+
+长期记忆最容易犯错的是把“记忆”做成会话历史的副本，因此先定义了显式来源、
+类型、置信度和最后使用时间，让写入语义与 Agent 自动上下文清晰分开。隔离既
+要满足用户级要求，又不能破坏 legacy API Key 行为，最终采用“用户 + 工作空间”
+hash 作为 owner_scope，Repository 层只按该键查询。检索没有引入 embedding，
+先用可测试的词典与中文二元组召回，保证离线、确定性和 prompt 长度有界。Agent
+接入被放在 `AgentService` 上下文准备阶段，而不是 Runtime 内部，避免运行时
+与存储耦合。前端管理页只是真实 CRUD 的边界，不伪造记忆来源或使用状态。
