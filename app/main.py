@@ -18,6 +18,7 @@ from app.api.conversations import router as conversations_router
 from app.api.health import router as health_router
 from app.api.memory import router as memory_router
 from app.api.models import router as models_router
+from app.api.multi_agent import router as multi_agent_router
 from app.api.openai import router as openai_router
 from app.api.prompts import router as prompts_router
 from app.api.rag import router as rag_router
@@ -311,6 +312,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router)
     app.include_router(conversations_router)
     app.include_router(memory_router)
+    app.include_router(multi_agent_router)
     app.include_router(agent_router)
     app.include_router(openai_router)
     app.include_router(rag_router)
