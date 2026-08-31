@@ -884,3 +884,7 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
    用户/工作空间隔离、Agent 上下文检索注入、前端管理入口
 8. **Sprint M2（已完成）**：多 Agent 编排——Supervisor JSON 任务拆分、
    Orchestrator 依赖/并发/失败策略/预算执行、`/api/v1/multi-agent/runs` 公开端点
+9. **Sprint M2 收口（CI/E2E）**：修复 `types-openpyxl` stub pin、workflow builder
+   测试 import 排序、Postgres integration contract，以及 Playwright webServer
+   readiness / Vite E2E 绑定；GitHub Actions 的 `ci`、`compatibility-312`、
+   `rag-golden`、`e2e` 全绿

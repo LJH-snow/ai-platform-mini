@@ -78,4 +78,5 @@
 
 - `test_monthly_retry_after_until_next_month` 与 `test_monthly_limit_is_reported_when_daily_limit_is_also_configured` 原断言 `retry_after > 86400` 在月末不是稳定事实；2026-08-31 20:03（UTC 距 2026-09-01 不足一天）会失败。正确测试口径是 `0 < retry_after <= 31 * 86400`，服务实现本身按下月 1 日 UTC 计算是合理的。
 - 多 Agent 后端同步 MVP 已提交，但 Sprint 完成材料需要补齐 README、开发日志、roadmap 实际状态和架构图；当前仍不应声称已完成多 Agent SSE、持久化 Trace、跨进程队列、前端编排或量化收益评测。
+- Playwright E2E 在 GitHub Actions 上的失败根因是 frontend webServer 默认 readiness 依赖 URL 探测，而 Vite 以 `npm run dev -- --port 5174 --strictPort` 启动时对 CI 环境的就绪判断不够稳；把 backend 改为 `port`、frontend 改为显式 `--host 127.0.0.1` + `url` 后，e2e job 恢复通过。
 - Archify `visual-check` 在沙箱内调用 Chrome 会 SIGABRT；获得用户授权后用同一 `node ... archify.mjs` 命令在非沙箱环境通过，因此失败原因是本机 Chrome/沙箱边界，不是图本身溢出。

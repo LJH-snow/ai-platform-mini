@@ -32,5 +32,6 @@
 - 已恢复当前工作区：`main` 相对 `origin/main` ahead 2，发现多 Agent 后端提交已完成但 README/学习总结/架构图仍需收口，且存在未跟踪 `docs/architecture/`。
 - 已修复恢复时发现的质量门禁问题：`app/multi_agent/supervisor.py` fallback 缩进经 `ruff format` 归一化；`tests/test_quota.py` 月配额 retry-after 断言改为月末安全范围，避免 2026-08-31 仅剩不足一天时失败。
 - 已补齐 README、开发日志和 Agent Runtime roadmap：记录长期记忆、多 Agent 编排、公开 API、未完成边界和 Sprint M2 学习总结。
+- 已完成最后一轮 CI/E2E 收口：Playwright 配置改为显式绑定 backend/frontend 端口并用 URL readiness 检查，避免 webServer 在 GitHub Actions 中误判为未就绪；最新推送的 CI 四个 job 已全部通过。
 - 已用 Archify 更新总体架构图并重新 `deliver`：HTML artifact sha256 `00f9b50f8c8d8b049a3bec02d6dcdba43d8d0f037f40a23c92d29e7c5a529af0`，spec sha256 `63cd401c9d7e8315af6bdd10750cd6abc2ded4b2fe972f2da50a85d88d27fe9d`。
 - 验证通过：`ruff format --check .`、`ruff check .`、`mypy app tests`、`pytest`（1009 passed, 39 skipped）；Archify showcase validation 9/9 通过，visual-check 1440×900/1600×1000/1920×1080/2048×1320 明暗主题无溢出，视觉审阅仍标记为 pending。
