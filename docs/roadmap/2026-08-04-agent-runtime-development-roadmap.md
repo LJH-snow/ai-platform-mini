@@ -335,9 +335,17 @@ Agent Service 在上下文准备阶段注入相关记忆，前端 `长期记忆`
 
 ## Sprint 14：多 Agent 工作流（2026-09-15—2026-09-21）
 
+### 实际状态（2026-08-30）
+
+后端同步 MVP 已提前完成：`app/multi_agent/` 提供 Supervisor JSON 任务拆分、
+Orchestrator 依赖/有限并发执行、fail-fast / continue-on-error、总超时和总 Token
+预算；`POST /api/v1/multi-agent/runs` 返回结构化 run 与子任务结果。当前尚未完成
+多 Agent SSE、持久化 Trace、跨进程队列、前端编排画布或相对单 Agent 的量化收益评测。
+
 ### 进入条件
 
-只有单 Agent 的 Tool Runtime、Run Trace 和黄金评测集稳定后才进入本阶段。若多 Agent 没有相对单 Agent 的量化收益，则保留为实验，不作为核心卖点。
+只有单 Agent 的 Tool Runtime、Run Trace 和黄金评测集稳定后才进入完整多 Agent
+产品化阶段。若多 Agent 没有相对单 Agent 的量化收益，则保留为实验，不作为核心卖点。
 
 ### 推荐场景
 
@@ -451,7 +459,7 @@ Agent Service 在上下文准备阶段注入相关记忆，前端 `长期记忆`
 4. 建立 Run/Step/ToolCall 可观测模型及离线评测集，量化任务成功率、工具调用准确率、延迟和 Token 成本。
 5. 完成 Docker Compose、Python 3.12—3.14 CI、结构化日志、安全策略、集成测试和可复现 Demo。
 
-> 注意：简历只写已经完成并能演示、测试或量化的内容；未完成的 LangGraph、多 Agent、MCP 或前端能力不提前写入技术栈。
+> 注意：简历只写已经完成并能演示、测试或量化的内容；未完成的多 Agent SSE/前端编排、MCP 生产化或其他前端能力不提前写入技术栈。
 
 ## 9. 最终作品集清单
 

@@ -165,7 +165,7 @@ async def test_monthly_retry_after_until_next_month() -> None:
     service, _, _ = _make_service(monthly=0)
     with pytest.raises(QuotaExceededError) as exc_info:
         await service.reserve("hash1")
-    assert exc_info.value.retry_after > 86400
+    assert 0 < exc_info.value.retry_after <= 31 * 86400
 
 
 @pytest.mark.asyncio
@@ -321,7 +321,7 @@ async def test_monthly_limit_is_reported_when_daily_limit_is_also_configured() -
     ) as exc_info:
         await service.reserve("hash1", max_tokens=50)
 
-    assert exc_info.value.retry_after > 86400
+    assert 0 < exc_info.value.retry_after <= 31 * 86400
 
 
 @pytest.mark.asyncio

@@ -93,7 +93,7 @@ class Supervisor:
             # Fallback: create a single writer task
             return SupervisorDecision(
                 subtasks=[
-Subtask(
+                    Subtask(
                         id="task_1",
                         description=content[:200],
                         agent_role=AgentRole.WRITER,

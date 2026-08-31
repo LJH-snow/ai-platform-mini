@@ -1,0 +1,407 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AI Platform Mini 总体架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "chat-path",
+        "label": "Chat 主请求路径",
+        "focus": [
+          "fe",
+          "api",
+          "gate",
+          "svc",
+          "router",
+          "ollama"
+        ],
+        "note": "从 nginx 同源代理到 ProviderRouter 的同步 Chat 链路。"
+      },
+      {
+        "id": "agent-path",
+        "label": "Agent / Multi-Agent 与工具",
+        "focus": [
+          "svc",
+          "agent",
+          "rag",
+          "router",
+          "pg"
+        ],
+        "note": "AgentRuntime 执行单 Agent，多 Agent 由 Supervisor 拆分并交给 Orchestrator 编排。"
+      },
+      {
+        "id": "storage-views",
+        "label": "存储与双实现",
+        "focus": [
+          "pg",
+          "rag",
+          "wf",
+          "svc"
+        ],
+        "note": "Usage、会话、长期记忆、Agent/Workflow 记录可切 PostgreSQL，RAG 强制 pgvector。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "fe",
+      "type": "frontend",
+      "label": "React 前端",
+      "sublabel": "nginx 同源代理",
+      "tag": ":5173",
+      "pos": [
+        40,
+        100
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "sdk",
+      "type": "external",
+      "label": "OpenAI 兼容客户端",
+      "sublabel": "SDK · curl",
+      "pos": [
+        40,
+        240
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI 应用",
+      "sublabel": "中间件链 · 22 Routers",
+      "tag": ":8000",
+      "pos": [
+        290,
+        100
+      ],
+      "size": [
+        165,
+        68
+      ]
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "平台门面",
+      "sublabel": "API Key · 限流 · 配额",
+      "pos": [
+        495,
+        100
+      ],
+      "size": [
+        165,
+        68
+      ]
+    },
+    {
+      "id": "svc",
+      "type": "backend",
+      "label": "Service 层",
+      "sublabel": "Chat · Agent · Memory",
+      "pos": [
+        700,
+        100
+      ],
+      "size": [
+        165,
+        68
+      ]
+    },
+    {
+      "id": "router",
+      "type": "backend",
+      "label": "ProviderRouter",
+      "sublabel": "按模型路由",
+      "pos": [
+        905,
+        100
+      ],
+      "size": [
+        165,
+        68
+      ]
+    },
+    {
+      "id": "openai",
+      "type": "external",
+      "label": "OpenAI 兼容 API",
+      "sublabel": "gpt-* · 自定义 base_url",
+      "pos": [
+        1110,
+        100
+      ],
+      "size": [
+        150,
+        68
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "Agent 编排层",
+      "sublabel": "Sup · Orch · Tools",
+      "pos": [
+        310,
+        340
+      ],
+      "size": [
+        165,
+        68
+      ]
+    },
+    {
+      "id": "rag",
+      "type": "backend",
+      "label": "RAGService",
+      "sublabel": "safety → chunk → hybrid RRF",
+      "pos": [
+        500,
+        340
+      ],
+      "size": [
+        165,
+        68
+      ]
+    },
+    {
+      "id": "pg",
+      "type": "database",
+      "label": "PostgreSQL + pgvector",
+      "sublabel": "usage · memory · vectors",
+      "pos": [
+        710,
+        340
+      ],
+      "size": [
+        165,
+        68
+      ]
+    },
+    {
+      "id": "wf",
+      "type": "backend",
+      "label": "Workflow Builder / 引擎",
+      "sublabel": "Builder · Engine · Executor",
+      "pos": [
+        920,
+        340
+      ],
+      "size": [
+        165,
+        68
+      ]
+    },
+    {
+      "id": "ollama",
+      "type": "external",
+      "label": "Ollama",
+      "sublabel": "qwen3:4b · nomic-embed-text",
+      "pos": [
+        1120,
+        340
+      ],
+      "size": [
+        150,
+        68
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "FastAPI 同步主链（app/）",
+      "wraps": [
+        "api",
+        "gate",
+        "svc",
+        "router"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "fe-to-api",
+      "from": "fe",
+      "to": "api",
+      "label": "HTTPS /api/*",
+      "labelAt": [
+        240,
+        186
+      ],
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "sdk-to-api",
+      "from": "sdk",
+      "to": "api",
+      "label": "POST /v1/chat/completions",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "api-to-gate",
+      "from": "api",
+      "to": "gate",
+      "label": "API Key · 限流",
+      "labelAt": [
+        525,
+        186
+      ],
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "gate-to-svc",
+      "from": "gate",
+      "to": "svc",
+      "label": "租户上下文",
+      "labelAt": [
+        730,
+        186
+      ],
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "svc-to-router",
+      "from": "svc",
+      "to": "router",
+      "label": "chat",
+      "labelAt": [
+        935,
+        186
+      ],
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "router-to-openai",
+      "from": "router",
+      "to": "openai",
+      "label": "gpt-*",
+      "labelAt": [
+        1140,
+        186
+      ],
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "svc-to-agent",
+      "from": "svc",
+      "to": "agent",
+      "label": "Agent / Multi-Agent Run",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "svc-to-rag",
+      "from": "svc",
+      "to": "rag",
+      "label": "RAG 问答",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "svc-to-wf",
+      "from": "svc",
+      "to": "wf",
+      "label": "Workflow Builder Run",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "router-to-ollama",
+      "from": "router",
+      "to": "ollama",
+      "label": "qwen3:4b",
+      "via": [
+        [
+          987.5,
+          220
+        ],
+        [
+          1195,
+          220
+        ]
+      ],
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "agent-to-rag",
+      "from": "agent",
+      "to": "rag",
+      "label": "knowledge_search",
+      "labelAt": [
+        487,
+        428
+      ],
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "rag-to-pg",
+      "from": "rag",
+      "to": "pg",
+      "label": "pgvector 检索",
+      "labelAt": [
+        687,
+        428
+      ],
+      "fromSide": "right",
+      "toSide": "left"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "请求链路",
+      "items": [
+        "React/Vite 前端 + nginx 同源代理 /api · /v1 · /admin，无 CORS",
+        "Telemetry → Context（request_id）→ RequestLogging 中间件链",
+        "require_api_key + 滑窗限流 + 配额 reserve/settle 生命周期"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "执行域",
+      "items": [
+        "AgentRuntime 有界循环：max_steps · token_budget · deadline",
+        "MultiAgentService：Supervisor 拆分任务，Orchestrator 按依赖/并发/预算执行",
+        "Tool Registry/Executor + MCP stdio 白名单",
+        "RAG：safety → chunk → embed（Ollama nomic-embed-text）→ hybrid RRF"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Provider 路由",
+      "items": [
+        "LLMProvider 统一 Protocol + 共享 httpx 连接池",
+        "默认模型 → Ollama · gpt-* → OpenAI 兼容 · mock 离线测试"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "存储与可观测",
+      "items": [
+        "单进程组合根：lru_cache 容器 + Protocol 双仓储，三开关切 memory|postgres",
+        "长期记忆按 workspace/user owner_scope 隔离并注入 Agent 上下文",
+        "usage · 会话 · Agent Run · 审计 · Workflow/Memory 均可落 PostgreSQL",
+        "OpenTelemetry trace/metrics → Jaeger · JSON 日志 + request_id"
+      ]
+    }
+  ]
+}

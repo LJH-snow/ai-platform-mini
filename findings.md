@@ -72,3 +72,10 @@
 - 阶段 6 已具备真实浏览器 Agent SSE 的有效证据：增量回答、实时 Trace、两步 calculator Tool Call、停止等待语义、断网/恢复重试、普通键盘输入/提交、Trace disclosure 的 ARIA 语义与焦点保持，以及五档布局回归。
 - 未完成项必须保持准确标注：`npm run a11y:smoke` 的初始空态与真实 Agent/RAG 状态 axe `violations=0`，但初始空态有 1 个 `incomplete` color-contrast（`.emptyIcon` 内容过短无法判断）；4 个 disclosure 的 ARIA/`hidden` 关系、Space 焦点保持、live region 非逐字播报和 320px 无横向溢出已通过。完整屏幕阅读器验证尚未完成，因为环境没有 VoiceOver/NVDA/Orca；浏览器 DOM、键盘、ARIA、live region 和五档响应式已验证。回答内精确引用、持久化 Trace、事件回放和精确 usage 不在本阶段完成；RAG 成功来源/空库浏览器路径已验证，但成功来源那次 UI Run 的终态是 `token_budget_exceeded`，独立 SSE 的终态是 `run_timed_out(deadline_exceeded)`，不能把后者写成 `run_completed`。
 - 本轮只更新指定文档，不修改生产代码、测试或配置，不提交 Git；已有阶段 6 commits `a810254`、`73c4d3d` 和 `e5f3e00` 已提交并推送，继续等待用户 Code Review，不进入阶段 7。
+
+
+## 2026-08-31 恢复会话发现
+
+- `test_monthly_retry_after_until_next_month` 与 `test_monthly_limit_is_reported_when_daily_limit_is_also_configured` 原断言 `retry_after > 86400` 在月末不是稳定事实；2026-08-31 20:03（UTC 距 2026-09-01 不足一天）会失败。正确测试口径是 `0 < retry_after <= 31 * 86400`，服务实现本身按下月 1 日 UTC 计算是合理的。
+- 多 Agent 后端同步 MVP 已提交，但 Sprint 完成材料需要补齐 README、开发日志、roadmap 实际状态和架构图；当前仍不应声称已完成多 Agent SSE、持久化 Trace、跨进程队列、前端编排或量化收益评测。
+- Archify `visual-check` 在沙箱内调用 Chrome 会 SIGABRT；获得用户授权后用同一 `node ... archify.mjs` 命令在非沙箱环境通过，因此失败原因是本机 Chrome/沙箱边界，不是图本身溢出。

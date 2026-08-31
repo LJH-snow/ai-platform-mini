@@ -25,3 +25,12 @@
 - RAG 真实浏览器证据已补齐：Ollama 已安装 `nomic-embed-text`，真实 `/api/embed` 返回 1 个 768 维向量；PostgreSQL/pgvector 空库查询的 Agent SSE 路径为 `RAG loading` → `knowledge_base_empty` → `run_completed`。使用仓库已有 `docs/superpowers/specs/2026-08-04-agent-runtime-design.md` 真实 ingest 53 个 chunks 后，浏览器来源路径显示 `success_with_sources` 和 5 条真实来源，展示 `document_id`、`chunk_id`、`chunk_index`、`distance`、`content` 安全投影；该次 UI Run 后续因 `token_budget_exceeded` 停止。直接真实 SSE 请求使用 `token_budget=8192`、`max_steps=3`，收到 `rag_started`、`tool_completed`（`success_with_sources`，5 条 refs）、多个 `answer_delta`，并以唯一 `run_timed_out`（`deadline_exceeded`）终止，不能写成 `run_completed`。RAG 安全投影仍只来自后端真实事件，不能伪造引用。启动阶段 `stream_error` 可缺少 `run_id`/`sequence`，前端解析器已兼容并由客户端归类为 `AgentNetworkError`；该帧不代表 Run 终态。
 - `assistant_message` 仅作为 legacy/非 streaming 兼容事件；空流不生成补充回答，Provider 错误、超时和取消保留真实终态。精确 Token 统计/usage、事件历史回放、持久化 Trace 查询、回答内精确引用、MCP UI 和复杂多 Agent 编排不在阶段 6 范围。
 - 阶段完成审计：阶段 6 的真实 Agent SSE、Trace、Tool Call、停止等待、断网/恢复、键盘输入/提交、Trace disclosure 语义、五档布局、RAG 空库和 RAG 成功来源证据已齐；成功来源那次 UI Run 的真实终态是 `token_budget_exceeded` 停止，独立 SSE 验证的真实终态是唯一 `run_timed_out(deadline_exceeded)`，没有把它们改写成 `run_completed`。完整屏幕阅读器验证仍未完成，因为当前环境没有 VoiceOver/NVDA/Orca；浏览器 DOM、键盘、ARIA、live region 和五档响应式已验证。本轮只更新指定文档，不提交 Git，保留阶段 7 未进入和等待用户 Code Review。
+
+
+## 2026-08-31 恢复会话收口
+
+- 已恢复当前工作区：`main` 相对 `origin/main` ahead 2，发现多 Agent 后端提交已完成但 README/学习总结/架构图仍需收口，且存在未跟踪 `docs/architecture/`。
+- 已修复恢复时发现的质量门禁问题：`app/multi_agent/supervisor.py` fallback 缩进经 `ruff format` 归一化；`tests/test_quota.py` 月配额 retry-after 断言改为月末安全范围，避免 2026-08-31 仅剩不足一天时失败。
+- 已补齐 README、开发日志和 Agent Runtime roadmap：记录长期记忆、多 Agent 编排、公开 API、未完成边界和 Sprint M2 学习总结。
+- 已用 Archify 更新总体架构图并重新 `deliver`：HTML artifact sha256 `00f9b50f8c8d8b049a3bec02d6dcdba43d8d0f037f40a23c92d29e7c5a529af0`，spec sha256 `63cd401c9d7e8315af6bdd10750cd6abc2ded4b2fe972f2da50a85d88d27fe9d`。
+- 验证通过：`ruff format --check .`、`ruff check .`、`mypy app tests`、`pytest`（1009 passed, 39 skipped）；Archify showcase validation 9/9 通过，visual-check 1440×900/1600×1000/1920×1080/2048×1320 明暗主题无溢出，视觉审阅仍标记为 pending。

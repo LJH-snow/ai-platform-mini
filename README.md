@@ -1,8 +1,8 @@
 # AI Platform Mini
 
 基于 **FastAPI + React** 的轻量级 LLM 应用平台：提供 OpenAI-compatible LLM
-Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、LangGraph 人工审批
-工作流、多租户（身份/工作空间/计费/审计）与完整可观测性。既是可用的产品原型，
+Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记忆、多 Agent
+编排、LangGraph/Workflow Builder 工作流、多租户（身份/工作空间/计费/审计）与完整可观测性。既是可用的产品原型，
 也是可解释、可验证、经过 Code Review 的 Agent 工程演示。
 
 ## 目录
@@ -30,6 +30,8 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、LangGraph 
 
 - **Agent Runtime**：模型决策、有限步数循环、工具执行、结果回填、超时、取消、
   配额和 Token 预算终态都有明确边界。
+- **多 Agent 编排**：`/api/v1/multi-agent/runs` 先由 Supervisor 拆分任务，再由
+  Orchestrator 按依赖、并发、失败策略、超时和总 Token 预算执行子任务。
 - **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool
   Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
 - **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和
@@ -40,8 +42,9 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、LangGraph 
 - **安全与多租户**：API Key 哈希存储、scrypt 密码哈希、限流、Token 配额、
   计费计划、审计日志；RAG 文档按租户隔离；Prompt、原始 Tool payload、Provider
   响应和敏感信息不公开。
-- **工程质量**：后端 777 个测试（83 个文件）+ 前端 Vitest/Playwright/a11y 门禁、
-  真实浏览器验证、失败/超时/断连回归、双 Python 版本 CI 和 Code Review 记录。
+- **工程质量**：后端 1009 个通过测试（87 个测试文件）+ 前端
+  Vitest/Playwright/a11y 门禁、真实浏览器验证、失败/超时/断连回归、多 Python
+  版本 CI 和 Code Review 记录。
 
 ### 面向 HR 的建议演示路径
 
@@ -52,9 +55,12 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、LangGraph 
    **Agent Run + RAG Agent preset**，不会误用普通 Chat SSE。
 4. 展示真实来源卡片、`success_with_sources`/`no_relevant_sources` 状态和安全
    投影字段。
-5. 打开 **Run 历史** 回放一次 Agent Run，再查看 **用量仪表盘** 和
+5. 打开 **长期记忆** 保存一条偏好，再运行 Agent，说明记忆只经显式 CRUD 写入、
+   按用户/工作空间隔离，并在 Agent 上下文准备阶段检索注入。
+6. 调用 **多 Agent Run** 演示 Supervisor 拆分、Orchestrator 执行子任务和结构化汇总。
+7. 打开 **Run 历史** 回放一次 Agent Run，再查看 **用量仪表盘** 和
    **Billing / 计划**。
-6. 打开管理员后台，展示 API Key、Token 用量、Agent Run 审计摘要和 Audit 日志。
+8. 打开管理员后台，展示 API Key、Token 用量、Agent Run 审计摘要和 Audit 日志。
 
 > 普通 Chat SSE 只负责普通对话，不执行工具调用；知识库问答使用 Agent Run，
 > 先检索再回答。两条链路在 UI 和 API 层均明确区分。
@@ -63,8 +69,9 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、LangGraph 
 
 - **后端**：Python 3.12–3.14（默认 3.14）、FastAPI、Pydantic v2、
   SQLAlchemy 2（async）、asyncpg、pgvector
-- **LLM/Agent**：Ollama、OpenAI、自研 Agent Runtime、LangGraph
-  （PDF 报告工作流参考实现）、MCP（stdio 客户端）
+- **LLM/Agent**：Ollama、OpenAI、自研 Agent Runtime、MultiAgentService
+  （Supervisor + Orchestrator）、LangGraph（PDF 报告工作流参考实现）、MCP
+  （stdio 客户端）
 - **前端**：React 19 + TypeScript + Vite，Vitest/Playwright/axe
 - **可观测性**：OpenTelemetry（OTLP trace + metrics）、Jaeger、结构化 JSON 日志
 - **基础设施**：Docker Compose（5 服务）、GitHub Actions CI（4 个 job）
@@ -74,7 +81,8 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、LangGraph 
 ```mermaid
 flowchart TB
     subgraph Client["客户端"]
-        FE["React 前端（平台壳层 + Agent Console）"]
+        FE["React 前端
+平台壳层 / Agent / Memory / Workflow Builder"]
         SDK["OpenAI-compatible SDK / curl"]
     end
 
@@ -84,31 +92,54 @@ flowchart TB
 
     API --> MW["ContextMiddleware / RequestLoggingMiddleware<br/>(request_id)"]
     MW --> GATE["Auth / Rate Limit / Quota / Entitlement"]
-    GATE --> ROUTES["Router 层"]
+    GATE --> ROUTES["Router 层（22 routers）"]
 
     ROUTES --> CHAT["ChatService / OpenAIService"]
-    CHAT --> ADAPTER["OpenAIAdapter"]
-    CHAT --> RUNTIME["AgentRuntime（有界循环）"]
+    ROUTES --> AGENTAPI["AgentService"]
+    ROUTES --> MULTI["MultiAgentService"]
+    ROUTES --> MEM["MemoryService"]
+    ROUTES --> WFB["Workflow Builder Service"]
+    ROUTES --> WF["LangGraph PDF Workflow"]
+
+    MULTI --> SUP["Supervisor
+任务拆分"]
+    MULTI --> ORCH["Orchestrator
+依赖 / 并发 / 预算"]
+    ORCH --> CHAT
+    AGENTAPI --> RUNTIME["AgentRuntime（有界循环）"]
     RUNTIME --> TOOLS["ToolRegistry / ToolExecutor"]
     RUNTIME --> MCPMGR["MCP Manager"]
-    CHAT --> RAGSRV["RAGService"]
+    AGENTAPI --> RAGSRV["RAGService"]
+    CHAT --> ADAPTER["OpenAIAdapter"]
+    MEM --> AGENTAPI
+
     RAGSRV --> VECTOR[("pgvector")]
     RAGSRV --> EMBED["Ollama Embedder"]
-    ROUTES --> WF["LangGraph PDF Workflow"]
-    WF --> CKPT[("Checkpointer<br/>内存 / PostgreSQL")]
+    WFB --> WFE["通用 DAG Engine"]
+    WF --> CKPT[("Checkpointer
+内存 / PostgreSQL")]
 
     ADAPTER --> ROUTER["ProviderRouter"]
     ROUTER --> OLLAMA["OllamaProvider"]
     ROUTER --> OPENAI["OpenAIProvider"]
     ROUTER --> MOCK["MockProvider（测试）"]
 
-    GATE --> DB[("PostgreSQL<br/>用户 / Key / 用量 / 配额<br/>Billing / Audit / Agent 定义")]
-    CHAT --> OBS["OpenTelemetry<br/>trace + metrics"]
+    GATE --> DB[("PostgreSQL
+用户 / Key / 用量 / 配额
+Billing / Audit / Agent / Memory / Workflow")]
+    MEM --> DB
+    WFB --> DB
+    CHAT --> OBS["OpenTelemetry
+trace + metrics"]
     RUNTIME --> OBS
     RAGSRV --> OBS
 ```
 
 ## 核心能力
+
+> 可交互 HTML 架构图见
+> [`docs/architecture/ai-platform-mini-architecture.html`](docs/architecture/ai-platform-mini-architecture.html)；
+> 同目录保留 Archify JSON 规格、visual-check 截图和校验 receipt。
 
 ### LLM Gateway
 
@@ -138,6 +169,10 @@ flowchart TB
   （Tool Call Accuracy / Task Completion Rate / Average Steps / Latency）
 - 长期记忆：显式保存事实/偏好/指令，按“用户 + 工作空间”严格隔离；Agent Run
   自动检索相关记忆并注入系统 Prompt，模型猜测不会自动写入永久记忆
+- 多 Agent 编排：`POST /api/v1/multi-agent/runs` 先让 Supervisor 输出任务图，
+  再由 Orchestrator 依据依赖、`max_concurrency`、`failure_policy`、
+  `total_timeout` 和 `total_token_budget` 执行；子任务结果、错误、Token 用量和
+  耗时以结构化响应返回
 
 ### RAG 检索增强与安全
 
@@ -373,6 +408,7 @@ GitHub Actions（`.github/workflows/ci.yml`）4 个 job：
 | POST | `/api/v1/chat/rag` | RAG 增强 chat（需 `RAG_ENABLED=true`） |
 | POST | `/api/v1/agent/runs` | 有界 Agent Run（同步 JSON） |
 | POST | `/api/v1/agent/runs/stream` | Agent SSE 流（生命周期事件 + 回答增量） |
+| POST | `/api/v1/multi-agent/runs` | Supervisor 拆分 + Orchestrator 编排的同步多 Agent Run |
 | GET | `/api/v1/runs` | 租户 Agent Run 列表（可选 `agent_id` 过滤） |
 | GET | `/api/v1/runs/{run_id}` | Run 安全回放详情（跨租户 404） |
 
@@ -767,6 +803,7 @@ app/
 ├── memory/          # 长期记忆（owner 隔离/repository/service/检索）
 ├── mcp/             # MCP stdio 客户端 / 工具适配 / 管理器
 ├── middleware/      # Context 中间件（request_id）
+├── multi_agent/     # 多 Agent 编排（Supervisor / Orchestrator / shared context）
 ├── observability/   # OpenTelemetry（tracing + metrics + middleware）
 ├── prompts/         # Prompt Registry（版本/激活/回滚/seeds）
 ├── providers/       # LLM Provider 层（Protocol + Router + 实现）
@@ -790,7 +827,7 @@ frontend/
 
 scripts/             # ingest / evaluate_rag / demo / 回填脚本
 docs/                # 路线图、设计文档、开发日志
-tests/               # 后端测试（83 个文件、777 个测试）
+tests/               # 后端测试（87 个文件、1009 个通过测试）
 ```
 
 ## 设计原则
@@ -826,7 +863,7 @@ tests/               # 后端测试（83 个文件、777 个测试）
 
 ## 开发历程
 
-Sprint 1–16 的逐条交付、学习总结与 Code Review 沉淀见
+Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
 [开发日志（Sprint Log）](docs/DEVELOPMENT_LOG.md)。演进主线：
 
 1. **Sprint 1–5**：FastAPI + Ollama 聊天端点 → 鉴权/限流/配额/Usage →
@@ -845,3 +882,5 @@ Sprint 1–16 的逐条交付、学习总结与 Code Review 沉淀见
    `node_results` 时间线）
 7. **Sprint M1（已完成）**：长期记忆——内存/Postgres 双存储、显式 CRUD、
    用户/工作空间隔离、Agent 上下文检索注入、前端管理入口
+8. **Sprint M2（已完成）**：多 Agent 编排——Supervisor JSON 任务拆分、
+   Orchestrator 依赖/并发/失败策略/预算执行、`/api/v1/multi-agent/runs` 公开端点

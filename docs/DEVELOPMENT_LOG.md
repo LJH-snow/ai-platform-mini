@@ -697,3 +697,37 @@ hash 作为 owner_scope，Repository 层只按该键查询。检索没有引入 
 先用可测试的词典与中文二元组召回，保证离线、确定性和 prompt 长度有界。Agent
 接入被放在 `AgentService` 上下文准备阶段，而不是 Runtime 内部，避免运行时
 与存储耦合。前端管理页只是真实 CRUD 的边界，不伪造记忆来源或使用状态。
+
+
+### Sprint M2（多 Agent 编排）
+
+- 新增 `app/multi_agent/`：`models.py` 定义 AgentRole、Subtask、
+  SupervisorDecision、共享上下文、失败策略、配置与终态结果；`supervisor.py`
+  通过 LLM 生成 JSON 任务拆分，支持 Markdown code block 提取、最大子任务数
+  截断和单任务 fallback；`orchestrator.py` 执行依赖就绪的子任务，支持有限并发、
+  fail-fast / continue-on-error、总超时和总 Token 预算；`service.py` 作为应用边界
+  串联拆分与执行。
+- 新增 `/api/v1/multi-agent/runs`：复用现有 ChatService / ProviderRouter /
+  RequestContext，公开 `max_subtasks`、`max_concurrency`、`failure_policy`、
+  `total_timeout` 和 `total_token_budget`，返回 run 级状态、最终汇总、子任务
+  输出/错误/角色/Token/耗时。
+- Orchestrator 不引入新的 Provider 抽象，也不复制 Agent Runtime；子任务执行
+  仍通过既有 ChatService 边界完成，当前切片先交付后端同步 MVP，不承诺 SSE、
+  持久化 Trace、跨进程队列或多 Agent 前端编排。
+- 修复阶段恢复时发现的格式门禁问题：`app/multi_agent/supervisor.py` fallback
+  分支缩进由 `ruff format` 归一化；同时将月配额 retry-after 测试从
+  “必须大于一天”改为“0 到 31 天内”，避免 2026-08-31 这类月末 UTC 时间导致
+  用例偶发失败。
+- 新增/保留 Archify 总体架构图：`docs/architecture/ai-platform-mini-architecture.html`
+  展示 Chat、Agent/Multi-Agent、RAG、Memory、Workflow Builder、ProviderRouter 和
+  PostgreSQL/pgvector 的主链路；showcase validation 9/9 通过，visual-check 覆盖
+  1440×900 到 2048×1320 的明暗主题截图且无溢出。
+
+#### Sprint M2 学习总结
+
+多 Agent MVP 的重点不是再造一套运行时，而是在既有 ChatService / ProviderRouter
+边界上增加可测试的拆分与编排层。Supervisor 输出必须被当作不可信模型结果解析，
+所以需要 JSON 提取、数量上限和 fallback；Orchestrator 则把并发、依赖、失败策略、
+超时和预算都收敛在一个状态机里。月配额 retry-after 的回归提醒我们：时间相关测试
+不能假设“离下月一定超过一天”，必须覆盖月末/年末边界。架构图采用主链路 + 侧卡片
+表达，避免把所有内部类都画成节点，既保留可读性也能随 Sprint 演进更新。
