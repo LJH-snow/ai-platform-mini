@@ -20,6 +20,7 @@ from app.exceptions.base import ConflictError
 from app.rag.pg_vector_store import PgVectorStore
 
 _SKIP_REASON = "Set INTEGRATION_TEST=1 to run pgvector integration tests"
+_OWNER_KEY_HASH = "a" * 64
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("INTEGRATION_TEST"),
@@ -56,11 +57,14 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["hello world"],
             embeddings=[_make_embedding()],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
         assert doc_id is not None
 
         # Search with a similar embedding
-        results = await vector_store.search(query_embedding=_make_embedding(), top_k=5)
+        results = await vector_store.search(
+            query_embedding=_make_embedding(), top_k=5, owner_key_hash=_OWNER_KEY_HASH
+        )
         assert len(results) == 1
         assert results[0].document_id == doc_id
         assert results[0].content == "hello world"
@@ -85,6 +89,7 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["close content"],
             embeddings=[close_vec],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
         await vector_store.add_document(
             source_path="doc_far.txt",
@@ -93,9 +98,12 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["far content"],
             embeddings=[far_vec],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
 
-        results = await vector_store.search(query_embedding=query_vec, top_k=2)
+        results = await vector_store.search(
+            query_embedding=query_vec, top_k=2, owner_key_hash=_OWNER_KEY_HASH
+        )
         assert len(results) == 2
         assert results[0].content == "close content"
         assert results[0].distance < results[1].distance
@@ -112,6 +120,7 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["first"],
             embeddings=[_make_embedding()],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
         with pytest.raises(ConflictError, match="already exists"):
             await vector_store.add_document(
@@ -121,6 +130,7 @@ class TestPgVectorStoreIntegration:
                 embedding_dimensions=768,
                 chunks=["second"],
                 embeddings=[_make_embedding()],
+                owner_key_hash=_OWNER_KEY_HASH,
             )
 
     @pytest.mark.asyncio
@@ -135,6 +145,7 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["version 1 content"],
             embeddings=[_make_embedding(value=0.5)],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
 
         second_id = await vector_store.add_document(
@@ -144,13 +155,16 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["version 2 content"],
             embeddings=[_make_embedding(value=0.5)],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
 
         assert first_id != second_id
 
         # Search should only find the new version
         results = await vector_store.search(
-            query_embedding=_make_embedding(value=0.5), top_k=10
+            query_embedding=_make_embedding(value=0.5),
+            top_k=10,
+            owner_key_hash=_OWNER_KEY_HASH,
         )
         assert len(results) == 1
         assert results[0].content == "version 2 content"
@@ -168,6 +182,7 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["chunk_a", "chunk_b"],
             embeddings=[_make_embedding(value=0.3), _make_embedding(value=0.4)],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
 
         await vector_store.add_document(
@@ -177,11 +192,14 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["chunk_c"],
             embeddings=[_make_embedding(value=0.3)],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
 
         # Search should only find chunk_c, not chunk_a or chunk_b
         results = await vector_store.search(
-            query_embedding=_make_embedding(value=0.3), top_k=10
+            query_embedding=_make_embedding(value=0.3),
+            top_k=10,
+            owner_key_hash=_OWNER_KEY_HASH,
         )
         assert len(results) == 1
         assert results[0].content == "chunk_c"
@@ -198,6 +216,7 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["first"],
             embeddings=[_make_embedding()],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
 
         # Different SHA but same path — should supersede, not conflict
@@ -208,6 +227,7 @@ class TestPgVectorStoreIntegration:
             embedding_dimensions=768,
             chunks=["second"],
             embeddings=[_make_embedding()],
+            owner_key_hash=_OWNER_KEY_HASH,
         )
         assert doc_id is not None
 
@@ -216,5 +236,7 @@ class TestPgVectorStoreIntegration:
         self, vector_store: PgVectorStore
     ) -> None:
         """Search on an empty knowledge base returns empty list."""
-        results = await vector_store.search(query_embedding=_make_embedding(), top_k=5)
+        results = await vector_store.search(
+            query_embedding=_make_embedding(), top_k=5, owner_key_hash=_OWNER_KEY_HASH
+        )
         assert results == []

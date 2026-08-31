@@ -1,4 +1,5 @@
 import logging
+import uuid
 from datetime import UTC
 
 from sqlalchemy import select, update
@@ -48,19 +49,26 @@ class PostgresAPIKeyRepository:
             return _row_to_record(row)
 
     async def ensure_key(self, record: APIKeyRecord) -> bool:
-        from sqlalchemy import text
+        from sqlalchemy.dialects.postgresql import insert
 
         async with self._session_factory() as session:
-            result = await session.execute(
-                text(
-                    "INSERT INTO api_keys (key_hash, name, status) "
-                    "VALUES (:hash, :name, :status) "
-                    "ON CONFLICT (key_hash) DO NOTHING"
-                ),
-                {"hash": record.key_hash, "name": record.name, "status": record.status},
+            statement = (
+                insert(APIKeyTable)
+                .values(
+                    id=record.id or str(uuid.uuid4()),
+                    key_hash=record.key_hash,
+                    name=record.name,
+                    status=record.status,
+                    user_id=record.user_id,
+                    workspace_id=record.workspace_id,
+                )
+                .on_conflict_do_nothing(index_elements=[APIKeyTable.key_hash])
+                .returning(APIKeyTable.id)
             )
+            result = await session.execute(statement)
+            inserted_id = result.scalar_one_or_none()
             await session.commit()
-            return result.rowcount > 0  # type: ignore[attr-defined, no-any-return]
+            return inserted_id is not None
 
     async def update_status(self, key_hash: str, status: str) -> bool:
         async with self._session_factory() as session:

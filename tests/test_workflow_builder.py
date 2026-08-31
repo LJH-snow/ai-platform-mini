@@ -172,6 +172,9 @@ async def test_inmemory_run_repository_roundtrip_and_ordering() -> None:
 # ── Postgres repository roundtrip (integration, skipped by default) ─────────
 
 _SKIP_REASON = "Set INTEGRATION_TEST=1 to run PostgreSQL integration tests"
+PG_USER_ID = "11111111-1111-4111-8111-000000000001"
+PG_WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
+PG_OTHER_WORKSPACE_ID = "22222222-2222-4222-8222-222222222222"
 
 pytestmark_pg = pytest.mark.skipif(
     not os.getenv("INTEGRATION_TEST"),
@@ -185,6 +188,7 @@ async def pg_builder_repos() -> AsyncGenerator[tuple[Any, Any], None]:
 
     from app.db.init import dispose_db, init_db
     from app.db.session import create_async_session_factory
+    from app.db.user_models import UserTable, WorkspaceTable
     from app.workflow_builder.repository import (
         PostgresWorkflowRepository,
         PostgresWorkflowRunRepository,
@@ -194,6 +198,24 @@ async def pg_builder_repos() -> AsyncGenerator[tuple[Any, Any], None]:
         database_url = pg.get_connection_url().replace("psycopg2", "asyncpg")
         await init_db(database_url)
         factory = create_async_session_factory()
+        async with factory() as session:
+            session.add(
+                UserTable(
+                    id=PG_USER_ID,
+                    email="workflow-pg@example.com",
+                    display_name="Workflow PG",
+                    password_salt="salt",
+                    password_hash="hash",
+                )
+            )
+            session.add(
+                WorkspaceTable(
+                    id=PG_WORKSPACE_ID,
+                    name="Workflow PG Workspace",
+                    created_by_user_id=PG_USER_ID,
+                )
+            )
+            await session.commit()
         try:
             yield (
                 PostgresWorkflowRepository(factory),
@@ -211,7 +233,7 @@ async def test_postgres_workflow_repository_roundtrip(
     workflow_repo, _ = pg_builder_repos
     record = WorkflowRecord(
         id="9f7c98ce-0000-4000-8000-000000000001",
-        workspace_id="11111111-1111-4111-8111-111111111111",
+        workspace_id=PG_WORKSPACE_ID,
         name="pg-workflow",
         description="desc",
         status="draft",
@@ -225,12 +247,7 @@ async def test_postgres_workflow_repository_roundtrip(
 
     found = await workflow_repo.get_workflow(record.id, record.workspace_id)
     assert found is not None and found.name == "pg-workflow"
-    assert (
-        await workflow_repo.get_workflow(
-            record.id, "22222222-2222-4222-8222-222222222222"
-        )
-        is None
-    )
+    assert await workflow_repo.get_workflow(record.id, PG_OTHER_WORKSPACE_ID) is None
 
     found.version = 2
     found.status = "published"
@@ -249,7 +266,7 @@ async def test_postgres_run_repository_roundtrip(
     workflow_repo, run_repo = pg_builder_repos
     workflow = WorkflowRecord(
         id="9f7c98ce-0000-4000-8000-000000000002",
-        workspace_id="11111111-1111-4111-8111-111111111111",
+        workspace_id=PG_WORKSPACE_ID,
         name="pg-flow",
         definition=definition_dict(),
     )
