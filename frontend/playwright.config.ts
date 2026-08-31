@@ -20,7 +20,7 @@ export default defineConfig({
     {
       command: 'uvicorn app.main:app --host 127.0.0.1 --port 8010',
       cwd: REPO_ROOT,
-      url: 'http://127.0.0.1:8010/api/v1/health',
+      port: 8010,
       reuseExistingServer: false,
       timeout: 60_000,
       env: {
@@ -42,7 +42,7 @@ export default defineConfig({
     {
       command: 'npm run dev -- --port 5174 --strictPort',
       cwd: '.',
-      url: 'http://127.0.0.1:5174',
+      port: 5174,
       reuseExistingServer: false,
       timeout: 60_000,
       env: {
