@@ -8,8 +8,11 @@ from app.auth.models import APIKey
 from app.conversations.models import OWNER_KEY_HASH_PATTERN
 from app.conversations.service import ConversationService
 from app.schemas.chat import ChatMessage
+from app.schemas.openai import OpenAIChatMessage
 
 logger = logging.getLogger(__name__)
+
+_SUMMARY_SEPARATOR = "\n\n"
 
 
 def conversation_owner(api_key: APIKey) -> str:
@@ -28,8 +31,9 @@ async def prepare_thread(
     title: str,
     client_history: Sequence[ChatMessage],
     user_content: str,
-) -> tuple[str, list[ChatMessage]]:
-    """Resolve a thread and merge server history ahead of client history."""
+    system_prompt: str | None = None,
+) -> tuple[str, list[ChatMessage], str | None]:
+    """Resolve a thread, merge history, and bound the short-term context."""
 
     thread = await service.resolve_thread(owner_key_hash, thread_id, title)
     server_history = await service.load_history(owner_key_hash, thread.id)
@@ -38,7 +42,11 @@ async def prepare_thread(
         client_history,
         current_user_content=user_content,
     )
-    return thread.id, merged_history
+    context = service.build_short_term_context(
+        merged_history,
+        system_prompt=system_prompt,
+    )
+    return thread.id, context.history, context.summary
 
 
 async def persist_turn(
@@ -60,3 +68,37 @@ async def persist_turn(
         )
     except Exception:
         logger.exception("Failed to persist conversation turn thread_id=%s", thread_id)
+
+
+def merge_system_prompt(
+    system_prompt: str | None,
+    summary: str | None,
+) -> str | None:
+    """Combine a user/system prompt with a deterministic conversation summary."""
+
+    if summary is None:
+        return system_prompt
+    if system_prompt is None or not system_prompt.strip():
+        return summary
+    return f"{system_prompt.rstrip()}{_SUMMARY_SEPARATOR}{summary}"
+
+
+def inject_openai_summary(
+    messages: Sequence[OpenAIChatMessage],
+    summary: str | None,
+) -> list[OpenAIChatMessage]:
+    """Merge summary into the first OpenAI system message or prepend one."""
+
+    if summary is None:
+        return list(messages)
+    merged = list(messages)
+    for index, message in enumerate(merged):
+        if message.role != "system":
+            continue
+        merged[index] = OpenAIChatMessage(
+            role="system",
+            content=merge_system_prompt(message.content, summary) or summary,
+        )
+        return merged
+    merged.insert(0, OpenAIChatMessage(role="system", content=summary))
+    return merged

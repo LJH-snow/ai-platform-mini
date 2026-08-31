@@ -204,3 +204,50 @@ def test_openai_chat_keeps_system_messages_at_front() -> None:
         {"role": "user", "content": "hello"},
         {"role": "user", "content": "final"},
     ]
+
+
+def test_openai_chat_trims_history_and_injects_summary_into_system_message() -> None:
+    provider = RecordingProvider()
+    conversation_service = ConversationService(
+        repository=InMemoryConversationRepository(),
+        context_limit=2,
+        context_max_prompt_tokens=1000,
+        context_summary_max_chars=500,
+    )
+    openai_service = _openai_service_with_provider(provider)
+    app.dependency_overrides[get_openai_service] = lambda: openai_service
+    app.dependency_overrides[provide_conversation_service] = lambda: (
+        conversation_service
+    )
+
+    try:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": "Stay brief."},
+                    {"role": "user", "content": "first question about billing"},
+                    {"role": "assistant", "content": "first answer about billing"},
+                    {"role": "user", "content": "second question about memory"},
+                    {"role": "assistant", "content": "second answer about memory"},
+                    {"role": "user", "content": "final question"},
+                ],
+            },
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        app.dependency_overrides.pop(get_openai_service, None)
+        app.dependency_overrides.pop(provide_conversation_service, None)
+
+    assert response.status_code == 200
+    payload = provider.payloads[0]
+    assert payload["messages"][0]["role"] == "system"
+    assert payload["messages"][0]["content"].startswith(
+        "Stay brief.\n\nEarlier conversation summary (2 messages omitted):"
+    )
+    assert "first question about billing" in payload["messages"][0]["content"]
+    assert payload["messages"][1:] == [
+        {"role": "user", "content": "second question about memory"},
+        {"role": "assistant", "content": "second answer about memory"},
+        {"role": "user", "content": "final question"},
+    ]

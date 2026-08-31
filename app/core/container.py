@@ -115,7 +115,13 @@ def provide_conversation_repository() -> ConversationRepository:
 
 @lru_cache
 def provide_conversation_service() -> ConversationService:
-    return ConversationService(repository=provide_conversation_repository())
+    settings = get_settings()
+    return ConversationService(
+        repository=provide_conversation_repository(),
+        context_limit=settings.conversation_history_max_messages,
+        context_max_prompt_tokens=settings.conversation_history_max_prompt_tokens,
+        context_summary_max_chars=settings.conversation_history_summary_max_chars,
+    )
 
 
 @lru_cache

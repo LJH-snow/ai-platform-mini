@@ -741,3 +741,24 @@ hash 作为 owner_scope，Repository 层只按该键查询。检索没有引入 
 #### Sprint M2 收口学习总结
 
 这轮收口最大的教训是：CI 失败往往不是业务代码错了，而是测试和启动方式默认了本地开发环境。stub 版本、数据库契约和 webServer readiness 这三类问题都说明，稳定性要靠显式约束而不是隐式假设。把 frontend 启动绑定到明确 host/url 后，Playwright 在本地和 GitHub Actions 的行为一致了，也验证了 pipeline hardening 只是在收紧环境边界，没有改变产品语义。
+
+
+### 短期会话记忆（2026-08-31）
+
+- 新增 `ConversationService.build_short_term_context()`：先按 `CONVERSATION_HISTORY_MAX_MESSAGES`
+  保留最近消息，再按 `CONVERSATION_HISTORY_MAX_PROMPT_TOKENS` 裁剪 prompt 预算；被
+  挤出的旧消息会压缩为确定性的摘要，并受 `CONVERSATION_HISTORY_SUMMARY_MAX_CHARS`
+  约束。
+- Chat / Agent / OpenAI-compatible 三条链路都接入了摘要注入：Chat 与 Agent
+  把摘要并入请求 `system_prompt`，OpenAI-compatible 则把摘要合并到首条 system
+  message，保持原有消息顺序和租户隔离不变。
+- 新增配置项与测试覆盖，已通过 `ruff format --check .`、`ruff check .`、
+  `mypy app tests` 和 `pytest` 全量门禁。
+
+#### 短期会话记忆学习总结
+
+短期记忆不是把完整历史一直喂给模型，而是把“最近窗口 + 可解释摘要”作为服务端
+契约，这样 prompt 预算、摘要长度和消息顺序都能被稳定测试。把摘要注入 system
+prompt 比在客户端拼接更安全，因为它保留了现有请求语义，也能让 OpenAI-compatible
+路径继续遵循消息角色边界。最容易忽略的是 token 预算和摘要长度是两个独立约束，
+所以实现里同时做了窗口裁剪、预算裁剪和摘要截断。

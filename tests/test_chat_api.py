@@ -202,6 +202,53 @@ def test_chat_endpoint_reuses_thread_and_merges_server_history_first() -> None:
     ]
 
 
+def test_chat_endpoint_trims_history_and_merges_summary_into_system_prompt() -> None:
+    conversation_service = ConversationService(
+        repository=InMemoryConversationRepository(),
+        context_limit=2,
+        context_max_prompt_tokens=1000,
+        context_summary_max_chars=500,
+    )
+    chat_service = RecordingChatService()
+    app.dependency_overrides[get_chat_service] = lambda: chat_service
+    app.dependency_overrides[provide_conversation_service] = lambda: (
+        conversation_service
+    )
+
+    try:
+        response = client.post(
+            "/api/v1/chat",
+            json={
+                "message": "final question",
+                "system_prompt": "Stay brief.",
+                "history": [
+                    {"role": "user", "content": "first question about billing"},
+                    {"role": "assistant", "content": "first answer about billing"},
+                    {"role": "user", "content": "second question about memory"},
+                    {"role": "assistant", "content": "second answer about memory"},
+                ],
+            },
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        app.dependency_overrides.pop(get_chat_service, None)
+        app.dependency_overrides.pop(provide_conversation_service, None)
+
+    assert response.status_code == 200
+    recorded_request = chat_service.requests[0]
+    assert recorded_request.system_prompt is not None
+    assert recorded_request.system_prompt.startswith(
+        "Stay brief.\n\nEarlier conversation summary (2 messages omitted):"
+    )
+    assert "first question about billing" in recorded_request.system_prompt
+    assert [
+        (message.role, message.content) for message in recorded_request.history
+    ] == [
+        ("user", "second question about memory"),
+        ("assistant", "second answer about memory"),
+    ]
+
+
 def test_chat_endpoint_isolates_foreign_threads() -> None:
     conversation_service = _memory_conversation_service()
     chat_service = RecordingChatService()

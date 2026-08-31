@@ -476,6 +476,18 @@ GitHub Actions（`.github/workflows/ci.yml`）4 个 job：
 | GET | `/api/v1/workflow-builder/workflows/runs/{run_id}` | Workflow Builder 运行详情 |
 | DELETE | `/api/v1/workflow-builder/workflows/{workflow_id}` | 删除草稿 |
 
+### 短期会话记忆
+
+- Chat、Agent Run 和 OpenAI-compatible 端点都会把服务端历史与客户端消息先
+  合并，再按最近 `CONVERSATION_HISTORY_MAX_MESSAGES` 条消息和
+  `CONVERSATION_HISTORY_MAX_PROMPT_TOKENS` prompt 预算裁剪上下文；更早的
+  消息会压缩成确定性的摘要，并注入 system prompt
+- Chat / Agent 端点把摘要合并到请求的 `system_prompt`；OpenAI-compatible
+  端点把摘要合并到首条 system message，保持后续消息顺序不变
+- 配置：`CONVERSATION_HISTORY_MAX_MESSAGES=12`、
+  `CONVERSATION_HISTORY_MAX_PROMPT_TOKENS=4096`、
+  `CONVERSATION_HISTORY_SUMMARY_MAX_CHARS=2000`
+
 ### 长期记忆
 
 | Method | Path | Description |
@@ -674,6 +686,11 @@ AUTH_STORAGE=memory
 # 会话 / 工作流存储
 CONVERSATION_STORAGE=memory
 WORKFLOW_STORAGE=memory
+
+# Short-term conversation memory
+CONVERSATION_HISTORY_MAX_MESSAGES=12
+CONVERSATION_HISTORY_MAX_PROMPT_TOKENS=4096
+CONVERSATION_HISTORY_SUMMARY_MAX_CHARS=2000
 
 # Rate limiting
 RATE_LIMIT_ENABLED=true
@@ -888,3 +905,7 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
    测试 import 排序、Postgres integration contract，以及 Playwright webServer
    readiness / Vite E2E 绑定；GitHub Actions 的 `ci`、`compatibility-312`、
    `rag-golden`、`e2e` 全绿
+10. **短期会话记忆**：服务端会话在 Chat / Agent / OpenAI-compatible 三条链路上
+   统一做短期上下文裁剪与摘要注入，支持最近消息窗口、prompt token 预算和
+   可配置摘要长度；较早的历史被压缩为 deterministic summary 并合并到
+   system prompt

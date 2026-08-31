@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
@@ -12,16 +13,39 @@ from app.conversations.models import (
 )
 from app.conversations.repository import ConversationRepository
 from app.exceptions.base import ConversationNotFoundError, ValidationError
+from app.quota.token_estimator import estimate_prompt_tokens
 from app.schemas.chat import ChatMessage, ChatRole
 
 _VALID_ROLES = {"system", "user", "assistant"}
 _MAX_TITLE_LENGTH = 255
 _FALLBACK_TITLE = "New conversation"
+_DEFAULT_CONTEXT_MAX_MESSAGES = 12
+_DEFAULT_CONTEXT_MAX_PROMPT_TOKENS = 4096
+_DEFAULT_CONTEXT_SUMMARY_MAX_CHARS = 2000
+_SUMMARY_HEADER = "Earlier conversation summary"
+_SUMMARY_SEPARATOR = "\n\n"
+_SUMMARY_SNIPPET_MAX_CHARS = 160
+
+
+@dataclass(frozen=True)
+class ConversationContext:
+    history: list[ChatMessage]
+    summary: str | None = None
 
 
 class ConversationService:
-    def __init__(self, repository: ConversationRepository) -> None:
+    def __init__(
+        self,
+        repository: ConversationRepository,
+        *,
+        context_limit: int = _DEFAULT_CONTEXT_MAX_MESSAGES,
+        context_max_prompt_tokens: int = _DEFAULT_CONTEXT_MAX_PROMPT_TOKENS,
+        context_summary_max_chars: int = _DEFAULT_CONTEXT_SUMMARY_MAX_CHARS,
+    ) -> None:
         self._repository = repository
+        self._context_limit = max(context_limit, 0)
+        self._context_max_prompt_tokens = max(context_max_prompt_tokens, 100)
+        self._context_summary_max_chars = max(context_summary_max_chars, 100)
 
     async def create_thread(
         self, owner_key_hash: str, title: str
@@ -146,6 +170,99 @@ class ConversationService:
         if current_user_content is not None:
             merged = self._drop_retried_turn(merged, current_user_content)
         return merged
+
+    def build_short_term_context(
+        self,
+        history: Sequence[ChatMessage],
+        *,
+        system_prompt: str | None = None,
+    ) -> ConversationContext:
+        """Bound a conversation turn using a window plus deterministic summary."""
+
+        kept = list(history)
+        dropped: list[ChatMessage] = []
+        while len(kept) > self._context_limit:
+            dropped.append(kept.pop(0))
+        summary = self._build_summary(dropped)
+
+        while True:
+            combined_system_prompt = self._merge_system_prompt(system_prompt, summary)
+            if self._context_fits(combined_system_prompt, kept):
+                return ConversationContext(history=kept, summary=summary)
+            if kept:
+                dropped.insert(0, kept.pop(0))
+                summary = self._build_summary(dropped)
+                continue
+            if summary is None:
+                return ConversationContext(history=kept, summary=None)
+            summary = self._truncate_summary_to_budget(system_prompt, summary)
+            return ConversationContext(history=kept, summary=summary or None)
+
+    def _context_fits(
+        self,
+        system_prompt: str | None,
+        history: Sequence[ChatMessage],
+    ) -> bool:
+        messages: list[tuple[str, str]] = []
+        if system_prompt:
+            messages.append(("system", system_prompt))
+        messages.extend((message.role, message.content) for message in history)
+        return estimate_prompt_tokens(messages) <= self._context_max_prompt_tokens
+
+    def _truncate_summary_to_budget(
+        self, system_prompt: str | None, summary: str
+    ) -> str:
+        low = 0
+        high = len(summary)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = summary[:mid].rstrip()
+            combined_system_prompt = self._merge_system_prompt(system_prompt, candidate)
+            if self._context_fits(combined_system_prompt, ()):
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+        return best
+
+    @staticmethod
+    def _merge_system_prompt(
+        system_prompt: str | None, summary: str | None
+    ) -> str | None:
+        if summary is None:
+            return system_prompt
+        if system_prompt is None or not system_prompt.strip():
+            return summary
+        return f"{system_prompt.rstrip()}{_SUMMARY_SEPARATOR}{summary}"
+
+    def _build_summary(self, dropped: Sequence[ChatMessage]) -> str | None:
+        if not dropped:
+            return None
+        lines = [
+            f"{_SUMMARY_HEADER} ({len(dropped)} message"
+            f"{'s' if len(dropped) != 1 else ''} omitted):"
+        ]
+        for message in dropped:
+            lines.append(
+                f"- {message.role}: {self._summarize_message(message.content)}"
+            )
+        return self._truncate_text("\n".join(lines), self._context_summary_max_chars)
+
+    @staticmethod
+    def _summarize_message(content: str) -> str:
+        normalized = " ".join(content.split())
+        if len(normalized) <= _SUMMARY_SNIPPET_MAX_CHARS:
+            return normalized
+        return normalized[: _SUMMARY_SNIPPET_MAX_CHARS - 1].rstrip() + "…"
+
+    @staticmethod
+    def _truncate_text(text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        if limit <= 1:
+            return text[:limit]
+        return text[: limit - 1].rstrip() + "…"
 
     @staticmethod
     def _drop_retried_turn(

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from app.auth.models import APIKey
 from app.auth.tenant import resolve_tenant_scope
 from app.conversations.memory import (
+    merge_system_prompt,
     persist_turn,
     prepare_thread,
 )
@@ -53,17 +54,22 @@ async def create_chat_completion(
     context: RequestContext = http_request.state.context
     identity = context.identity
     owner_key_hash = resolve_tenant_scope(identity)
-    thread_id, merged_history = await prepare_thread(
+    thread_id, merged_history, summary = await prepare_thread(
         conversation_service,
         owner_key_hash=owner_key_hash,
         thread_id=request.thread_id,
         title=request.message,
         client_history=request.history,
         user_content=request.message,
+        system_prompt=request.system_prompt,
     )
     http_request.state.thread_id = thread_id
     request = request.model_copy(
-        update={"thread_id": thread_id, "history": merged_history}
+        update={
+            "thread_id": thread_id,
+            "system_prompt": merge_system_prompt(request.system_prompt, summary),
+            "history": merged_history,
+        }
     )
     messages: list[tuple[str, str]] = []
     if request.system_prompt:

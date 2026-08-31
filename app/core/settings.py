@@ -49,6 +49,9 @@ class Settings(BaseSettings):
 
     memory_context_items: int = Field(default=5, ge=0, le=20)
     memory_context_max_chars: int = Field(default=3000, ge=100, le=20000)
+    conversation_history_max_messages: int = Field(default=12, ge=0, le=100)
+    conversation_history_max_prompt_tokens: int = Field(default=4096, ge=100, le=32768)
+    conversation_history_summary_max_chars: int = Field(default=2000, ge=100, le=20000)
 
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 60

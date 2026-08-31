@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from app.auth.models import APIKey
 from app.auth.tenant import resolve_tenant_scope
 from app.conversations.memory import (
+    inject_openai_summary,
     persist_turn,
     prepare_thread,
 )
@@ -121,26 +122,35 @@ async def create_chat_completions(
             for message in request.messages[:-1]
             if message.role != "system"
         ]
-        thread_id, merged_history = await prepare_thread(
+        base_system_prompt = (
+            client_system_messages[0].content if client_system_messages else None
+        )
+        thread_id, merged_history, summary = await prepare_thread(
             conversation_service,
             owner_key_hash=owner_key_hash,
             thread_id=request.thread_id,
             title=request.messages[-1].content,
             client_history=client_history,
             user_content=request.messages[-1].content,
+            system_prompt=base_system_prompt,
         )
         http_request.state.thread_id = thread_id
         request = request.model_copy(
             update={
                 "thread_id": thread_id,
-                "messages": [
-                    *client_system_messages,
-                    *(
-                        OpenAIChatMessage(role=message.role, content=message.content)
-                        for message in merged_history
-                    ),
-                    request.messages[-1],
-                ],
+                "messages": inject_openai_summary(
+                    [
+                        *client_system_messages,
+                        *(
+                            OpenAIChatMessage(
+                                role=message.role, content=message.content
+                            )
+                            for message in merged_history
+                        ),
+                        request.messages[-1],
+                    ],
+                    summary,
+                ),
             }
         )
     reservation: QuotaReservation | None = await quota_service.reserve(

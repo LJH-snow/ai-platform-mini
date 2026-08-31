@@ -160,6 +160,31 @@ async def test_memory_merge_history_keeps_repeated_non_final_user() -> None:
 
 
 @pytest.mark.asyncio
+async def test_memory_build_short_term_context_trims_and_summarizes() -> None:
+    service = ConversationService(
+        repository=InMemoryConversationRepository(),
+        context_limit=2,
+        context_max_prompt_tokens=1000,
+        context_summary_max_chars=500,
+    )
+    history = [
+        ChatMessage(role="user", content="first question about billing"),
+        ChatMessage(role="assistant", content="first answer about billing"),
+        ChatMessage(role="user", content="second question about memory"),
+        ChatMessage(role="assistant", content="second answer about memory"),
+        ChatMessage(role="user", content="third question about summaries"),
+        ChatMessage(role="assistant", content="third answer about summaries"),
+    ]
+
+    context = service.build_short_term_context(history, system_prompt="Be concise.")
+
+    assert context.summary is not None
+    assert "Earlier conversation summary" in context.summary
+    assert "first question about billing" in context.summary
+    assert context.history == history[-2:]
+
+
+@pytest.mark.asyncio
 async def test_memory_persist_turn_appends_user_and_assistant() -> None:
     service = _service()
     thread = await service.create_thread(OWNER_1, "Turn thread")
