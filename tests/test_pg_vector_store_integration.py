@@ -122,7 +122,7 @@ class TestPgVectorStoreIntegration:
             embeddings=[_make_embedding()],
             owner_key_hash=_OWNER_KEY_HASH,
         )
-        with pytest.raises(ConflictError, match="already exists"):
+        with pytest.raises(ConflictError, match="conflicts"):
             await vector_store.add_document(
                 source_path="dup.txt",
                 content_sha256="dup_sha",
@@ -134,10 +134,10 @@ class TestPgVectorStoreIntegration:
             )
 
     @pytest.mark.asyncio
-    async def test_supersede_same_path_different_sha(
+    async def test_same_path_different_sha_raises_conflict(
         self, vector_store: PgVectorStore
     ) -> None:
-        """Same source_path with different SHA-256 should supersede old doc."""
+        """Same-owner source_path cannot silently replace an existing document."""
         first_id = await vector_store.add_document(
             source_path="versioned.txt",
             content_sha256="version1_sha",
@@ -148,33 +148,31 @@ class TestPgVectorStoreIntegration:
             owner_key_hash=_OWNER_KEY_HASH,
         )
 
-        second_id = await vector_store.add_document(
-            source_path="versioned.txt",
-            content_sha256="version2_sha",
-            embedding_model="nomic-embed-text",
-            embedding_dimensions=768,
-            chunks=["version 2 content"],
-            embeddings=[_make_embedding(value=0.5)],
-            owner_key_hash=_OWNER_KEY_HASH,
-        )
+        with pytest.raises(ConflictError, match="conflicts"):
+            await vector_store.add_document(
+                source_path="versioned.txt",
+                content_sha256="version2_sha",
+                embedding_model="nomic-embed-text",
+                embedding_dimensions=768,
+                chunks=["version 2 content"],
+                embeddings=[_make_embedding(value=0.5)],
+                owner_key_hash=_OWNER_KEY_HASH,
+            )
 
-        assert first_id != second_id
-
-        # Search should only find the new version
         results = await vector_store.search(
             query_embedding=_make_embedding(value=0.5),
             top_k=10,
             owner_key_hash=_OWNER_KEY_HASH,
         )
         assert len(results) == 1
-        assert results[0].content == "version 2 content"
-        assert results[0].document_id == second_id
+        assert results[0].content == "version 1 content"
+        assert results[0].document_id == first_id
 
     @pytest.mark.asyncio
-    async def test_cascade_delete_on_supersede(
+    async def test_conflict_keeps_existing_chunks(
         self, vector_store: PgVectorStore
     ) -> None:
-        """When a document is superseded, its chunks should be deleted."""
+        """A rejected same-path insert must leave existing chunks untouched."""
         await vector_store.add_document(
             source_path="cascade.txt",
             content_sha256="cascade_v1",
@@ -185,30 +183,29 @@ class TestPgVectorStoreIntegration:
             owner_key_hash=_OWNER_KEY_HASH,
         )
 
-        await vector_store.add_document(
-            source_path="cascade.txt",
-            content_sha256="cascade_v2",
-            embedding_model="nomic-embed-text",
-            embedding_dimensions=768,
-            chunks=["chunk_c"],
-            embeddings=[_make_embedding(value=0.3)],
-            owner_key_hash=_OWNER_KEY_HASH,
-        )
+        with pytest.raises(ConflictError, match="conflicts"):
+            await vector_store.add_document(
+                source_path="cascade.txt",
+                content_sha256="cascade_v2",
+                embedding_model="nomic-embed-text",
+                embedding_dimensions=768,
+                chunks=["chunk_c"],
+                embeddings=[_make_embedding(value=0.3)],
+                owner_key_hash=_OWNER_KEY_HASH,
+            )
 
-        # Search should only find chunk_c, not chunk_a or chunk_b
         results = await vector_store.search(
             query_embedding=_make_embedding(value=0.3),
             top_k=10,
             owner_key_hash=_OWNER_KEY_HASH,
         )
-        assert len(results) == 1
-        assert results[0].content == "chunk_c"
+        assert {result.content for result in results} == {"chunk_a", "chunk_b"}
 
     @pytest.mark.asyncio
-    async def test_source_path_unique_constraint(
+    async def test_source_path_unique_constraint_raises_conflict(
         self, vector_store: PgVectorStore
     ) -> None:
-        """Concurrent insert of same source_path should hit UNIQUE constraint."""
+        """Same-owner source_path with different content raises ConflictError."""
         await vector_store.add_document(
             source_path="unique_path.txt",
             content_sha256="unique_sha_1",
@@ -219,17 +216,16 @@ class TestPgVectorStoreIntegration:
             owner_key_hash=_OWNER_KEY_HASH,
         )
 
-        # Different SHA but same path — should supersede, not conflict
-        doc_id = await vector_store.add_document(
-            source_path="unique_path.txt",
-            content_sha256="unique_sha_2",
-            embedding_model="nomic-embed-text",
-            embedding_dimensions=768,
-            chunks=["second"],
-            embeddings=[_make_embedding()],
-            owner_key_hash=_OWNER_KEY_HASH,
-        )
-        assert doc_id is not None
+        with pytest.raises(ConflictError, match="conflicts"):
+            await vector_store.add_document(
+                source_path="unique_path.txt",
+                content_sha256="unique_sha_2",
+                embedding_model="nomic-embed-text",
+                embedding_dimensions=768,
+                chunks=["second"],
+                embeddings=[_make_embedding()],
+                owner_key_hash=_OWNER_KEY_HASH,
+            )
 
     @pytest.mark.asyncio
     async def test_search_returns_empty_when_no_documents(
