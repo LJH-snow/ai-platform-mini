@@ -731,3 +731,13 @@ hash 作为 owner_scope，Repository 层只按该键查询。检索没有引入 
 超时和预算都收敛在一个状态机里。月配额 retry-after 的回归提醒我们：时间相关测试
 不能假设“离下月一定超过一天”，必须覆盖月末/年末边界。架构图采用主链路 + 侧卡片
 表达，避免把所有内部类都画成节点，既保留可读性也能随 Sprint 演进更新。
+
+### Sprint M2 收口（CI/E2E）
+
+- 修复 CI 中的环境敏感失败：`types-openpyxl` stub pin、workflow builder 测试 import 排序、Postgres integration contract，以及 Playwright E2E 的 webServer readiness 误判。
+- Playwright 配置改为 backend 显式 `port`、frontend 显式 `--host 127.0.0.1` + `url`，避免 GitHub Actions 上的 `npm run dev -- --port 5174 --strictPort` 被错误判定为未就绪。
+- 最新 GitHub Actions 运行已确认 `ci`、`compatibility-312`、`rag-golden`、`e2e` 四个 job 全绿，业务逻辑无额外变更。
+
+#### Sprint M2 收口学习总结
+
+这轮收口最大的教训是：CI 失败往往不是业务代码错了，而是测试和启动方式默认了本地开发环境。stub 版本、数据库契约和 webServer readiness 这三类问题都说明，稳定性要靠显式约束而不是隐式假设。把 frontend 启动绑定到明确 host/url 后，Playwright 在本地和 GitHub Actions 的行为一致了，也验证了 pipeline hardening 只是在收紧环境边界，没有改变产品语义。
