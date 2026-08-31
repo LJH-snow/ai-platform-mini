@@ -9,21 +9,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from workflow_builder_fakes import (
-    TOOL_CALCULATOR,
-    WS_A,
-    WS_B,
-    FakeAgentService,
-    FakeChatService,
-    FakeRAGService,
-    FakeToolExecutor,
-    agent_definition_dict,
-    definition_dict,
-    get_prompt_template,
-    run_with_context,
-    set_prompt_template,
-    tool_definition_dict,
-)
 
 from app.agent_config.models import AgentRecord
 from app.agent_config.repository import InMemoryAgentDefinitionRepository
@@ -47,6 +32,21 @@ from app.workflow_builder.repository import (
 from app.workflow_builder.service import WorkflowBuilderService
 from app.workflows.engine.executor import NodeOutput, WorkflowEngine
 from app.workflows.engine.models import NodeType, WorkflowNode
+from workflow_builder_fakes import (
+    TOOL_CALCULATOR,
+    WS_A,
+    WS_B,
+    FakeAgentService,
+    FakeChatService,
+    FakeRAGService,
+    FakeToolExecutor,
+    agent_definition_dict,
+    definition_dict,
+    get_prompt_template,
+    run_with_context,
+    set_prompt_template,
+    tool_definition_dict,
+)
 
 # ── Service/engine fixture helpers ──────────────────────────────────────────
 

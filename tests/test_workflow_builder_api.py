@@ -7,17 +7,6 @@ from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
-from workflow_builder_fakes import (
-    WS_A,
-    WS_B,
-    FakeAgentService,
-    FakeChatService,
-    FakeToolExecutor,
-    agent_definition_dict,
-    definition_dict,
-    set_prompt_template,
-    tool_definition_dict,
-)
 
 from app.agent_config.models import AgentRecord
 from app.agent_config.repository import InMemoryAgentDefinitionRepository
@@ -44,6 +33,17 @@ from app.workflow_builder.repository import (
 from app.workflow_builder.service import WorkflowBuilderService
 from app.workflows.engine.executor import WorkflowEngine
 from app.workflows.engine.models import NodeType
+from workflow_builder_fakes import (
+    WS_A,
+    WS_B,
+    FakeAgentService,
+    FakeChatService,
+    FakeToolExecutor,
+    agent_definition_dict,
+    definition_dict,
+    set_prompt_template,
+    tool_definition_dict,
+)
 
 KEY_A = "sk-ws-a"
 KEY_B = "sk-ws-b"
