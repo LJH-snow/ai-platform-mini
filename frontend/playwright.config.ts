@@ -40,9 +40,9 @@ export default defineConfig({
       },
     },
     {
-      command: 'npm run dev -- --port 5174 --strictPort',
+      command: 'npm run dev -- --host 127.0.0.1 --port 5174 --strictPort',
       cwd: '.',
-      port: 5174,
+      url: 'http://127.0.0.1:5174',
       reuseExistingServer: false,
       timeout: 60_000,
       env: {
