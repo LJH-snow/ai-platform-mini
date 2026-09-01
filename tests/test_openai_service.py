@@ -171,6 +171,34 @@ async def test_stream_empty_provider_yields_fallback_chunk() -> None:
     assert chunks[1] == "data: [DONE]\n\n"
 
 
+@pytest.mark.asyncio
+async def test_stream_empty_provider_uses_requested_model_for_fallback_chunk() -> None:
+    import json
+
+    service = OpenAIService(
+        chat_service=ChatService(provider=_EmptyStreamProvider()),
+        usage_collector=UsageCollector(
+            UsageService(repository=InMemoryUsageRepository())
+        ),
+        adapter=OpenAIAdapter(),
+    )
+    request = OpenAIChatRequest(
+        model="gpt-4o",
+        messages=[OpenAIChatMessage(role="user", content="Hi")],
+        stream=True,
+    )
+    chunks = [
+        chunk
+        async for chunk in service.chat_completions_stream(
+            request, context=_test_context
+        )
+    ]
+
+    data = json.loads(chunks[0][6:].strip())
+    assert data["model"] == "gpt-4o"
+    assert data["choices"][0]["finish_reason"] == "stop"
+
+
 class _UsageAssertingQuotaService(QuotaService):
     def __init__(self, usage_repository: InMemoryUsageRepository) -> None:
         super().__init__(

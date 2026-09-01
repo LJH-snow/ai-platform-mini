@@ -131,7 +131,7 @@ class OpenAIService:
                 id=completion_id,
                 thread_id=chat_request.thread_id,
                 created=created,
-                model=self._chat_service.default_model,
+                model=model,
                 choices=[
                     OpenAIStreamChoice(
                         index=0,

@@ -762,3 +762,19 @@ hash 作为 owner_scope，Repository 层只按该键查询。检索没有引入 
 prompt 比在客户端拼接更安全，因为它保留了现有请求语义，也能让 OpenAI-compatible
 路径继续遵循消息角色边界。最容易忽略的是 token 预算和摘要长度是两个独立约束，
 所以实现里同时做了窗口裁剪、预算裁剪和摘要截断。
+
+### OpenAI 流式空流 fallback 修复（2026-09-01）
+
+- 修复 `OpenAIService.chat_completions_stream()` 的空流 fallback：当上游没有产生任何
+  chunk 时，fallback chunk 的 `model` 现在使用已经解析后的请求模型，而不是退回到
+  provider 默认模型。
+- 新增回归测试，覆盖显式 `model="gpt-4o"` 且 provider 返回空流的场景。
+- 该修复保持现有 usage、终止语义和 [DONE] 结尾不变，只更正 fallback chunk 的
+  公开模型字段。
+
+#### OpenAI 流式空流 fallback 学习总结
+
+流式 API 的空流不是“没模型可用”，而是“模型已经被请求方指定，只是上游没有产出
+任何 chunk”，所以 fallback 的公开字段应忠实反映请求语义。把 fallback 模型改成已
+解析模型后，消费者看到的第一个 chunk 就不会和请求体中的 model 冲突。这个修复很小，
+但它说明空流路径也必须和正常路径一样遵守公开契约。
