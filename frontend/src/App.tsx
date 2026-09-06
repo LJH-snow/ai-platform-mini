@@ -47,6 +47,8 @@ import { ToolCenter } from './platform/ToolCenter.tsx'
 import { UsageDashboardPage } from './platform/UsageDashboard.tsx'
 import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
+import { createMultiAgentClient } from './multiagent/client.ts'
+import { MultiAgentPanel } from './multiagent/MultiAgentPanel.tsx'
 import { createWorkflowClient } from './workflow/client.ts'
 import { WorkflowPanel } from './workflow/WorkflowPanel.tsx'
 import { WorkflowBuilder } from './workflow-builder/WorkflowBuilder.tsx'
@@ -69,6 +71,7 @@ type AppPage =
   | 'admin'
   | 'members'
   | 'agents'
+  | 'multi-agent'
   | 'tools'
   | 'run'
   | 'usage'
@@ -622,6 +625,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const memoryClient = useMemo(
     () =>
       createMemoryClient({
+        apiBaseUrl: runtimeConfig.apiBaseUrl,
+        apiKey: effectiveApiKey,
+      }),
+    [effectiveApiKey, runtimeConfig.apiBaseUrl],
+  )
+  const multiAgentClient = useMemo(
+    () =>
+      createMultiAgentClient({
         apiBaseUrl: runtimeConfig.apiBaseUrl,
         apiKey: effectiveApiKey,
       }),
@@ -1301,6 +1312,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       { id: 'knowledge', label: '知识库', shortLabel: 'RAG' },
       { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
       { id: 'agents', label: 'Agent Studio', shortLabel: 'Agent' },
+      { id: 'multi-agent', label: '多 Agent 编排', shortLabel: '多Agent' },
       { id: 'tools', label: 'Tool Center', shortLabel: '工具' },
       { id: 'usage', label: '用量仪表盘', shortLabel: '用量' },
       { id: 'billing', label: 'Billing / 计划', shortLabel: '计划' },
@@ -1501,6 +1513,11 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   }
   if (page === 'agents') {
     return renderPlatformShell(<AgentStudio client={configClient} />)
+  }
+  if (page === 'multi-agent') {
+    return renderPlatformShell(
+      <MultiAgentPanel client={multiAgentClient} apiKeyConfigured={Boolean(effectiveApiKey)} />,
+    )
   }
   if (page === 'tools') {
     return renderPlatformShell(<ToolCenter client={configClient} />)
