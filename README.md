@@ -293,6 +293,8 @@ trace + metrics"]
 - **Prompt Studio**：模板版本历史、保存即新版本、设为当前版本/回滚
 - **Agent Studio**：Agent 定义（模型/Prompt 版本/工具勾选/步数/温度）、
   Benchmark 运行与历史
+- **多 Agent 编排**：任务输入 + 运行配置（子任务数/并发/失败策略/超时/预算）、
+  SSE 实时子任务时间线、脱敏截断汇总输出、同步模式兜底、Run 历史回放
 - **Tool Center**：workspace 级工具启用开关 + JSON Schema 展示
 - **用量仪表盘**：按日 Token 趋势 + 按模型/按 Key 排行，CSV/JSON 导出
 - **Billing / 计划**：当前计划、月度用量与资源计数
@@ -413,6 +415,9 @@ GitHub Actions（`.github/workflows/ci.yml`）4 个 job：
 | POST | `/api/v1/agent/runs` | 有界 Agent Run（同步 JSON） |
 | POST | `/api/v1/agent/runs/stream` | Agent SSE 流（生命周期事件 + 回答增量） |
 | POST | `/api/v1/multi-agent/runs` | Supervisor 拆分 + Orchestrator 编排的同步多 Agent Run |
+| POST | `/api/v1/multi-agent/runs/stream` | 多 Agent SSE 流（序号单调的生命周期事件 + 子任务时间线） |
+| GET | `/api/v1/multi-agent/runs` | 租户多 Agent Run 列表（跨租户 404） |
+| GET | `/api/v1/multi-agent/runs/{run_id}` | 多 Agent Run 安全回放详情（含脱敏截断汇总输出） |
 | GET | `/api/v1/runs` | 租户 Agent Run 列表（可选 `agent_id` 过滤） |
 | GET | `/api/v1/runs/{run_id}` | Run 安全回放详情（跨租户 404） |
 
@@ -912,7 +917,8 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
 10. **Sprint M3（已完成）**：多 Agent 编排收口——SSE 真实事件流（序号单调、
     文本脱敏截断、空流不补造）、Run 脱敏投影落库与租户隔离历史、同步响应与
     落库统一用脱敏截断版 `final_output`、Code Review 修掉子串反推
-    `error_code`；前端控制台留待后片
+    `error_code`；P3 前端控制台（运行表单 + SSE 时间线 + 汇总输出 +
+    历史回放 + Playwright 闭环 E2E）同步完成
 11. **短期会话记忆**：服务端会话在 Chat / Agent / OpenAI-compatible 三条链路上
    统一做短期上下文裁剪与摘要注入，支持最近消息窗口、prompt token 预算和
    可配置摘要长度；较早的历史被压缩为 deterministic summary 并合并到
