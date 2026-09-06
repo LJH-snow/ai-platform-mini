@@ -1,9 +1,9 @@
 import asyncio
 import json
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, Protocol
 
 from fastapi.testclient import TestClient
-from httpx import Response
 
 from app.adapters.openai_adapter import OpenAIAdapter
 from app.auth.hash import hash_api_key
@@ -34,6 +34,12 @@ class RecordingProvider(MockProvider):
         return await super().chat(payload)
 
 
+class _SseResponse(Protocol):
+    """Minimal transport-agnostic shape used by the streaming helper."""
+
+    def iter_lines(self) -> Iterator[str]: ...
+
+
 def _openai_service() -> OpenAIService:
     usage_service = UsageService(repository=InMemoryUsageRepository())
     return OpenAIService(
@@ -57,7 +63,7 @@ def _conversation_service() -> ConversationService:
     return ConversationService(repository=InMemoryConversationRepository())
 
 
-def _sse_data_lines(response: Response) -> list[str]:
+def _sse_data_lines(response: _SseResponse) -> list[str]:
     return [
         line
         for line in response.iter_lines()
