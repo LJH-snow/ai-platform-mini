@@ -148,6 +148,7 @@ class OrchestrationState:
     results: dict[str, SubtaskResult] = field(default_factory=dict)
     total_token_usage: int = 0
     error: str | None = None
+    error_code: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
@@ -171,4 +172,7 @@ class OrchestrationResult:
     subtask_results: list[SubtaskResult] = field(default_factory=list)
     total_token_usage: int = 0
     error: str | None = None
+    error_code: str | None = None
     duration_ms: int | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None

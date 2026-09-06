@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from app.exceptions.base import QuotaExceededError
@@ -33,7 +35,7 @@ async def _record_usage(service: QuotaService, ws: str, tokens: int) -> None:
             total_tokens=tokens,
             api_key_hash="k",
             workspace_id=ws,
-            usage_date="2026-08-08",
+            usage_date=datetime.now(UTC).strftime("%Y-%m-%d"),
         )
     )
 

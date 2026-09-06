@@ -23,6 +23,7 @@ from app.db.models import (
     APIKeyTable,
     Base,
     DailyUsageTable,
+    MultiAgentRunRecordTable,
     QuotaReservationTable,
     WorkspaceQuotaTable,
 )
@@ -54,10 +55,11 @@ _CORE_TABLES = [
     AuditEventTable,
     PlanTable,
     SubscriptionTable,
+    AgentRunRecordTable,
+    MultiAgentRunRecordTable,
     DailyUsageTable,
     QuotaReservationTable,
     WorkspaceQuotaTable,
-    AgentRunRecordTable,
     ConversationThreadTable,
     ConversationMessageTable,
     WorkflowRunTable,
@@ -334,6 +336,37 @@ async def migrate_run_records_schema(engine: AsyncEngine) -> None:
         logger.info("migrate_run_records_schema: added workspace_id column")
 
 
+async def migrate_multi_agent_run_records_schema(engine: AsyncEngine) -> None:
+    """Idempotent migration adding workspace scoping to multi-agent runs."""
+    async with engine.begin() as conn:
+        if not await _table_exists(conn, "multi_agent_run_records"):
+            return
+        result = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'multi_agent_run_records' "
+                "AND column_name = 'workspace_id' "
+                "AND table_schema = current_schema()"
+            )
+        )
+        if result.first() is not None:
+            return
+        await conn.execute(
+            text(
+                "ALTER TABLE multi_agent_run_records "
+                "ADD COLUMN workspace_id VARCHAR(64)"
+            )
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_multi_agent_run_records_workspace_id "
+                "ON multi_agent_run_records (workspace_id)"
+            )
+        )
+        logger.info("migrate_multi_agent_run_records_schema: added workspace_id column")
+
+
 def get_engine() -> AsyncEngine | None:
     return _engine
 
@@ -397,6 +430,7 @@ async def init_db(
         await migrate_rag_evals_schema(_engine)
         # Upgrade pre-existing run records that predate workspace scoping.
         await migrate_run_records_schema(_engine)
+        await migrate_multi_agent_run_records_schema(_engine)
         # Upgrade pre-existing usage rows that predate workspace scoping.
         await migrate_usage_schema(_engine)
         # Upgrade pre-existing quota reservations that predate workspace scoping.

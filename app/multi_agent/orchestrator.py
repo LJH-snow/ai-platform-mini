@@ -15,6 +15,12 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.multi_agent.events import (
+    MultiAgentEvent,
+    MultiAgentEventKind,
+    MultiAgentEventObserver,
+    _bounded_summary,
+)
 from app.multi_agent.models import (
     AgentConfig,
     AgentRole,
@@ -90,6 +96,8 @@ class Orchestrator:
         *,
         run_id: str | None = None,
         request_id: str | None = None,
+        observer: MultiAgentEventObserver | None = None,
+        cancel_event: asyncio.Event | None = None,
     ) -> OrchestrationResult:
         """Execute all subtasks respecting dependencies and policies."""
         config = config or OrchestrationConfig()
@@ -124,13 +132,17 @@ class Orchestrator:
                 start_time=start_time,
                 concurrency=concurrency,
                 request_id=request_id,
+                observer=observer,
+                cancel_event=cancel_event,
             )
         except asyncio.CancelledError:
             state.status = OrchestrationStatus.CANCELLED
             state.error = "Orchestration cancelled externally"
+            state.error_code = "cancelled"
         except Exception as exc:
             state.status = OrchestrationStatus.FAILED
             state.error = str(exc)
+            state.error_code = "internal_error"
 
         state.completed_at = datetime.now(UTC)
         duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -152,7 +164,10 @@ class Orchestrator:
             subtask_results=list(state.results.values()),
             total_token_usage=state.total_token_usage,
             error=state.error,
+            error_code=state.error_code,
             duration_ms=duration_ms,
+            started_at=state.started_at,
+            completed_at=state.completed_at,
         )
 
     async def _execute_dag(
@@ -166,18 +181,29 @@ class Orchestrator:
         start_time: float,
         concurrency: int,
         request_id: str | None,
+        observer: MultiAgentEventObserver | None,
+        cancel_event: asyncio.Event | None,
     ) -> None:
         """Execute tasks respecting dependencies (DAG execution)."""
         pending = set(task_map.keys())
         in_progress: dict[str, asyncio.Task[SubtaskResult]] = {}
 
         while pending or in_progress:
+            # Check external cancellation
+            if cancel_event is not None and cancel_event.is_set():
+                state.status = OrchestrationStatus.CANCELLED
+                state.error = "Orchestration cancelled externally"
+                state.error_code = "cancelled"
+                for task in in_progress.values():
+                    task.cancel()
+                return
             # Check global timeout
             if config.total_timeout is not None:
                 elapsed = time.monotonic() - start_time
                 if elapsed >= config.total_timeout:
                     state.status = OrchestrationStatus.TIMED_OUT
                     state.error = f"Global timeout exceeded ({config.total_timeout}s)"
+                    state.error_code = "timeout"
                     # Cancel in-progress tasks
                     for task in in_progress.values():
                         task.cancel()
@@ -190,6 +216,7 @@ class Orchestrator:
             ):
                 state.status = OrchestrationStatus.BUDGET_EXCEEDED
                 state.error = f"Token budget exceeded ({config.total_token_budget})"
+                state.error_code = "budget_exceeded"
                 for task in in_progress.values():
                     task.cancel()
                 return
@@ -210,6 +237,15 @@ class Orchestrator:
                             status=TaskStatus.SKIPPED,
                             error="Skipped due to dependency failure",
                         )
+                        if observer is not None:
+                            await observer.on_event(
+                                MultiAgentEvent(
+                                    run_id=state.run_id,
+                                    kind=MultiAgentEventKind.SUBTASK_SKIPPED,
+                                    sequence=0,
+                                    task_id=task_id,
+                                )
+                            )
                         pending.discard(task_id)
                         continue
                     ready.append(subtask)
@@ -226,6 +262,8 @@ class Orchestrator:
                         config=config,
                         semaphore=semaphore,
                         request_id=request_id,
+                        observer=observer,
+                        cancel_event=cancel_event,
                     )
                 )
 
@@ -244,6 +282,14 @@ class Orchestrator:
                             if result.status == TaskStatus.COMPLETED:
                                 completed.add(task_id)
                                 state.total_token_usage += result.token_usage
+                            elif result.status == TaskStatus.CANCELLED:
+                                state.status = OrchestrationStatus.CANCELLED
+                                state.error = "Orchestration cancelled externally"
+                                state.error_code = "cancelled"
+                                for t in in_progress.values():
+                                    if not t.done():
+                                        t.cancel()
+                                return
                             elif result.status == TaskStatus.FAILED:
                                 failed.add(task_id)
                                 if config.failure_policy == FailurePolicy.FAIL_FAST:
@@ -251,6 +297,7 @@ class Orchestrator:
                                     state.error = (
                                         f"Task {task_id} failed: {result.error}"
                                     )
+                                    state.error_code = "subtask_failed"
                                     for t in in_progress.values():
                                         t.cancel()
                                     return
@@ -263,6 +310,7 @@ class Orchestrator:
                     state.error = (
                         "Deadlock: pending tasks with unsatisfied dependencies"
                     )
+                    state.error_code = "dependency_deadlock"
                     return
                 break
 
@@ -273,6 +321,7 @@ class Orchestrator:
             state.status = OrchestrationStatus.COMPLETED
         else:
             state.status = OrchestrationStatus.FAILED
+            state.error_code = "subtask_failed"
 
     async def _execute_single_task(
         self,
@@ -281,6 +330,8 @@ class Orchestrator:
         config: OrchestrationConfig,
         semaphore: asyncio.Semaphore,
         request_id: str | None,
+        observer: MultiAgentEventObserver | None,
+        cancel_event: asyncio.Event | None,
     ) -> SubtaskResult:
         """Execute a single subtask using AgentRuntime."""
         start_time = time.monotonic()
@@ -299,6 +350,18 @@ class Orchestrator:
             result.error = f"No agent config for role {task.agent_role}"
             result.completed_at = datetime.now(UTC)
             result.duration_ms = int((time.monotonic() - start_time) * 1000)
+            if observer is not None:
+                await observer.on_event(
+                    MultiAgentEvent(
+                        run_id=state.run_id,
+                        kind=MultiAgentEventKind.SUBTASK_FAILED,
+                        sequence=0,
+                        task_id=task.id,
+                        agent_role=task.agent_role.value,
+                        duration_ms=result.duration_ms,
+                        error_code="subtask_failed",
+                    )
+                )
             return result
 
         # Build task input from template
@@ -313,6 +376,18 @@ class Orchestrator:
         # Execute with semaphore for concurrency control
         async with semaphore:
             try:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise asyncio.CancelledError()
+                if observer is not None:
+                    await observer.on_event(
+                        MultiAgentEvent(
+                            run_id=state.run_id,
+                            kind=MultiAgentEventKind.SUBTASK_STARTED,
+                            sequence=0,
+                            task_id=task.id,
+                            agent_role=task.agent_role.value,
+                        )
+                    )
                 # Create a runtime for this task
                 # Note: In production, this would use the runtime_factory
                 # For now, we simulate the execution
@@ -336,6 +411,20 @@ class Orchestrator:
                     # Fallback: placeholder for testing
                     result.output = f"[{task.agent_role}] Completed: {task.description}"
                     result.status = TaskStatus.COMPLETED
+                if observer is not None:
+                    result.duration_ms = int((time.monotonic() - start_time) * 1000)
+                    await observer.on_event(
+                        MultiAgentEvent(
+                            run_id=state.run_id,
+                            kind=MultiAgentEventKind.SUBTASK_COMPLETED,
+                            sequence=0,
+                            task_id=task.id,
+                            agent_role=task.agent_role.value,
+                            duration_ms=result.duration_ms,
+                            token_usage=result.token_usage,
+                            output_summary=_bounded_summary(result.output),
+                        )
+                    )
             except asyncio.CancelledError:
                 result.status = TaskStatus.CANCELLED
                 result.error = "Task cancelled"
@@ -345,6 +434,19 @@ class Orchestrator:
                 logger.warning(
                     "multi_agent_task_failed task_id=%s error=%s", task.id, exc
                 )
+                if observer is not None:
+                    result.duration_ms = int((time.monotonic() - start_time) * 1000)
+                    await observer.on_event(
+                        MultiAgentEvent(
+                            run_id=state.run_id,
+                            kind=MultiAgentEventKind.SUBTASK_FAILED,
+                            sequence=0,
+                            task_id=task.id,
+                            agent_role=task.agent_role.value,
+                            duration_ms=result.duration_ms,
+                            error_code="subtask_failed",
+                        )
+                    )
 
         result.completed_at = datetime.now(UTC)
         result.duration_ms = int((time.monotonic() - start_time) * 1000)

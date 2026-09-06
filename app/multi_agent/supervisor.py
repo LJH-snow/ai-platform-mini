@@ -15,9 +15,9 @@ from app.multi_agent.models import (
     Subtask,
     SupervisorDecision,
 )
+from app.schemas.chat import ChatRequest
 
 if TYPE_CHECKING:
-    from app.schemas.chat import ChatRequest
     from app.services.chat_service import ChatService
 
 logger = logging.getLogger(__name__)

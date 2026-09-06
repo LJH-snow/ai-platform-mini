@@ -122,6 +122,34 @@ class AgentRunRecordTable(Base):
     )
 
 
+class MultiAgentRunRecordTable(Base):
+    __tablename__ = "multi_agent_run_records"
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    api_key_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    api_key_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # F1 tenant scoping: workspace-bound runs carry the workspace id; legacy
+    # (unbound) runs keep NULL and match by key hash (same semantics as runs).
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    stop_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    duration_ms: Mapped[float | None] = mapped_column(nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=True
+    )
+
+
 class WorkspaceQuotaTable(Base):
     """Per-workspace quota overrides; NULL limits inherit the global default."""
 

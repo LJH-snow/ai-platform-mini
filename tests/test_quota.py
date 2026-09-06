@@ -76,7 +76,7 @@ async def test_reserve_exceeds_monthly_limit() -> None:
             model="llama3",
             total_tokens=180,
             api_key_hash="hash1",
-            usage_date="2026-08-01",
+            usage_date=datetime.now(UTC).strftime("%Y-%m-%d"),
         )
     )
     with pytest.raises(

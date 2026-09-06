@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from app.services.agent_run_record_service import AgentRunRecordService
     from app.services.agent_service import AgentService
     from app.services.chat_service import ChatService
+    from app.services.multi_agent_run_record_service import MultiAgentRunRecordService
     from app.services.workflow_service import PDFReportWorkflowService
     from app.tools.registry import ToolRegistry
     from app.workflow_builder.repository import (
@@ -78,6 +79,16 @@ def provide_agent_run_record_service() -> AgentRunRecordService | None:
     if get_engine() is None:
         return None
     return AgentRunRecordService(provide_session_factory())
+
+
+@lru_cache
+def provide_multi_agent_run_record_service() -> MultiAgentRunRecordService | None:
+    from app.db.init import get_engine
+    from app.services.multi_agent_run_record_service import MultiAgentRunRecordService
+
+    if get_engine() is None:
+        return None
+    return MultiAgentRunRecordService(provide_session_factory())
 
 
 @lru_cache
@@ -667,6 +678,7 @@ def clear_container_cache() -> None:
     provide_memory_repository.cache_clear()
     provide_agent_service.cache_clear()
     provide_agent_run_record_service.cache_clear()
+    provide_multi_agent_run_record_service.cache_clear()
     provide_workflow_service.cache_clear()
     provide_workflow_run_repository.cache_clear()
     provide_workflow_checkpointer.cache_clear()
