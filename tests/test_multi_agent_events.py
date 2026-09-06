@@ -56,6 +56,7 @@ class TestEventPublicDict:
         assert subtasks[0] == {
             "id": "t1",
             "agent_role": "research",
+            "agent_id": None,
             "description": "Research",
             "depends_on": [],
         }

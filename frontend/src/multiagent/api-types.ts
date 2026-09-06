@@ -75,3 +75,16 @@ export type MultiAgentRunHistoryApiDetail = Omit<
     subtask_results?: MultiAgentStreamSubtaskResult[] | null
   }
 }
+
+export type MultiAgentBenchmarkApiRun = {
+  id: number
+  agent_id: string
+  workspace_id: string
+  task_set: string
+  tool_call_accuracy: number | null
+  task_completion_rate: number | null
+  task_count: number
+  completed_count: number
+  created_at: string | null
+  metric_payload: Record<string, unknown>
+}

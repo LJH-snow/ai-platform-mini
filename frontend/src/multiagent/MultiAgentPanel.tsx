@@ -14,6 +14,7 @@ import {
 } from './reducer.ts'
 import { MultiAgentStreamFormatError } from './stream.ts'
 import type {
+  MultiAgentBenchmarkRun,
   MultiAgentFailurePolicy,
   MultiAgentRun,
   MultiAgentRunDetail,
@@ -26,7 +27,7 @@ type MultiAgentPanelProps = {
   apiKeyConfigured: boolean
 }
 
-type PanelView = 'run' | 'history'
+type PanelView = 'run' | 'history' | 'benchmark'
 
 const runStatusLabel = (status: MultiAgentRun['status']): string => {
   switch (status) {
@@ -103,6 +104,9 @@ const parseOptionalFloat = (value: string): number | null | undefined => {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+const ratioLabel = (value: number | null): string =>
+  value === null ? '--' : `${Math.round(value * 100)}%`
+
 function Timeline({ run }: { run: MultiAgentRun }): JSX.Element {
   return (
     <>
@@ -153,6 +157,11 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
   const [selectedDetail, setSelectedDetail] = useState<MultiAgentRunDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [benchmarkAgentId, setBenchmarkAgentId] = useState('')
+  const [benchmarkRuns, setBenchmarkRuns] = useState<MultiAgentBenchmarkRun[]>([])
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false)
+  const [benchmarkError, setBenchmarkError] = useState<string | null>(null)
+  const [benchmarkNotice, setBenchmarkNotice] = useState<string | null>(null)
   const controllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -190,6 +199,51 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
       setSelectedDetail(null)
     } finally {
       setDetailLoading(false)
+    }
+  }
+
+  const loadBenchmarkRuns = async (): Promise<void> => {
+    setBenchmarkLoading(true)
+    setBenchmarkError(null)
+    try {
+      setBenchmarkRuns(await client.listBenchmarkRuns())
+    } catch (caught) {
+      setBenchmarkError(
+        caught instanceof MultiAgentBackendError ? caught.message : '对比评测历史加载失败。',
+      )
+      setBenchmarkRuns([])
+    } finally {
+      setBenchmarkLoading(false)
+    }
+  }
+
+  const runBenchmark = async (): Promise<void> => {
+    const agentId = benchmarkAgentId.trim()
+    if (agentId === '' || benchmarkLoading) return
+    setBenchmarkLoading(true)
+    setBenchmarkError(null)
+    setBenchmarkNotice(null)
+    try {
+      const run = await client.runBenchmark(agentId)
+      setBenchmarkNotice(
+        `对比评测完成：单 Agent 工具准确率 ${ratioLabel(run.toolCallAccuracy)}，` +
+          `多 Agent 完成率 ${ratioLabel(run.taskCompletionRate)}。`,
+      )
+      await loadBenchmarkRuns()
+    } catch (caught) {
+      if (
+        caught instanceof MultiAgentNetworkError ||
+        caught instanceof MultiAgentResponseError ||
+        caught instanceof RangeError
+      ) {
+        setBenchmarkError(caught.message)
+      } else {
+        setBenchmarkError(
+          caught instanceof MultiAgentBackendError ? caught.message : '对比评测运行失败。',
+        )
+      }
+    } finally {
+      setBenchmarkLoading(false)
     }
   }
 
@@ -287,6 +341,7 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
 
   const liveRun = streamState.run
   const detailRun = selectedDetail === null ? null : detailToRun(selectedDetail)
+  const latestBenchmarkRun = benchmarkRuns[0] ?? null
 
   return (
     <section className="platformPage">
@@ -311,6 +366,17 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
             }}
           >
             历史
+          </button>
+          <button
+            type="button"
+            className={view === 'benchmark' ? 'modeActive' : 'secondaryButton'}
+            aria-pressed={view === 'benchmark'}
+            onClick={() => {
+              setView('benchmark')
+              void loadBenchmarkRuns()
+            }}
+          >
+            对比评测
           </button>
         </div>
       </div>
@@ -520,6 +586,114 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
               )}
             </>
           )}
+        </>
+      )}
+
+      {view === 'benchmark' && (
+        <>
+          <div className="benchmarkPanel">
+            <div className="pageHeader">
+              <h3>单 Agent vs 多 Agent</h3>
+              <button
+                type="button"
+                className="secondaryButton"
+                disabled={benchmarkLoading}
+                onClick={() => void loadBenchmarkRuns()}
+              >
+                刷新
+              </button>
+            </div>
+            <p>
+              运行 3 条 golden 任务，对比单 Agent 与多 Agent 的完成率、 工具准确率和 Token
+              涨幅判断。
+            </p>
+            <div className="benchmarkActions">
+              <label htmlFor="multi-agent-benchmark-agent">Agent ID</label>
+              <input
+                id="multi-agent-benchmark-agent"
+                type="text"
+                value={benchmarkAgentId}
+                onChange={(event) => setBenchmarkAgentId(event.target.value)}
+                placeholder="粘贴用于对比基线的 Agent ID"
+              />
+              <button
+                type="button"
+                disabled={!apiKeyConfigured || benchmarkLoading || benchmarkAgentId.trim() === ''}
+                onClick={() => void runBenchmark()}
+              >
+                {benchmarkLoading ? '运行中…' : '运行对比评测'}
+              </button>
+            </div>
+
+            {!apiKeyConfigured && (
+              <p className="inlineError" role="alert">
+                未配置 API Key，无法运行对比评测。
+              </p>
+            )}
+            {benchmarkError !== null && (
+              <p className="inlineError" role="alert">
+                {benchmarkError}
+              </p>
+            )}
+            {benchmarkNotice !== null && (
+              <p className="inlineNotice" role="status">
+                {benchmarkNotice}
+              </p>
+            )}
+
+            {latestBenchmarkRun !== null && (
+              <div className="benchmarkMetrics">
+                <div>
+                  <span>单 Agent 工具准确率</span>
+                  <strong>{ratioLabel(latestBenchmarkRun.toolCallAccuracy)}</strong>
+                </div>
+                <div>
+                  <span>多 Agent 完成率</span>
+                  <strong>{ratioLabel(latestBenchmarkRun.taskCompletionRate)}</strong>
+                </div>
+                <div>
+                  <span>完成数</span>
+                  <strong>
+                    {latestBenchmarkRun.completedCount}/{latestBenchmarkRun.taskCount}
+                  </strong>
+                </div>
+              </div>
+            )}
+
+            {benchmarkRuns.length > 0 && (
+              <table className="benchmarkTable">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Agent</th>
+                    <th>任务集</th>
+                    <th>单 Agent 工具准确率</th>
+                    <th>多 Agent 完成率</th>
+                    <th>完成数</th>
+                    <th>时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {benchmarkRuns.map((run) => (
+                    <tr key={run.id}>
+                      <td>{run.id}</td>
+                      <td>{run.agentId.slice(0, 8)}</td>
+                      <td>{run.taskSet}</td>
+                      <td>{ratioLabel(run.toolCallAccuracy)}</td>
+                      <td>{ratioLabel(run.taskCompletionRate)}</td>
+                      <td>
+                        {run.completedCount}/{run.taskCount}
+                      </td>
+                      <td>{run.createdAt === null ? '--' : run.createdAt.slice(0, 19)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {!benchmarkLoading && benchmarkRuns.length === 0 && benchmarkError === null && (
+              <p>暂无对比评测历史。</p>
+            )}
+          </div>
         </>
       )}
     </section>

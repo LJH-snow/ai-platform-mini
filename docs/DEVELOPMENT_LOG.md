@@ -809,3 +809,34 @@ SSE 共用同一套安全投影和错误码，避免同一份数据在不同通�
 id 匹配，查询端再做一次摘要反而会让合法数据永远查不到。前端回放校验要严格按
 后端详情实际形态建模，不能复用列表字段继承出后端并不返回的字段。最后，SSE
 的终止语义只能来自真实取消、超时、预算或执行结果，断连或空流都不能被改写成成功。
+
+### Sprint M4（真正 Agentic 的多 Agent + 对比评测，2026-09-07）
+
+- P1 子任务 Agent 化：`Subtask` 增加可选 `agent_id`，Supervisor 解析透传；
+  `Orchestrator` 注入 `AgentService` 后，带 `context/api_key` 的子任务改走
+  `AgentService.run()`，复用 max_steps、Tool Registry、RAG、Token 预算、quota
+  与取消语义；无 `AgentService`/上下文时保持 M3 Chat fallback 兼容。
+- P2 对比评测：新增 `app/evals/multi_agent_compare.py`，用 3 条 golden 任务
+  （calculator、knowledge_search、故意无来源）分别跑真实单 Agent 与多 Agent，
+  复用 `agent_benchmark_runs` 落库，`metric_payload` 包含 single/multi outcomes
+  和 judgement；新增 `POST /api/v1/multi-agent/benchmark` 与
+  `GET /api/v1/multi-agent/benchmark/runs`，按 workspace 隔离。
+- P3 前端：Multi-Agent 页新增“对比评测”区块，可输入 Agent ID 运行 golden
+  对比，展示单 Agent 工具准确率、多 Agent 完成率、完成数指标卡和历史表；
+  前端 client 新增 `runBenchmark`/`listBenchmarkRuns`。
+- 新增/更新测试：`tests/test_multi_agent_agent_runtime.py` 覆盖 AgentService
+  执行、`agent_id` 透传、stopped 映射与 fallback；`tests/test_multi_agent_compare.py`
+  覆盖 runner 指标聚合、跨 workspace 拒绝以及 benchmark API。
+- 门禁：后端 `ruff format --check .`、`ruff check .`、`mypy app tests`、
+  `pytest -q -p no:warnings` 全绿；前端 `typecheck`、`lint`、聚焦和全量
+  `vitest` 全绿。受仓库既有文件影响，全项目 prettier check 仍会列出无关旧文件；
+  本次改动的前端文件均已通过 prettier check。
+
+#### Sprint M4 学习总结
+
+M4 最重要的边界是不把 Orchestrator 改写成第二套 Agent Runtime：子任务只是
+真正调用现有 `AgentService`，编排层保留依赖、并发、失败策略和预算聚合。评测
+端同样复用既有 benchmark 仓库而不是另建一套持久化，因此租户隔离、列表和落库
+语义都和单 Agent Benchmark 一致。前端“最小对比界面”只放指标卡和历史表，不
+扩展编排画布，保证 M4 能先形成可复盘的量化证据而不是继续堆可演示但不可评估
+的界面。

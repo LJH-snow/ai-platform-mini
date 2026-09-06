@@ -114,6 +114,11 @@ class Supervisor:
                     id=item.get("id", f"task_{len(subtasks) + 1}"),
                     description=item.get("description", ""),
                     agent_role=role,
+                    agent_id=(
+                        item.get("agent_id")
+                        if isinstance(item.get("agent_id"), str)
+                        else None
+                    ),
                     depends_on=tuple(item.get("depends_on", [])),
                     input_template=item.get("input_template", ""),
                     priority=item.get("priority", 0),

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from app.billing.repository import BillingRepository
     from app.billing.service import PlanService
     from app.evals.agent_benchmark import AgentBenchmarkRunner
+    from app.evals.multi_agent_compare import MultiAgentCompareRunner
     from app.mcp.manager import MCPToolManager
     from app.prompts.service import PromptRegistryService
     from app.rag.embedder import Embedder
@@ -570,6 +571,36 @@ def provide_agent_benchmark_runner() -> AgentBenchmarkRunner:
 
 
 @lru_cache
+def provide_multi_agent_compare_runner() -> MultiAgentCompareRunner:
+    """Provide the M4 single vs multi-agent comparison runner."""
+    from app.evals.benchmark_repository import (
+        BenchmarkRunRepository,
+        InMemoryBenchmarkRunRepository,
+        PostgresBenchmarkRunRepository,
+    )
+    from app.evals.multi_agent_compare import MultiAgentCompareRunner
+    from app.multi_agent.service import MultiAgentService
+
+    settings = get_settings()
+    repo: BenchmarkRunRepository
+    if settings.auth_storage == "postgres":
+        repo = PostgresBenchmarkRunRepository(provide_session_factory())
+    else:
+        repo = InMemoryBenchmarkRunRepository()
+    agent_service = provide_agent_service()
+    multi_agent_service = MultiAgentService(
+        provide_chat_service(),
+        agent_service=agent_service,
+    )
+    return MultiAgentCompareRunner(
+        agent_service=agent_service,
+        multi_agent_service=multi_agent_service,
+        agent_definition_service=provide_agent_definition_service(),
+        run_repository=repo,
+    )
+
+
+@lru_cache
 def provide_workflow_builder_repositories() -> tuple[
     WorkflowRepository, BuilderWorkflowRunRepository
 ]:
@@ -664,6 +695,7 @@ def clear_container_cache() -> None:
 
     # Clear in reverse dependency order: dependents before their deps.
     provide_agent_benchmark_runner.cache_clear()
+    provide_multi_agent_compare_runner.cache_clear()
     provide_workflow_builder_service.cache_clear()
     provide_workflow_builder_engine.cache_clear()
     provide_workflow_builder_repositories.cache_clear()

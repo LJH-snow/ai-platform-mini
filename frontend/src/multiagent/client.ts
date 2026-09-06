@@ -5,6 +5,7 @@ import {
   type MultiAgentStreamEvent,
 } from './stream.ts'
 import type {
+  MultiAgentBenchmarkApiRun,
   MultiAgentRunApiRequest,
   MultiAgentRunApiResponse,
   MultiAgentRunHistoryApiDetail,
@@ -19,6 +20,7 @@ import {
   MAX_MULTI_AGENT_MAX_SUBTASKS,
   MIN_MULTI_AGENT_MAX_CONCURRENCY,
   MIN_MULTI_AGENT_MAX_SUBTASKS,
+  type MultiAgentBenchmarkRun,
   type MultiAgentRun,
   type MultiAgentRunDetail,
   type MultiAgentRunInput,
@@ -40,6 +42,12 @@ export type MultiAgentClient = {
   ) => Promise<void>
   listRuns: (limit?: number, signal?: AbortSignal) => Promise<MultiAgentRunSummary[]>
   getRun: (runId: string, signal?: AbortSignal) => Promise<MultiAgentRunDetail>
+  runBenchmark: (
+    agentId: string,
+    signal?: AbortSignal,
+    maxSteps?: number,
+  ) => Promise<MultiAgentBenchmarkRun>
+  listBenchmarkRuns: (agentId?: string, signal?: AbortSignal) => Promise<MultiAgentBenchmarkRun[]>
 }
 
 export class MultiAgentBackendError extends Error {
@@ -241,6 +249,35 @@ const isApiHistoryDetail = (value: unknown): value is MultiAgentRunHistoryApiDet
   return hasApiHistoryFields(value) && isRecord(response)
 }
 
+const isApiBenchmarkRun = (value: unknown): value is MultiAgentBenchmarkApiRun => {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.id === 'number' &&
+    typeof value.agent_id === 'string' &&
+    typeof value.workspace_id === 'string' &&
+    typeof value.task_set === 'string' &&
+    (value.tool_call_accuracy === null || typeof value.tool_call_accuracy === 'number') &&
+    (value.task_completion_rate === null || typeof value.task_completion_rate === 'number') &&
+    typeof value.task_count === 'number' &&
+    typeof value.completed_count === 'number' &&
+    (value.created_at === null || typeof value.created_at === 'string') &&
+    isRecord(value.metric_payload)
+  )
+}
+
+const adaptBenchmarkRun = (payload: MultiAgentBenchmarkApiRun): MultiAgentBenchmarkRun => ({
+  id: payload.id,
+  agentId: payload.agent_id,
+  workspaceId: payload.workspace_id,
+  taskSet: payload.task_set,
+  toolCallAccuracy: payload.tool_call_accuracy,
+  taskCompletionRate: payload.task_completion_rate,
+  taskCount: payload.task_count,
+  completedCount: payload.completed_count,
+  createdAt: payload.created_at,
+  metricPayload: payload.metric_payload,
+})
+
 const throwForStatus = async (response: Response): Promise<never> => {
   const payload = await getErrorPayload(response)
   const detail = payload.detail
@@ -361,6 +398,33 @@ export function createMultiAgentClient(options: MultiAgentClientOptions = {}): M
       )
       if (!isApiHistoryDetail(payload)) throw new MultiAgentResponseError()
       return adaptMultiAgentHistoryDetail(payload)
+    },
+    async runBenchmark(agentId, signal, maxSteps) {
+      const body: Record<string, unknown> = { agent_id: agentId }
+      if (maxSteps !== undefined) body.max_steps = maxSteps
+      const payload = await requestJson(
+        '/api/v1/multi-agent/benchmark',
+        {
+          method: 'POST',
+          headers: authHeaders(options.apiKey, 'application/json'),
+          body: JSON.stringify(body),
+        },
+        signal ?? new AbortController().signal,
+      )
+      if (!isApiBenchmarkRun(payload)) throw new MultiAgentResponseError()
+      return adaptBenchmarkRun(payload)
+    },
+    async listBenchmarkRuns(agentId, signal) {
+      const query = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ''
+      const payload = await requestJson(
+        `/api/v1/multi-agent/benchmark/runs${query}`,
+        { method: 'GET', headers: authHeaders(options.apiKey, 'application/json') },
+        signal ?? new AbortController().signal,
+      )
+      if (!Array.isArray(payload) || !payload.every(isApiBenchmarkRun)) {
+        throw new MultiAgentResponseError()
+      }
+      return payload.map(adaptBenchmarkRun)
     },
   }
 }

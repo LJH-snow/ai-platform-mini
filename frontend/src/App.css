@@ -294,6 +294,91 @@ textarea {
   font-size: 0.8rem;
 }
 
+.benchmarkPanel {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #e7ecf5;
+}
+
+.benchmarkActions {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.benchmarkActions label {
+  color: #526177;
+  font-weight: 700;
+}
+
+.benchmarkActions input {
+  min-width: 0;
+  border: 1px solid #d6deed;
+  border-radius: 12px;
+  padding: 0.75rem 0.9rem;
+  color: #172033;
+  background: #fbfcff;
+  font: inherit;
+}
+
+.benchmarkMetrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.benchmarkMetrics > div {
+  border: 1px solid #e1e7f2;
+  border-radius: 8px;
+  padding: 1rem;
+  background: #fbfcff;
+}
+
+.benchmarkMetrics span {
+  display: block;
+  color: #64728a;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.benchmarkMetrics strong {
+  display: block;
+  margin-top: 0.35rem;
+  color: #172033;
+  font-size: 1.25rem;
+}
+
+.benchmarkTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.benchmarkTable th,
+.benchmarkTable td {
+  border-bottom: 1px solid #e7ecf5;
+  padding: 0.65rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.benchmarkTable th {
+  color: #64728a;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.inlineNotice {
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  color: #176b4d;
+  background: #eafaf2;
+  line-height: 1.5;
+}
+
 .stopButton {
   background: #b34a2f;
 }
@@ -2750,7 +2835,7 @@ select:focus-visible {
 .authCard {
   background: #fff;
   border-radius: 12px;
-  box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.08);
   padding: 2rem;
   width: 100%;
   max-width: 400px;
@@ -2783,10 +2868,10 @@ select:focus-visible {
 .authCard input:focus {
   border-color: var(--accent, #4f46e5);
   outline: none;
-  box-shadow: 0 0 0 2px rgba(79,70,229,0.15);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.15);
 }
 
-.authCard button[type="submit"] {
+.authCard button[type='submit'] {
   margin-top: 0.5rem;
   padding: 0.65rem;
   background: var(--accent, #4f46e5);
@@ -2798,7 +2883,7 @@ select:focus-visible {
   cursor: pointer;
 }
 
-.authCard button[type="submit"]:disabled {
+.authCard button[type='submit']:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }

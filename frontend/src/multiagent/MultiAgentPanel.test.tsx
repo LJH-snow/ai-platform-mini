@@ -97,6 +97,32 @@ const createFakeClient = (events: MultiAgentStreamEvent[]): MultiAgentClient => 
       ],
     },
   })),
+  runBenchmark: vi.fn(async (agentId: string) => ({
+    id: 7,
+    agentId,
+    workspaceId: 'ws-1',
+    taskSet: 'multi_agent_compare',
+    toolCallAccuracy: 0.5,
+    taskCompletionRate: 1,
+    taskCount: 3,
+    completedCount: 3,
+    createdAt: null,
+    metricPayload: { judgement: {} },
+  })),
+  listBenchmarkRuns: vi.fn(async () => [
+    {
+      id: 7,
+      agentId: 'agent-bench',
+      workspaceId: 'ws-1',
+      taskSet: 'multi_agent_compare',
+      toolCallAccuracy: 0.5,
+      taskCompletionRate: 1,
+      taskCount: 3,
+      completedCount: 3,
+      createdAt: null,
+      metricPayload: { judgement: {} },
+    },
+  ]),
 })
 
 describe('MultiAgentPanel', () => {
@@ -128,5 +154,20 @@ describe('MultiAgentPanel', () => {
   it('disables running without an api key', () => {
     render(<MultiAgentPanel client={createFakeClient([])} apiKeyConfigured={false} />)
     expect(screen.getByText('未配置 API Key，无法运行多 Agent。')).toBeVisible()
+  })
+
+  it('runs a single vs multi comparison benchmark', async () => {
+    const user = userEvent.setup()
+    const client = createFakeClient([])
+    render(<MultiAgentPanel client={client} apiKeyConfigured />)
+
+    await user.click(screen.getByRole('button', { name: '对比评测' }))
+    await user.type(screen.getByLabelText('Agent ID'), 'agent-1')
+    await user.click(screen.getByRole('button', { name: '运行对比评测' }))
+
+    expect(await screen.findByText(/对比评测完成/)).toBeVisible()
+    expect(screen.getAllByText('50%').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('3/3').length).toBeGreaterThan(0)
+    expect(client.runBenchmark).toHaveBeenCalledWith('agent-1')
   })
 })

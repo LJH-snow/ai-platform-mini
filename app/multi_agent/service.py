@@ -32,6 +32,9 @@ from app.multi_agent.orchestrator import Orchestrator
 from app.multi_agent.supervisor import Supervisor
 
 if TYPE_CHECKING:
+    from app.auth.models import APIKey
+    from app.core.context import RequestContext
+    from app.services.agent_service import AgentService
     from app.services.chat_service import ChatService
 
 logger = logging.getLogger(__name__)
@@ -48,10 +51,18 @@ _TERMINAL_KIND_BY_STATUS: dict[OrchestrationStatus, MultiAgentEventKind] = {
 class MultiAgentService:
     """Application boundary for multi-agent orchestration."""
 
-    def __init__(self, chat_service: ChatService) -> None:
+    def __init__(
+        self,
+        chat_service: ChatService,
+        agent_service: AgentService | None = None,
+    ) -> None:
         self._chat_service = chat_service
+        self._agent_service = agent_service
         self._supervisor = Supervisor(chat_service)
-        self._orchestrator = Orchestrator(chat_service=chat_service)
+        self._orchestrator = Orchestrator(
+            chat_service=chat_service,
+            agent_service=agent_service,
+        )
 
     async def run(
         self,
@@ -64,6 +75,8 @@ class MultiAgentService:
         max_subtasks: int = 5,
         observer: MultiAgentEventObserver | None = None,
         cancel_event: asyncio.Event | None = None,
+        context: RequestContext | None = None,
+        api_key: APIKey | None = None,
     ) -> OrchestrationResult:
         """Execute a multi-agent run: decompose then orchestrate."""
         config = config or OrchestrationConfig()
@@ -134,6 +147,7 @@ class MultiAgentService:
                     SubtaskSummary(
                         id=subtask.id,
                         agent_role=subtask.agent_role.value,
+                        agent_id=subtask.agent_id,
                         description=_bounded_summary(subtask.description),
                         depends_on=subtask.depends_on,
                     )
@@ -151,6 +165,8 @@ class MultiAgentService:
             request_id=request_id,
             observer=sequenced,
             cancel_event=cancel_event,
+            context=context,
+            api_key=api_key,
         )
 
         logger.info(

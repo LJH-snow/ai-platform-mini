@@ -34,6 +34,10 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
   Orchestrator 按依赖、并发、失败策略、超时和总 Token 预算执行子任务；
   `/runs/stream` 以 SSE 推送真实生命周期事件（序号单调、错误码白名单），
   Run 脱敏投影落库并支持租户隔离的历史列表/详情回放。
+- **多 Agent 对比评测**：M4 把子任务从普通 Chat 调用升级为真实
+  `AgentService`/Runtime 调用，可带 `agent_id` 选择具体 Agent 定义；新增
+  `/api/v1/multi-agent/benchmark` 运行单 Agent vs 多 Agent golden 对比，
+  落库指标并在 Multi-Agent 页展示对比历史。
 - **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool
   Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
 - **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和
@@ -176,7 +180,10 @@ trace + metrics"]
   `total_timeout` 和 `total_token_budget` 执行；子任务结果、错误、Token 用量和
   耗时以结构化响应返回；`POST /runs/stream` 推送真实 SSE 事件流，
   `GET /runs` 与 `GET /runs/{run_id}` 回放租户隔离的脱敏历史；
-  `error_code` 由生产者声明、API 只透传，不再从错误文案反推
+  `error_code` 由生产者声明、API 只透传，不再从错误文案反推；
+  子任务支持可选 `agent_id` 走真实 Agent Runtime（工具/RAG/记忆/预算/取消），
+  `POST /multi-agent/benchmark` 与 `GET /multi-agent/benchmark/runs` 提供
+  单 Agent vs 多 Agent 对比评测
 
 ### RAG 检索增强与安全
 
@@ -418,6 +425,8 @@ GitHub Actions（`.github/workflows/ci.yml`）4 个 job：
 | POST | `/api/v1/multi-agent/runs/stream` | 多 Agent SSE 流（序号单调的生命周期事件 + 子任务时间线） |
 | GET | `/api/v1/multi-agent/runs` | 租户多 Agent Run 列表（跨租户 404） |
 | GET | `/api/v1/multi-agent/runs/{run_id}` | 多 Agent Run 安全回放详情（含脱敏截断汇总输出） |
+| POST | `/api/v1/multi-agent/benchmark` | 运行单 Agent vs 多 Agent 对比评测（3 条 golden 任务） |
+| GET | `/api/v1/multi-agent/benchmark/runs` | 多 Agent 对比评测历史（可选 `agent_id`） |
 | GET | `/api/v1/runs` | 租户 Agent Run 列表（可选 `agent_id` 过滤） |
 | GET | `/api/v1/runs/{run_id}` | Run 安全回放详情（跨租户 404） |
 
@@ -919,7 +928,11 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     落库统一用脱敏截断版 `final_output`、Code Review 修掉子串反推
     `error_code`；P3 前端控制台（运行表单 + SSE 时间线 + 汇总输出 +
     历史回放 + Playwright 闭环 E2E）同步完成
-11. **短期会话记忆**：服务端会话在 Chat / Agent / OpenAI-compatible 三条链路上
+11. **Sprint M4（已完成）**：真正 Agentic 的多 Agent——子任务可选 `agent_id`
+    走真实 `AgentService`/Runtime（工具/RAG/记忆/预算/取消），新增
+    `/api/v1/multi-agent/benchmark` 单 Agent vs 多 Agent golden 对比与历史；
+    Multi-Agent 页新增“对比评测”指标卡和历史表，后端/前端门禁全绿
+12. **短期会话记忆**：服务端会话在 Chat / Agent / OpenAI-compatible 三条链路上
    统一做短期上下文裁剪与摘要注入，支持最近消息窗口、prompt token 预算和
    可配置摘要长度；较早的历史被压缩为 deterministic summary 并合并到
    system prompt

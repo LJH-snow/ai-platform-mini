@@ -11,13 +11,16 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.auth.models import APIKey
 from app.core.context import RequestContext
+from app.evals.multi_agent_compare import MultiAgentCompareRunner
 from app.multi_agent.events import (
     MultiAgentEvent,
     MultiAgentEventKind,
@@ -30,6 +33,7 @@ from app.multi_agent.models import (
 )
 from app.multi_agent.service import MultiAgentService
 from app.ratelimit.dependencies import require_rate_limit
+from app.schemas.agent import MAX_AGENT_MAX_STEPS
 from app.schemas.multi_agent import (
     MultiAgentRunDetail,
     MultiAgentRunRequest,
@@ -52,6 +56,29 @@ logger = logging.getLogger(__name__)
 
 _MAX_SUMMARY_CHARS = 256
 _MAX_RESULT_CHARS = 8192
+
+
+class MultiAgentBenchmarkRunRequest(BaseModel):
+    agent_id: str = Field(..., min_length=1, max_length=128)
+    max_steps: int | None = Field(
+        default=None,
+        ge=1,
+        le=MAX_AGENT_MAX_STEPS,
+    )
+
+
+class MultiAgentBenchmarkRunResponse(BaseModel):
+    id: int
+    agent_id: str
+    workspace_id: str
+    task_set: str
+    tool_call_accuracy: float | None = None
+    task_completion_rate: float | None = None
+    task_count: int = 0
+    completed_count: int = 0
+    created_at: datetime | None = None
+    metric_payload: dict[str, object] = Field(default_factory=dict)
+
 
 _SAFE_ERROR_MESSAGES: dict[str, str] = {
     "supervisor_failed": "Supervisor decomposition failed.",
@@ -84,10 +111,10 @@ def _subtask_public_error(result: SubtaskResult) -> str | None:
 
 def _provide_multi_agent_service() -> MultiAgentService:
     """Provide MultiAgentService instance via container."""
-    from app.core.container import provide_chat_service
+    from app.core.container import provide_agent_service, provide_chat_service
 
     chat_service = provide_chat_service()
-    return MultiAgentService(chat_service)
+    return MultiAgentService(chat_service, agent_service=provide_agent_service())
 
 
 def _provide_multi_agent_record_service() -> MultiAgentRunRecordService | None:
@@ -95,6 +122,13 @@ def _provide_multi_agent_record_service() -> MultiAgentRunRecordService | None:
     from app.core.container import provide_multi_agent_run_record_service
 
     return provide_multi_agent_run_record_service()
+
+
+def _provide_multi_agent_compare_runner() -> MultiAgentCompareRunner:
+    """Provide the M4 single vs multi-agent comparison runner."""
+    from app.core.container import provide_multi_agent_compare_runner
+
+    return provide_multi_agent_compare_runner()
 
 
 def _owner_scope(request: Request) -> str:
@@ -110,6 +144,27 @@ def _owner_scope(request: Request) -> str:
     if identity.workspace_id is not None:
         return identity.workspace_id
     return identity.api_key_hash
+
+
+def _benchmark_record_to_response(
+    record: object,
+) -> MultiAgentBenchmarkRunResponse:
+    """Convert one persisted benchmark record to the public response."""
+    from app.evals.benchmark_repository import BenchmarkRunRecord
+
+    assert isinstance(record, BenchmarkRunRecord)
+    return MultiAgentBenchmarkRunResponse(
+        id=record.id,
+        agent_id=record.agent_id,
+        workspace_id=record.workspace_id,
+        task_set=record.task_set,
+        tool_call_accuracy=record.tool_call_accuracy,
+        task_completion_rate=record.task_completion_rate,
+        task_count=record.task_count,
+        completed_count=record.completed_count,
+        created_at=record.created_at,
+        metric_payload=dict(record.metric_payload),
+    )
 
 
 # ── Stream bridge ───────────────────────────────────────────────────────────
@@ -229,6 +284,8 @@ async def create_multi_agent_run(
         request_id=context.request_id,
         supervisor_model=body.supervisor_model,
         max_subtasks=body.max_subtasks,
+        context=context,
+        api_key=api_key,
     )
     result_error_code = result.error_code
     public_response = MultiAgentRunResponse(
@@ -297,6 +354,8 @@ async def stream_multi_agent_run(
                 max_subtasks=body.max_subtasks,
                 observer=stream,
                 cancel_event=cancel_event,
+                context=context,
+                api_key=api_key,
             )
             result_error_code = result.error_code
             public_response = MultiAgentRunResponse(
@@ -413,6 +472,61 @@ async def get_multi_agent_run(
         **detail_fields,  # type: ignore[arg-type]
         response=project_run_response(payload),
     )
+
+
+@router.post(
+    "/benchmark",
+    response_model=MultiAgentBenchmarkRunResponse,
+    summary="Run single-agent vs multi-agent comparison",
+    status_code=201,
+)
+async def run_multi_agent_benchmark(
+    body: MultiAgentBenchmarkRunRequest,
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    runner: Annotated[
+        MultiAgentCompareRunner, Depends(_provide_multi_agent_compare_runner)
+    ],
+) -> MultiAgentBenchmarkRunResponse:
+    """Run the M4 golden comparison set and return persisted metrics."""
+    identity = request.state.context.identity
+    workspace_id = identity.workspace_id if identity else None
+    if workspace_id is None:
+        raise HTTPException(
+            status_code=404, detail="Agent not found or not accessible."
+        )
+    try:
+        record = await runner.run(
+            body.agent_id,
+            workspace_id=workspace_id,
+            context=request.state.context,
+            api_key=_api_key,
+            max_steps=body.max_steps,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _benchmark_record_to_response(record)
+
+
+@router.get(
+    "/benchmark/runs",
+    response_model=list[MultiAgentBenchmarkRunResponse],
+    summary="List multi-agent comparison benchmark runs",
+)
+async def list_multi_agent_benchmark_runs(
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    runner: Annotated[
+        MultiAgentCompareRunner, Depends(_provide_multi_agent_compare_runner)
+    ],
+    agent_id: str | None = None,
+) -> list[MultiAgentBenchmarkRunResponse]:
+    identity = request.state.context.identity
+    workspace_id = identity.workspace_id if identity else None
+    if workspace_id is None:
+        return []
+    records = await runner.list_runs(workspace_id, agent_id=agent_id)
+    return [_benchmark_record_to_response(record) for record in records]
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────

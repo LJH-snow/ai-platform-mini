@@ -100,3 +100,16 @@ export type MultiAgentHistoryResponse = {
 export type MultiAgentRunDetail = MultiAgentRunSummary & {
   response: MultiAgentHistoryResponse
 }
+
+export type MultiAgentBenchmarkRun = {
+  id: number
+  agentId: string
+  workspaceId: string
+  taskSet: string
+  toolCallAccuracy: number | null
+  taskCompletionRate: number | null
+  taskCount: number
+  completedCount: number
+  createdAt: string | null
+  metricPayload: Record<string, unknown>
+}

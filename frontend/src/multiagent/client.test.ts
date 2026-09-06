@@ -142,4 +142,37 @@ describe('createMultiAgentClient', () => {
     const [listUrl] = fetchImpl.mock.calls[0]
     expect(listUrl).toBe('/api/v1/multi-agent/runs?limit=10')
   })
+
+  it('runs and lists multi-agent benchmark comparison runs', async () => {
+    const benchmarkPayload = {
+      id: 7,
+      agent_id: 'agent-1',
+      workspace_id: 'ws-1',
+      task_set: 'multi_agent_compare',
+      tool_call_accuracy: 0.5,
+      task_completion_rate: 1,
+      task_count: 3,
+      completed_count: 3,
+      created_at: null,
+      metric_payload: { judgement: {} },
+    }
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(benchmarkPayload))
+      .mockResolvedValueOnce(jsonResponse([benchmarkPayload]))
+    const client = createMultiAgentClient({ fetchImpl })
+
+    const run = await client.runBenchmark('agent-1')
+    expect(run.id).toBe(7)
+    expect(run.toolCallAccuracy).toBe(0.5)
+
+    const runs = await client.listBenchmarkRuns('agent-1')
+    expect(runs).toHaveLength(1)
+    expect(runs[0].agentId).toBe('agent-1')
+    const [runUrl, runInit] = fetchImpl.mock.calls[0]
+    expect(runUrl).toBe('/api/v1/multi-agent/benchmark')
+    expect(runInit?.method).toBe('POST')
+    const listUrl = fetchImpl.mock.calls[1][0]
+    expect(listUrl).toBe('/api/v1/multi-agent/benchmark/runs?agent_id=agent-1')
+  })
 })

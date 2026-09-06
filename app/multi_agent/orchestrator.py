@@ -35,9 +35,13 @@ from app.multi_agent.models import (
     SupervisorDecision,
     TaskStatus,
 )
+from app.schemas.agent import AgentRunRequest
 
 if TYPE_CHECKING:
     from app.agents.runtime import AgentRuntime
+    from app.auth.models import APIKey
+    from app.core.context import RequestContext
+    from app.services.agent_service import AgentService
     from app.services.chat_service import ChatService
 
 logger = logging.getLogger(__name__)
@@ -84,9 +88,11 @@ class Orchestrator:
         self,
         runtime_factory: type[AgentRuntime] | None = None,
         chat_service: ChatService | None = None,
+        agent_service: AgentService | None = None,
     ) -> None:
         self._runtime_factory = runtime_factory
         self._chat_service = chat_service
+        self._agent_service = agent_service
 
     async def execute(
         self,
@@ -98,6 +104,8 @@ class Orchestrator:
         request_id: str | None = None,
         observer: MultiAgentEventObserver | None = None,
         cancel_event: asyncio.Event | None = None,
+        context: RequestContext | None = None,
+        api_key: APIKey | None = None,
     ) -> OrchestrationResult:
         """Execute all subtasks respecting dependencies and policies."""
         config = config or OrchestrationConfig()
@@ -134,6 +142,8 @@ class Orchestrator:
                 request_id=request_id,
                 observer=observer,
                 cancel_event=cancel_event,
+                context=context,
+                api_key=api_key,
             )
         except asyncio.CancelledError:
             state.status = OrchestrationStatus.CANCELLED
@@ -183,6 +193,8 @@ class Orchestrator:
         request_id: str | None,
         observer: MultiAgentEventObserver | None,
         cancel_event: asyncio.Event | None,
+        context: RequestContext | None,
+        api_key: APIKey | None,
     ) -> None:
         """Execute tasks respecting dependencies (DAG execution)."""
         pending = set(task_map.keys())
@@ -264,6 +276,8 @@ class Orchestrator:
                         request_id=request_id,
                         observer=observer,
                         cancel_event=cancel_event,
+                        context=context,
+                        api_key=api_key,
                     )
                 )
 
@@ -332,6 +346,8 @@ class Orchestrator:
         request_id: str | None,
         observer: MultiAgentEventObserver | None,
         cancel_event: asyncio.Event | None,
+        context: RequestContext | None,
+        api_key: APIKey | None,
     ) -> SubtaskResult:
         """Execute a single subtask using AgentRuntime."""
         start_time = time.monotonic()
@@ -388,19 +404,77 @@ class Orchestrator:
                             agent_role=task.agent_role.value,
                         )
                     )
-                # Create a runtime for this task
-                # Note: In production, this would use the runtime_factory
-                # For now, we simulate the execution
-                if self._chat_service is not None:
+                if (
+                    self._agent_service is not None
+                    and context is not None
+                    and api_key is not None
+                ):
+                    request = AgentRunRequest(message=task_input)
+                    if task.agent_id is not None:
+                        request = request.model_copy(update={"agent_id": task.agent_id})
+                    else:
+                        request = request.model_copy(
+                            update={"system_prompt": agent_config.system_prompt}
+                        )
+                        if agent_config.model is not None:
+                            request = request.model_copy(
+                                update={"model": agent_config.model}
+                            )
+                        if agent_config.max_steps is not None:
+                            request = request.model_copy(
+                                update={"max_steps": agent_config.max_steps}
+                            )
+                        if agent_config.timeout is not None:
+                            request = request.model_copy(
+                                update={"timeout_seconds": agent_config.timeout}
+                            )
+                        if agent_config.token_budget is not None:
+                            request = request.model_copy(
+                                update={"token_budget": agent_config.token_budget}
+                            )
+                    outcome = await self._agent_service.run(
+                        request,
+                        context=context,
+                        api_key=api_key,
+                        cancel_event=cancel_event,
+                    )
+                    result.output = outcome.result.answer or ""
+                    result.steps_taken = len(outcome.result.state.steps)
+                    result.tool_calls = [
+                        call.name
+                        for step in outcome.result.state.steps
+                        for call in step.decision.tool_calls
+                    ]
+                    if (
+                        outcome.prompt_tokens is not None
+                        and outcome.completion_tokens is not None
+                    ):
+                        result.token_usage = (
+                            outcome.prompt_tokens + outcome.completion_tokens
+                        )
+                    else:
+                        result.token_usage = outcome.result.token_usage or 0
+                    if outcome.result.status.value == "completed":
+                        result.status = TaskStatus.COMPLETED
+                    elif outcome.result.status.value == "cancelled":
+                        result.status = TaskStatus.CANCELLED
+                        result.error = "Subtask cancelled externally"
+                    else:
+                        result.status = TaskStatus.FAILED
+                        result.error = (
+                            "Subtask agent ended with "
+                            f"{outcome.result.stop_reason.value}"
+                        )
+                elif self._chat_service is not None:
                     from app.schemas.chat import ChatRequest
 
-                    request = ChatRequest(
+                    chat_request = ChatRequest(
                         message=task_input,
                         model=agent_config.model,
                         system_prompt=agent_config.system_prompt,
                         history=[],
                     )
-                    response = await self._chat_service.chat(request)
+                    response = await self._chat_service.chat(chat_request)
                     result.output = response.message.content
                     result.token_usage = (response.prompt_tokens or 0) + (
                         response.completion_tokens or 0
@@ -413,21 +487,47 @@ class Orchestrator:
                     result.status = TaskStatus.COMPLETED
                 if observer is not None:
                     result.duration_ms = int((time.monotonic() - start_time) * 1000)
+                    if result.status == TaskStatus.COMPLETED:
+                        await observer.on_event(
+                            MultiAgentEvent(
+                                run_id=state.run_id,
+                                kind=MultiAgentEventKind.SUBTASK_COMPLETED,
+                                sequence=0,
+                                task_id=task.id,
+                                agent_role=task.agent_role.value,
+                                duration_ms=result.duration_ms,
+                                token_usage=result.token_usage,
+                                output_summary=_bounded_summary(result.output),
+                            )
+                        )
+                    else:
+                        await observer.on_event(
+                            MultiAgentEvent(
+                                run_id=state.run_id,
+                                kind=MultiAgentEventKind.SUBTASK_FAILED,
+                                sequence=0,
+                                task_id=task.id,
+                                agent_role=task.agent_role.value,
+                                duration_ms=result.duration_ms,
+                                error_code="subtask_failed",
+                            )
+                        )
+            except asyncio.CancelledError:
+                result.status = TaskStatus.CANCELLED
+                result.error = "Task cancelled"
+                if observer is not None:
+                    result.duration_ms = int((time.monotonic() - start_time) * 1000)
                     await observer.on_event(
                         MultiAgentEvent(
                             run_id=state.run_id,
-                            kind=MultiAgentEventKind.SUBTASK_COMPLETED,
+                            kind=MultiAgentEventKind.SUBTASK_FAILED,
                             sequence=0,
                             task_id=task.id,
                             agent_role=task.agent_role.value,
                             duration_ms=result.duration_ms,
-                            token_usage=result.token_usage,
-                            output_summary=_bounded_summary(result.output),
+                            error_code="subtask_failed",
                         )
                     )
-            except asyncio.CancelledError:
-                result.status = TaskStatus.CANCELLED
-                result.error = "Task cancelled"
             except Exception as exc:
                 result.status = TaskStatus.FAILED
                 result.error = str(exc)

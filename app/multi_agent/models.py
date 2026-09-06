@@ -71,6 +71,7 @@ class Subtask:
     id: str
     description: str
     agent_role: AgentRole
+    agent_id: str | None = None  # Optional stored Agent definition id (M4)
     depends_on: tuple[str, ...] = ()  # IDs of tasks this depends on
     input_template: str = ""  # Template with {prev_results} placeholders
     priority: int = 0  # Higher = runs earlier when parallel
@@ -87,6 +88,7 @@ class SubtaskResult:
     agent_role: AgentRole = AgentRole.CUSTOM
     token_usage: int = 0
     steps_taken: int = 0
+    tool_calls: list[str] = field(default_factory=list)
     duration_ms: int | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None

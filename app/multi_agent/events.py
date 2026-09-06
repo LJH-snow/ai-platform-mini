@@ -72,6 +72,7 @@ class SubtaskSummary:
 
     id: str
     agent_role: str
+    agent_id: str | None = None
     description: str = ""
     depends_on: tuple[str, ...] = ()
 
@@ -80,6 +81,7 @@ class SubtaskSummary:
         return {
             "id": self.id,
             "agent_role": self.agent_role,
+            "agent_id": self.agent_id,
             "description": self.description,
             "depends_on": list(self.depends_on),
         }
