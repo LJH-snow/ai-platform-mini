@@ -1,7 +1,7 @@
 # Sprint M3：多 Agent 编排闭环（SSE + 持久化 + 前端）
 
 日期：2026-09-02
-状态：进行中
+状态：已完成（2026-09-06）
 
 ## 背景
 
@@ -120,10 +120,10 @@ M3 收口这三件事，并对齐平台既有模式（Agent SSE 事件契约、R
 - 历史详情跨租户 404；无 DB 时历史端点 503
 - 事件序列测试覆盖：正常完成、fail_fast、timeout、budget、取消、断连
 
-## 收口验收差距（2026-09-06，只读核验，未改生产代码）
+## 收口与验收记录（2026-09-06）
 
-> P1/P2 后端主体已写完，但按本规划口径还不能进 P3，需先收口以下项。
-> 2026-09-06 更新：下表高/中优先级已按收口实现并自测，待你 Code Review。
+> P1/P2 后端主体完成后，先按本规划口径收口高/中优先级缺口，再进入 P3；
+> 以下项目均已实现、Code Review 修复并提交。
 
 ### 高优先级（进 P3 前必须收口）
 
@@ -145,10 +145,20 @@ M3 收口这三件事，并对齐平台既有模式（Agent SSE 事件契约、R
 - [x] 新文件 `ruff format --check` / `ruff check` 通过
 - [x] `mypy app tests` 通过（335 文件）
 - [x] `pytest tests/test_multi_agent*.py` 通过（含新增 stream/records）
-- [ ] 全量 `pytest`：存量 `tests/test_auth.py::test_auth_disabled_allows_anonymous` 在干净 HEAD 同样 `Event loop is closed` 失败，非本次引入；其余相关 `agent/runs` 42 个通过
-- [ ] 前端五项门禁未跑（P3 时补）
-- [ ] `tests/test_quota*.py` 日期改动与 M3 无关，建议分开提交
+- [x] 全量 `pytest` 通过：本机默认 1042 passed / 39 skipped；GitHub Actions
+  `ci`、`compatibility-312`、`rag-golden`、`e2e` 四个 job 全绿
+- [x] 前端五项门禁（P3 后补齐）：prettier / oxlint / typecheck / vitest / build 全绿
+- [x] `tests/test_quota*.py` 日期边界修复已随收口落地，月末/月初断言不再依赖
+  “离下月一定超过一天”的假设
 
-### 本轮额外发现（已顺手修复，待 Review）
+### 实现期额外发现（已修复）
 
 - `app/multi_agent/supervisor.py` 的 `ChatRequest` 只在 `TYPE_CHECKING` 下导入，运行时 `decompose()` 必 `NameError`，已改为运行时导入；此前单测只覆盖 `_parse_decision` 故未暴露。
+
+### E2E 修复（2026-09-06）
+
+- 历史列表按 workspace 记录原始 `workspace_id`，查询时不再用 sha256 摘要比对；
+  新增真实注册用户场景与跨 workspace 404 回归。
+- 详情响应不要求 `subtask_count`；前端类型从继承改为 `Omit`，详情适配用
+  `subtaskResults.length` 回填，避免后端摘要与详情字段形态不一致导致回放失败。
+- 本地 Playwright 与 GitHub Actions `e2e` job 均已通过。

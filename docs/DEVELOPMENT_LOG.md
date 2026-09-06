@@ -778,3 +778,34 @@ prompt 比在客户端拼接更安全，因为它保留了现有请求语义，�
 任何 chunk”，所以 fallback 的公开字段应忠实反映请求语义。把 fallback 模型改成已
 解析模型后，消费者看到的第一个 chunk 就不会和请求体中的 model 冲突。这个修复很小，
 但它说明空流路径也必须和正常路径一样遵守公开契约。
+
+
+### Sprint M3（多 Agent 编排收口，2026-09-06）
+
+- 新增 `app/multi_agent/events.py`：多 Agent 生命周期事件模型、错误码白名单和
+  安全投影；文本统一走共享 `app/api/redaction.py`（从 agent API 纯移动，行为不变）。
+- 新增 `POST /api/v1/multi-agent/runs/stream`：SSE 按 `run_id`/`sequence`
+  单调发布真实事件，覆盖拆分子任务、子任务开始/完成/失败/跳过和所有终态；
+  客户端断连通过 `cancel_event` 传播，只有真实 `run_cancelled` 才落终态。
+- 新增 `multi_agent_run_records` 持久化与历史 API：`GET /runs` 列表和
+  `GET /runs/{run_id}` 详情按 workspace 原始 id（legacy 按 key hash）做租户
+  隔离，详情读取存储 payload 的白名单投影，无 DB 时返回 503。
+- 新增 `frontend/src/multiagent/` 控制台：运行表单、SSE 实时子任务时间线、
+  脱敏截断汇总输出、同步模式兜底和 Run 历史回放；接入应用导航和 Playwright
+  闭环 E2E。
+- Code Review 修复：`error_code` 由生产者声明、API 只透传，不再从错误文案
+  反推；同步响应、SSE 与落库统一使用脱敏截断版 `final_output`；历史租户
+  scope 改用原始 workspace id；详情类型允许缺省 `subtask_count`。
+- 全量门禁通过：后端默认 pytest 1042 passed / 39 skipped，前端
+  prettier / oxlint / typecheck / vitest / build 全绿；GitHub Actions 的
+  `ci`、`compatibility-312`、`rag-golden`、`e2e` 四个 job 全绿。
+
+#### Sprint M3 学习总结
+
+M3 的核心是把“可演示的多 Agent 编排”推进成有真实观察和持久化边界的产品能力，
+所以事件不是补造的 UI 动画，而是由执行层在真实边界点发出的领域事件。持久化与
+SSE 共用同一套安全投影和错误码，避免同一份数据在不同通道上出现不一致的公开
+语义。租户隔离的教训是 scope 计算必须与写入端同源：workspace 记录只能按原始
+id 匹配，查询端再做一次摘要反而会让合法数据永远查不到。前端回放校验要严格按
+后端详情实际形态建模，不能复用列表字段继承出后端并不返回的字段。最后，SSE
+的终止语义只能来自真实取消、超时、预算或执行结果，断连或空流都不能被改写成成功。

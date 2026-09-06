@@ -44,9 +44,9 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
 - **安全与多租户**：API Key 哈希存储、scrypt 密码哈希、限流、Token 配额、
   计费计划、审计日志；RAG 文档按租户隔离；Prompt、原始 Tool payload、Provider
   响应和敏感信息不公开。
-- **工程质量**：后端 1009 个通过测试（87 个测试文件）+ 前端
-  Vitest/Playwright/a11y 门禁、真实浏览器验证、失败/超时/断连回归、多 Python
-  版本 CI 和 Code Review 记录。
+- **工程质量**：后端 90 个测试文件、1081 个测试用例（默认 1042 通过、39 个
+  PostgreSQL 集成用例按需启用）+ 前端 Vitest/Playwright/a11y 门禁、真实浏览器
+  验证、失败/超时/断连回归、多 Python 版本 CI 和 Code Review 记录。
 
 ### 面向 HR 的建议演示路径
 
@@ -853,7 +853,7 @@ frontend/
 
 scripts/             # ingest / evaluate_rag / demo / 回填脚本
 docs/                # 路线图、设计文档、开发日志
-tests/               # 后端测试（87 个文件、1009 个通过测试）
+tests/               # 后端测试（90 个文件、1081 个用例）
 ```
 
 ## 设计原则
