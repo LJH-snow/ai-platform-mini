@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -155,6 +156,21 @@ def _clear() -> None:
     app.dependency_overrides.pop(_provide_multi_agent_record_service, None)
 
 
+def _register_workspace_key() -> tuple[str, str]:
+    """Register a fresh user and return (api_key, workspace_id)."""
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": f"multi-agent-{uuid4().hex}@test.com",
+            "display_name": "multi-agent-e2e",
+            "password": "secret123",
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    return body["api_key"], body["workspace"]["id"]
+
+
 def test_history_requires_bearer() -> None:
     assert client.get("/api/v1/multi-agent/runs").status_code in (401, 403)
 
@@ -192,3 +208,29 @@ def test_cross_tenant_read_is_404() -> None:
     assert asyncio.run(service.get_run("mine", owner_scope="owner-mine")) is not None
     listed = asyncio.run(service.list_runs(owner_scope="owner-mine"))
     assert [row.run_id for row in listed] == ["mine"]
+
+
+def test_workspace_history_scopes_by_raw_workspace_id() -> None:
+    """Workspace rows are matched by their raw workspace id, not its hash."""
+    key_a, ws_a = _register_workspace_key()
+    key_b, ws_b = _register_workspace_key()
+    mine = _row(run_id="mine-ws")
+    mine.workspace_id = ws_a
+    other = _row(run_id="other-ws")
+    other.workspace_id = ws_b
+    _override(_ScopedFakeRecordService([mine, other]))
+    try:
+        list_resp = client.get(
+            "/api/v1/multi-agent/runs",
+            headers={"Authorization": f"Bearer {key_a}"},
+        )
+        assert list_resp.status_code == 200
+        assert [run["run_id"] for run in list_resp.json()] == ["mine-ws"]
+
+        detail_resp = client.get(
+            "/api/v1/multi-agent/runs/other-ws",
+            headers={"Authorization": f"Bearer {key_a}"},
+        )
+        assert detail_resp.status_code == 404
+    finally:
+        _clear()

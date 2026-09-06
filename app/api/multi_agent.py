@@ -17,7 +17,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from app.auth.models import APIKey
-from app.auth.tenant import resolve_tenant_scope
 from app.core.context import RequestContext
 from app.multi_agent.events import (
     MultiAgentEvent,
@@ -96,6 +95,21 @@ def _provide_multi_agent_record_service() -> MultiAgentRunRecordService | None:
     from app.core.container import provide_multi_agent_run_record_service
 
     return provide_multi_agent_run_record_service()
+
+
+def _owner_scope(request: Request) -> str:
+    """Resolve the run-record tenant scope for the authenticated identity.
+
+    Run records store the raw workspace id (or NULL for legacy keys), so
+    the scope is the workspace id itself, falling back to the key hash.
+    """
+    context: RequestContext = request.state.context
+    identity = context.identity
+    if identity is None:
+        raise HTTPException(status_code=401, detail="Identity not resolved.")
+    if identity.workspace_id is not None:
+        return identity.workspace_id
+    return identity.api_key_hash
 
 
 # ── Stream bridge ───────────────────────────────────────────────────────────
@@ -361,8 +375,7 @@ async def list_multi_agent_runs(
     """List this tenant's run history (workspace- or key-scoped)."""
     if record_service is None:
         raise HTTPException(status_code=503, detail="Run history unavailable")
-    context: RequestContext = request.state.context
-    owner_scope = resolve_tenant_scope(context.identity)
+    owner_scope = _owner_scope(request)
     rows = await record_service.list_runs(
         limit=min(max(limit, 1), 200), owner_scope=owner_scope
     )
@@ -390,8 +403,7 @@ async def get_multi_agent_run(
     """Fetch one run; cross-tenant reads return 404."""
     if record_service is None:
         raise HTTPException(status_code=503, detail="Run history unavailable")
-    context: RequestContext = request.state.context
-    owner_scope = resolve_tenant_scope(context.identity)
+    owner_scope = _owner_scope(request)
     row = await record_service.get_run(run_id, owner_scope=owner_scope)
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
