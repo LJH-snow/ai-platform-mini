@@ -31,7 +31,9 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
 - **Agent Runtime**：模型决策、有限步数循环、工具执行、结果回填、超时、取消、
   配额和 Token 预算终态都有明确边界。
 - **多 Agent 编排**：`/api/v1/multi-agent/runs` 先由 Supervisor 拆分任务，再由
-  Orchestrator 按依赖、并发、失败策略、超时和总 Token 预算执行子任务。
+  Orchestrator 按依赖、并发、失败策略、超时和总 Token 预算执行子任务；
+  `/runs/stream` 以 SSE 推送真实生命周期事件（序号单调、错误码白名单），
+  Run 脱敏投影落库并支持租户隔离的历史列表/详情回放。
 - **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool
   Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
 - **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和
@@ -172,7 +174,9 @@ trace + metrics"]
 - 多 Agent 编排：`POST /api/v1/multi-agent/runs` 先让 Supervisor 输出任务图，
   再由 Orchestrator 依据依赖、`max_concurrency`、`failure_policy`、
   `total_timeout` 和 `total_token_budget` 执行；子任务结果、错误、Token 用量和
-  耗时以结构化响应返回
+  耗时以结构化响应返回；`POST /runs/stream` 推送真实 SSE 事件流，
+  `GET /runs` 与 `GET /runs/{run_id}` 回放租户隔离的脱敏历史；
+  `error_code` 由生产者声明、API 只透传，不再从错误文案反推
 
 ### RAG 检索增强与安全
 
@@ -905,7 +909,11 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
    测试 import 排序、Postgres integration contract，以及 Playwright webServer
    readiness / Vite E2E 绑定；GitHub Actions 的 `ci`、`compatibility-312`、
    `rag-golden`、`e2e` 全绿
-10. **短期会话记忆**：服务端会话在 Chat / Agent / OpenAI-compatible 三条链路上
+10. **Sprint M3（已完成）**：多 Agent 编排收口——SSE 真实事件流（序号单调、
+    文本脱敏截断、空流不补造）、Run 脱敏投影落库与租户隔离历史、同步响应与
+    落库统一用脱敏截断版 `final_output`、Code Review 修掉子串反推
+    `error_code`；前端控制台留待后片
+11. **短期会话记忆**：服务端会话在 Chat / Agent / OpenAI-compatible 三条链路上
    统一做短期上下文裁剪与摘要注入，支持最近消息窗口、prompt token 预算和
    可配置摘要长度；较早的历史被压缩为 deterministic summary 并合并到
    system prompt
