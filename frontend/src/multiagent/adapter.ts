@@ -102,7 +102,7 @@ export function adaptMultiAgentHistoryDetail(
         ? payload.duration_ms
         : null,
     totalTokens: payload.total_tokens ?? null,
-    subtaskCount: payload.subtask_count,
+    subtaskCount: subtaskResults.length,
     response: {
       status: typeof response.status === 'string' ? response.status : payload.status,
       finalOutput: typeof response.final_output === 'string' ? response.final_output : '',

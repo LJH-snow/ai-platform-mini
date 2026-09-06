@@ -60,7 +60,6 @@ describe('adaptMultiAgentHistoryDetail', () => {
     completed_at: null,
     duration_ms: 4,
     total_tokens: 9,
-    subtask_count: 1,
     response: {
       status: 'failed',
       final_output: '',

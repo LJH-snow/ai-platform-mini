@@ -118,18 +118,27 @@ describe('createMultiAgentClient', () => {
       total_tokens: 2,
       subtask_count: 0,
     }
+    // The detail endpoint omits subtask_count; it is derived from results.
+    const detailPayload: Record<string, unknown> = {
+      ...summary,
+      response: {
+        status: 'completed',
+        final_output: 'r',
+        subtask_results: [{ task_id: 't1', status: 'completed', output: 'x' }],
+      },
+    }
+    delete detailPayload.subtask_count
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse([summary]))
-      .mockResolvedValueOnce(
-        jsonResponse({ ...summary, response: { status: 'completed', final_output: 'r' } }),
-      )
+      .mockResolvedValueOnce(jsonResponse(detailPayload))
     const client = createMultiAgentClient({ fetchImpl })
     const items = await client.listRuns(10)
     expect(items).toHaveLength(1)
     expect(items[0].runId).toBe('run-h')
     const detail = await client.getRun('run-h')
     expect(detail.response.finalOutput).toBe('r')
+    expect(detail.subtaskCount).toBe(1)
     const [listUrl] = fetchImpl.mock.calls[0]
     expect(listUrl).toBe('/api/v1/multi-agent/runs?limit=10')
   })

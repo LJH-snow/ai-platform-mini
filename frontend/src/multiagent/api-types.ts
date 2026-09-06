@@ -62,7 +62,10 @@ export type MultiAgentRunHistoryApiSummary = {
   subtask_count: number
 }
 
-export type MultiAgentRunHistoryApiDetail = MultiAgentRunHistoryApiSummary & {
+export type MultiAgentRunHistoryApiDetail = Omit<
+  MultiAgentRunHistoryApiSummary,
+  'subtask_count'
+> & {
   response: {
     status?: string | null
     final_output?: string | null

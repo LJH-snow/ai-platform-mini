@@ -213,8 +213,7 @@ const isApiRunResponse = (value: unknown): value is MultiAgentRunApiResponse => 
   )
 }
 
-const isApiHistorySummary = (value: unknown): value is MultiAgentRunHistoryApiSummary => {
-  if (!isRecord(value)) return false
+const hasApiHistoryFields = (value: Record<string, unknown>): boolean => {
   return (
     typeof value.run_id === 'string' &&
     (value.request_id === undefined || isNullableString(value.request_id)) &&
@@ -227,15 +226,19 @@ const isApiHistorySummary = (value: unknown): value is MultiAgentRunHistoryApiSu
     (value.duration_ms === undefined ||
       value.duration_ms === null ||
       typeof value.duration_ms === 'number') &&
-    (value.total_tokens === undefined || isNullableBoundedInteger(value.total_tokens)) &&
-    typeof value.subtask_count === 'number'
+    (value.total_tokens === undefined || isNullableBoundedInteger(value.total_tokens))
   )
+}
+
+const isApiHistorySummary = (value: unknown): value is MultiAgentRunHistoryApiSummary => {
+  if (!isRecord(value)) return false
+  return hasApiHistoryFields(value) && typeof value.subtask_count === 'number'
 }
 
 const isApiHistoryDetail = (value: unknown): value is MultiAgentRunHistoryApiDetail => {
   if (!isRecord(value)) return false
   const response: unknown = value.response
-  return isApiHistorySummary(value) && isRecord(response)
+  return hasApiHistoryFields(value) && isRecord(response)
 }
 
 const throwForStatus = async (response: Response): Promise<never> => {
