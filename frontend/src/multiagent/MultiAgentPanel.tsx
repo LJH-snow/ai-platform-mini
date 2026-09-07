@@ -126,6 +126,14 @@ function Timeline({ run }: { run: MultiAgentRun }): JSX.Element {
             {subtask.description !== '' && <p>{subtask.description}</p>}
             {subtask.dependsOn.length > 0 && <p>依赖：{subtask.dependsOn.join('、')}</p>}
             {subtask.outputSummary !== null && <p>输出：{subtask.outputSummary}</p>}
+            {subtask.answerDeltas.length > 0 && (
+              <div className="answerDeltas">
+                <span>增量回答</span>
+                {subtask.answerDeltas.map((delta, index) => (
+                  <p key={index}>{delta}</p>
+                ))}
+              </div>
+            )}
             <p>
               Token：
               {subtask.tokenUsage === null ? '--' : String(subtask.tokenUsage)}

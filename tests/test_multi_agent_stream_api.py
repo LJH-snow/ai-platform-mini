@@ -336,6 +336,24 @@ def test_stream_projection_preserves_order_fields() -> None:
     assert hash_api_key("sk-test-integration") is not None
 
 
+def test_stream_projection_answer_delta_fields() -> None:
+    event = MultiAgentEvent(
+        run_id="run-1",
+        kind=MultiAgentEventKind.SUBTASK_ANSWER_DELTA,
+        sequence=4,
+        task_id="t1",
+        agent_role="research",
+        output_summary="partial",
+        agent_event_kind="answer_delta",
+        step_index=1,
+    )
+    projected = _to_stream_event(event, "req-1")
+    assert projected.event == "subtask_answer_delta"
+    assert projected.output_summary == "partial"
+    assert projected.agent_event_kind == "answer_delta"
+    assert projected.step_index == 1
+
+
 class _CaptureRecordService:
     """Record service double that captures save() kwargs for assertions."""
 

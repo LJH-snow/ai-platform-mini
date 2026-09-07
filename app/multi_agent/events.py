@@ -48,6 +48,7 @@ class MultiAgentEventKind(StrEnum):
     SUBTASK_COMPLETED = "subtask_completed"
     SUBTASK_FAILED = "subtask_failed"
     SUBTASK_SKIPPED = "subtask_skipped"
+    SUBTASK_ANSWER_DELTA = "subtask_answer_delta"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
     RUN_TIMED_OUT = "run_timed_out"
@@ -154,6 +155,8 @@ class MultiAgentEvent:
     final_output: str | None = None
     total_token_usage: int | None = None
     subtask_results: tuple[SubtaskResultSummary, ...] = ()
+    agent_event_kind: str | None = None
+    step_index: int | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -178,6 +181,8 @@ class MultiAgentEvent:
             "final_output": self.final_output,
             "total_token_usage": self.total_token_usage,
             "subtask_results": [result.to_dict() for result in self.subtask_results],
+            "agent_event_kind": self.agent_event_kind,
+            "step_index": self.step_index,
         }
 
 

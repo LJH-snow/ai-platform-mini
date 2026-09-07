@@ -840,3 +840,29 @@ M4 最重要的边界是不把 Orchestrator 改写成第二套 Agent Runtime：�
 语义都和单 Agent Benchmark 一致。前端“最小对比界面”只放指标卡和历史表，不
 扩展编排画布，保证 M4 能先形成可复盘的量化证据而不是继续堆可演示但不可评估
 的界面。
+
+### Sprint M5（子任务 answer_delta 透传到多 Agent SSE，2026-09-08）
+
+- 新增 `MultiAgentEventKind.SUBTASK_ANSWER_DELTA` 与 `MultiAgentEvent` 的
+  `agent_event_kind`/`step_index` 字段；`MultiAgentStreamEvent` 同步扩展。
+- Orchestrator 新增 `_SubtaskAnswerDeltaObserver`：在走 `AgentService` 且存在
+  observer（SSE 路径）时开启 `streaming=True`，把子任务内部 `ANSWER_DELTA`
+  安全透传为 `subtask_answer_delta`，并在 `subtask_completed` 前 drain 保证
+  单调顺序；同步 `/runs` 行为不变。
+- 每个 delta 的 `output_summary` 走脱敏 + 长度有界，仍只暴露
+  `task_id`/`agent_role`/`agent_event_kind`/`step_index` 等安全字段。
+- 新增/更新测试：事件投影、Orchestrator 透传顺序、SSE 投影新字段。
+- 前端 `frontend/src/multiagent/`：`stream.ts` 纳入 `subtask_answer_delta`，
+  `reducer.ts` 把增量追加到子任务 `answerDeltas`，`MultiAgentPanel` 时间线
+  渲染增量段落；同步/历史适配器补 `answerDeltas: []` 保持类型一致。
+- 门禁：后端 `ruff format --check .`、`ruff check .`、`mypy app tests`、
+  `pytest -q -p no:warnings` 全绿；前端 `npm run typecheck`、`npm run lint`、
+  `npm test -- --run`（299 passed）、`npm run build` 全绿。
+
+#### Sprint M5 学习总结
+
+M5 的难点不是“多一个事件类型”，而是把 Agent Runtime 的同步 `observe` 桥接到
+多 Agent 的异步 `on_event`，同时保住单调顺序：用 `asyncio.create_task` 调度，
+再在 `subtask_completed` 前统一 `drain`，避免 delta 晚于子任务结束事件。安全
+边界也顺着 M3/M4 的规则走——透传只发生在 SSE 路径，同步端点不改变行为，且
+每个 delta 仍然脱敏和有界。

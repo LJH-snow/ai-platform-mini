@@ -37,6 +37,7 @@ export type MultiAgentSubtask = {
   errorCode: string | null
   tokenUsage: number | null
   durationMs: number | null
+  answerDeltas: string[]
 }
 
 export type MultiAgentRun = {

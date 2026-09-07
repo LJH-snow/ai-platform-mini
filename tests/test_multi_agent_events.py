@@ -98,6 +98,23 @@ class TestEventPublicDict:
         )
         assert not event.is_terminal
 
+    def test_subtask_answer_delta_projection(self) -> None:
+        event = MultiAgentEvent(
+            run_id="run-1",
+            kind=MultiAgentEventKind.SUBTASK_ANSWER_DELTA,
+            sequence=4,
+            task_id="t1",
+            agent_role="research",
+            output_summary="partial answer",
+            agent_event_kind="answer_delta",
+            step_index=1,
+        )
+        data = event.to_public_dict()
+        assert data["kind"] == "subtask_answer_delta"
+        assert data["agent_event_kind"] == "answer_delta"
+        assert data["step_index"] == 1
+        assert data["output_summary"] == "partial answer"
+
 
 class TestSequencedObserver:
     """SequencedObserver assigns monotonic sequence numbers."""

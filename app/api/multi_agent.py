@@ -634,6 +634,8 @@ def _to_stream_event(event: MultiAgentEvent, request_id: str) -> MultiAgentStrea
         token_usage=event.token_usage,
         output_summary=event.output_summary,
         error_code=event.error_code,
+        agent_event_kind=event.agent_event_kind,
+        step_index=event.step_index,
         subtasks=[
             SubtaskSummarySchema(
                 id=s.id,

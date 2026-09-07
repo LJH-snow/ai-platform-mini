@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 
 from app.agents.models import (
+    AgentEvent,
+    AgentEventKind,
     AgentMessage,
     AgentRunResult,
     AgentState,
@@ -15,6 +19,7 @@ from app.agents.models import (
 )
 from app.auth.models import APIKey
 from app.core.context import RequestContext
+from app.multi_agent.events import MultiAgentEventKind
 from app.multi_agent.models import (
     AgentRole,
     OrchestrationStatus,
@@ -22,6 +27,8 @@ from app.multi_agent.models import (
     SupervisorDecision,
 )
 from app.multi_agent.orchestrator import Orchestrator
+from app.runs.protocols import AgentEventObserver
+from app.schemas.agent import AgentRunRequest
 from app.services.agent_service import AgentRunOutcome
 
 
@@ -122,6 +129,78 @@ class TestOrchestratorUsesAgentService:
         assert "max_steps" not in request.model_fields_set
         assert "model" not in request.model_fields_set
         assert "system_prompt" not in request.model_fields_set
+
+    @pytest.mark.asyncio
+    async def test_answer_delta_is_forwarded_to_stream(self) -> None:
+        agent_service = AsyncMock()
+
+        async def run(
+            request: AgentRunRequest,
+            *,
+            context: RequestContext | None = None,
+            api_key: APIKey | None = None,
+            observer: AgentEventObserver | None = None,
+            cancel_event: asyncio.Event | None = None,
+            streaming: bool = False,
+        ) -> AgentRunOutcome:
+            del request, context, api_key, cancel_event, streaming
+            if observer is not None:
+                observer.observe(
+                    AgentEvent(
+                        kind=AgentEventKind.ANSWER_DELTA,
+                        run_id="agent-run",
+                        sequence=1,
+                        occurred_at=datetime.now(UTC),
+                        step_index=1,
+                        message="hello from subtask",
+                    )
+                )
+            return _outcome()
+
+        agent_service.run.side_effect = run
+        orchestrator = Orchestrator(agent_service=agent_service)
+        decision = SupervisorDecision(
+            subtasks=[
+                Subtask(
+                    id="t1",
+                    description="research",
+                    agent_role=AgentRole.RESEARCH,
+                )
+            ]
+        )
+
+        collected: list = []
+
+        class Collector:
+            async def on_event(self, event: object) -> None:
+                collected.append(event)
+
+        context, api_key = _context()
+        result = await orchestrator.execute(
+            decision,
+            "user input",
+            context=context,
+            api_key=api_key,
+            observer=Collector(),
+        )
+
+        deltas = [
+            e
+            for e in collected
+            if getattr(e, "kind", None) == MultiAgentEventKind.SUBTASK_ANSWER_DELTA
+        ]
+        assert len(deltas) == 1
+        assert deltas[0].task_id == "t1"
+        assert deltas[0].agent_event_kind == "answer_delta"
+        assert deltas[0].step_index == 1
+        assert deltas[0].output_summary == "hello from subtask"
+        completed = [
+            e
+            for e in collected
+            if getattr(e, "kind", None) == MultiAgentEventKind.SUBTASK_COMPLETED
+        ]
+        assert collected.index(deltas[0]) < collected.index(completed[0])
+        assert result.status == OrchestrationStatus.COMPLETED
 
     @pytest.mark.asyncio
     async def test_stopped_agent_maps_to_failed_subtask(self) -> None:

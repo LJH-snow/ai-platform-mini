@@ -22,9 +22,19 @@ const liveEvents = (runId: string): MultiAgentStreamEvent[] => [
     subtasks: [{ id: 't1', agent_role: 'writer', description: 'draft', depends_on: [] }],
   },
   {
-    event: 'subtask_completed',
+    event: 'subtask_answer_delta',
     run_id: runId,
     sequence: 2,
+    task_id: 't1',
+    agent_role: 'writer',
+    output_summary: 'first chunk',
+    agent_event_kind: 'answer_delta',
+    step_index: 0,
+  },
+  {
+    event: 'subtask_completed',
+    run_id: runId,
+    sequence: 3,
     task_id: 't1',
     agent_role: 'writer',
     output_summary: 'draft done',
@@ -34,7 +44,7 @@ const liveEvents = (runId: string): MultiAgentStreamEvent[] => [
   {
     event: 'run_completed',
     run_id: runId,
-    sequence: 3,
+    sequence: 4,
     final_output: 'final report',
     total_token_usage: 5,
     duration_ms: 2,
@@ -136,6 +146,7 @@ describe('MultiAgentPanel', () => {
     expect(await screen.findByText('final report')).toBeVisible()
     expect(screen.getByText('t1')).toBeVisible()
     expect(screen.getByText(/draft done/)).toBeVisible()
+    expect(screen.getByText('first chunk')).toBeVisible()
     expect(screen.getByText('汇总输出')).toBeVisible()
   })
 

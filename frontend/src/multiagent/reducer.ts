@@ -81,6 +81,7 @@ const plannedSubtask = (item: MultiAgentStreamSubtask): MultiAgentSubtask => ({
   errorCode: null,
   tokenUsage: null,
   durationMs: null,
+  answerDeltas: [],
 })
 
 const upsertSubtask = (run: MultiAgentRun, subtask: MultiAgentSubtask): MultiAgentRun => {
@@ -135,7 +136,24 @@ export function reduceMultiAgentStream(
         errorCode: typeof event.error_code === 'string' ? event.error_code : null,
         tokenUsage: typeof event.token_usage === 'number' ? event.token_usage : null,
         durationMs: typeof event.duration_ms === 'number' ? event.duration_ms : null,
+        answerDeltas: current?.answerDeltas ?? [],
       })
+    }
+  }
+
+  if (event.event === 'subtask_answer_delta') {
+    if (typeof event.task_id === 'string' && event.task_id) {
+      const delta = typeof event.output_summary === 'string' ? event.output_summary : ''
+      if (delta) {
+        run = {
+          ...run,
+          subtasks: run.subtasks.map((item) =>
+            item.id === event.task_id
+              ? { ...item, answerDeltas: [...item.answerDeltas, delta] }
+              : item,
+          ),
+        }
+      }
     }
   }
 
@@ -187,6 +205,7 @@ export function reduceMultiAgentStream(
         errorCode: typeof item.error_code === 'string' ? item.error_code : null,
         tokenUsage: typeof item.token_usage === 'number' ? item.token_usage : null,
         durationMs: typeof item.duration_ms === 'number' ? item.duration_ms : null,
+        answerDeltas: current?.answerDeltas ?? [],
       })
     }
     run = next

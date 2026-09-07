@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from app.agents.models import AgentEvent, AgentEventKind
 from app.multi_agent.events import (
     MultiAgentEvent,
     MultiAgentEventKind,
@@ -79,6 +80,57 @@ _DEFAULT_AGENT_CONFIGS: dict[AgentRole, AgentConfig] = {
         max_steps=3,
     ),
 }
+
+
+class _SubtaskAnswerDeltaObserver:
+    """Forward a subtask's inner Agent answer_delta events into the run stream.
+
+    The AgentRuntime calls ``observe`` synchronously, so each delta is
+    scheduled as an async task against the multi-agent observer and drained
+    before the next lifecycle event is emitted to preserve ordering.
+    """
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        task_id: str,
+        agent_role: AgentRole,
+        observer: MultiAgentEventObserver,
+    ) -> None:
+        self._run_id = run_id
+        self._task_id = task_id
+        self._agent_role = agent_role
+        self._observer = observer
+        self._pending: list[asyncio.Task[None]] = []
+
+    def observe(self, event: AgentEvent) -> None:
+        if event.kind is not AgentEventKind.ANSWER_DELTA or not event.message:
+            return
+        multi_event = MultiAgentEvent(
+            run_id=self._run_id,
+            kind=MultiAgentEventKind.SUBTASK_ANSWER_DELTA,
+            sequence=0,
+            task_id=self._task_id,
+            agent_role=self._agent_role.value,
+            output_summary=_bounded_summary(event.message),
+            agent_event_kind=event.kind.value,
+            step_index=event.step_index,
+        )
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(self._observer.on_event(multi_event))
+        self._pending.append(task)
+        task.add_done_callback(self._release)
+
+    def _release(self, task: asyncio.Task[None]) -> None:
+        if task in self._pending:
+            self._pending.remove(task)
+
+    async def drain(self) -> None:
+        """Await all scheduled delta events before continuing the lifecycle."""
+        while self._pending:
+            pending = list(self._pending)
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 class Orchestrator:
@@ -432,12 +484,26 @@ class Orchestrator:
                             request = request.model_copy(
                                 update={"token_budget": agent_config.token_budget}
                             )
-                    outcome = await self._agent_service.run(
-                        request,
-                        context=context,
-                        api_key=api_key,
-                        cancel_event=cancel_event,
-                    )
+                    delta_observer: _SubtaskAnswerDeltaObserver | None = None
+                    if observer is not None:
+                        delta_observer = _SubtaskAnswerDeltaObserver(
+                            run_id=state.run_id,
+                            task_id=task.id,
+                            agent_role=task.agent_role,
+                            observer=observer,
+                        )
+                    try:
+                        outcome = await self._agent_service.run(
+                            request,
+                            context=context,
+                            api_key=api_key,
+                            observer=delta_observer,
+                            cancel_event=cancel_event,
+                            streaming=delta_observer is not None,
+                        )
+                    finally:
+                        if delta_observer is not None:
+                            await delta_observer.drain()
                     result.output = outcome.result.answer or ""
                     result.steps_taken = len(outcome.result.state.steps)
                     result.tool_calls = [

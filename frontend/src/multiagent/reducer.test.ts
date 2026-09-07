@@ -78,6 +78,32 @@ describe('reduceMultiAgentStream', () => {
     expect(state.run?.subtasks[1].errorCode).toBe('subtask_failed')
   })
 
+  it('appends subtask answer deltas before completion', () => {
+    let state = reduceMultiAgentStream(initialMultiAgentStreamState, started)
+    state = reduceMultiAgentStream(state, planned)
+    state = reduceMultiAgentStream(state, {
+      event: 'subtask_answer_delta',
+      sequence: 2,
+      ...base,
+      task_id: 't1',
+      agent_role: 'writer',
+      output_summary: 'first chunk',
+      agent_event_kind: 'answer_delta',
+      step_index: 0,
+    })
+    state = reduceMultiAgentStream(state, {
+      event: 'subtask_answer_delta',
+      sequence: 3,
+      ...base,
+      task_id: 't1',
+      agent_role: 'writer',
+      output_summary: 'second chunk',
+      agent_event_kind: 'answer_delta',
+      step_index: 1,
+    })
+    expect(state.run?.subtasks[0].answerDeltas).toEqual(['first chunk', 'second chunk'])
+  })
+
   it('closes the run on a terminal event with output and totals', () => {
     let state = reduceMultiAgentStream(initialMultiAgentStreamState, started)
     state = reduceMultiAgentStream(state, {

@@ -15,6 +15,7 @@ StreamEventName = (
     "subtask_completed",
     "subtask_failed",
     "subtask_skipped",
+    "subtask_answer_delta",
     "run_completed",
     "run_failed",
     "run_timed_out",
@@ -124,6 +125,12 @@ class MultiAgentStreamEvent(BaseModel):
     final_output: str | None = Field(default=None, max_length=8192)
     total_token_usage: int | None = Field(default=None, ge=0)
     subtask_results: list[SubtaskResultSummarySchema] = Field(default_factory=list)
+    agent_event_kind: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Kind of the forwarded inner Agent event (e.g. answer_delta).",
+    )
+    step_index: int | None = Field(default=None, ge=0)
 
 
 class MultiAgentRunSummary(BaseModel):

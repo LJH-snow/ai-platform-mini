@@ -38,6 +38,9 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
   `AgentService`/Runtime 调用，可带 `agent_id` 选择具体 Agent 定义；新增
   `/api/v1/multi-agent/benchmark` 运行单 Agent vs 多 Agent golden 对比，
   落库指标并在 Multi-Agent 页展示对比历史。
+- **多 Agent 增量流**：M5 把子任务内部的 `answer_delta` 安全透传到
+  `/runs/stream` 的 SSE，同一多 Agent 流里能看到 Research/Writer 子任务正在
+  输出的增量文本，字段脱敏、长度有界且严格在 `subtask_completed` 前按序号发出。
 - **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool
   Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
 - **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和

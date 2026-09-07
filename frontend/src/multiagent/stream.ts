@@ -7,6 +7,7 @@ export const MULTI_AGENT_STREAM_EVENTS = [
   'subtask_completed',
   'subtask_failed',
   'subtask_skipped',
+  'subtask_answer_delta',
   'run_completed',
   'run_failed',
   'run_timed_out',
@@ -41,6 +42,8 @@ export type MultiAgentStreamEvent = {
   final_output?: string | null
   total_token_usage?: number | null
   subtask_results?: MultiAgentStreamSubtaskResult[] | null
+  agent_event_kind?: string | null
+  step_index?: number | null
 }
 
 export class MultiAgentStreamFormatError extends Error {
@@ -165,6 +168,8 @@ export function parseMultiAgentStreamEvent(
     (record.reasoning !== undefined && !isNullableString(record.reasoning)) ||
     (record.final_output !== undefined && !isNullableString(record.final_output)) ||
     !isOptionalNullableBoundedInteger(record.total_token_usage, MAX_MULTI_AGENT_TOKEN_USAGE) ||
+    (record.agent_event_kind !== undefined && !isNullableString(record.agent_event_kind)) ||
+    !isOptionalNullableBoundedInteger(record.step_index, MAX_MULTI_AGENT_TOKEN_USAGE) ||
     (record.subtasks !== undefined && !isValidSubtasks(record.subtasks)) ||
     (record.subtask_results !== undefined && !isValidSubtaskResults(record.subtask_results))
   ) {
@@ -195,6 +200,12 @@ export function parseMultiAgentStreamEvent(
     ...(isOptionalNullableString(record.final_output) ? { final_output: record.final_output } : {}),
     ...(isOptionalNullableBoundedInteger(record.total_token_usage, MAX_MULTI_AGENT_TOKEN_USAGE)
       ? { total_token_usage: record.total_token_usage }
+      : {}),
+    ...(isOptionalNullableString(record.agent_event_kind)
+      ? { agent_event_kind: record.agent_event_kind }
+      : {}),
+    ...(isOptionalNullableBoundedInteger(record.step_index, MAX_MULTI_AGENT_TOKEN_USAGE)
+      ? { step_index: record.step_index }
       : {}),
     ...(record.subtask_results !== undefined && isValidSubtaskResults(record.subtask_results)
       ? { subtask_results: record.subtask_results }

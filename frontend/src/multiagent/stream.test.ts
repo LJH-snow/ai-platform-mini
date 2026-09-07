@@ -52,6 +52,26 @@ describe('parseMultiAgentStreamEvent', () => {
     expect(event?.subtask_results).toHaveLength(1)
   })
 
+  it('parses a subtask_answer_delta event with inner agent fields', () => {
+    const event = parseMultiAgentStreamEvent(
+      'subtask_answer_delta',
+      JSON.stringify({
+        run_id: 'run-1',
+        sequence: 2,
+        task_id: 't1',
+        agent_role: 'writer',
+        output_summary: 'first chunk',
+        agent_event_kind: 'answer_delta',
+        step_index: 3,
+      }),
+    )
+    expect(event?.event).toBe('subtask_answer_delta')
+    expect(event?.task_id).toBe('t1')
+    expect(event?.output_summary).toBe('first chunk')
+    expect(event?.agent_event_kind).toBe('answer_delta')
+    expect(event?.step_index).toBe(3)
+  })
+
   it('returns null for unknown event names', () => {
     expect(parseMultiAgentStreamEvent('answer_delta', started)).toBeNull()
   })
