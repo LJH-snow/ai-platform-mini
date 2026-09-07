@@ -41,6 +41,10 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
 - **多 Agent 增量流**：M5 把子任务内部的 `answer_delta` 安全透传到
   `/runs/stream` 的 SSE，同一多 Agent 流里能看到 Research/Writer 子任务正在
   输出的增量文本，字段脱敏、长度有界且严格在 `subtask_completed` 前按序号发出。
+- **多 Agent 事件级持久化与回放**：M6 把多 Agent 生命周期、子任务
+  `answer_delta` 以及 Step/Tool 内部事件一并落库（单 run 1000 条 / 2MB 上限），
+  提供租户隔离的 `GET /runs/{run_id}/events` 时间线回放；前端详情页优先按事件
+  序列重建时间线，摘要仅作兜底。
 - **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool
   Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
 - **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和
@@ -51,7 +55,7 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
 - **安全与多租户**：API Key 哈希存储、scrypt 密码哈希、限流、Token 配额、
   计费计划、审计日志；RAG 文档按租户隔离；Prompt、原始 Tool payload、Provider
   响应和敏感信息不公开。
-- **工程质量**：后端 90 个测试文件、1081 个测试用例（默认 1042 通过、39 个
+- **工程质量**：后端 93 个测试文件、1104 个测试用例（默认 1063 通过、41 个
   PostgreSQL 集成用例按需启用）+ 前端 Vitest/Playwright/a11y 门禁、真实浏览器
   验证、失败/超时/断连回归、多 Python 版本 CI 和 Code Review 记录。
 
@@ -428,6 +432,7 @@ GitHub Actions（`.github/workflows/ci.yml`）4 个 job：
 | POST | `/api/v1/multi-agent/runs/stream` | 多 Agent SSE 流（序号单调的生命周期事件 + 子任务时间线） |
 | GET | `/api/v1/multi-agent/runs` | 租户多 Agent Run 列表（跨租户 404） |
 | GET | `/api/v1/multi-agent/runs/{run_id}` | 多 Agent Run 安全回放详情（含脱敏截断汇总输出） |
+| GET | `/api/v1/multi-agent/runs/{run_id}/events` | 多 Agent 事件级时间线回放（Step/Tool/answer_delta，租户隔离） |
 | POST | `/api/v1/multi-agent/benchmark` | 运行单 Agent vs 多 Agent 对比评测（3 条 golden 任务） |
 | GET | `/api/v1/multi-agent/benchmark/runs` | 多 Agent 对比评测历史（可选 `agent_id`） |
 | GET | `/api/v1/runs` | 租户 Agent Run 列表（可选 `agent_id` 过滤） |
@@ -865,7 +870,7 @@ frontend/
 
 scripts/             # ingest / evaluate_rag / demo / 回填脚本
 docs/                # 路线图、设计文档、开发日志
-tests/               # 后端测试（90 个文件、1081 个用例）
+tests/               # 后端测试（93 个文件、1104 个用例）
 ```
 
 ## 设计原则
@@ -939,3 +944,8 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
    统一做短期上下文裁剪与摘要注入，支持最近消息窗口、prompt token 预算和
    可配置摘要长度；较早的历史被压缩为 deterministic summary 并合并到
    system prompt
+13. **Sprint M6（已完成）**：多 Agent 事件级持久化与全量回放——生命周期、
+    `answer_delta` 与子任务 Step/Tool 事件统一落 `multi_agent_run_events` 表
+    （1000 条 / 2MB 上限、best-effort 写库），新增
+    `GET /runs/{run_id}/events` 回放端点；前端详情页优先按事件序列回放并渲染
+    Step/Tool 时间线，后端/前端门禁全绿（Postgres 集成用例按需启用）

@@ -2,6 +2,7 @@ import { adaptMultiAgentHistoryDetail, adaptMultiAgentRunResponse } from './adap
 import {
   MultiAgentStreamFormatError,
   readMultiAgentSse,
+  parseMultiAgentStreamEvent,
   type MultiAgentStreamEvent,
 } from './stream.ts'
 import type {
@@ -42,6 +43,7 @@ export type MultiAgentClient = {
   ) => Promise<void>
   listRuns: (limit?: number, signal?: AbortSignal) => Promise<MultiAgentRunSummary[]>
   getRun: (runId: string, signal?: AbortSignal) => Promise<MultiAgentRunDetail>
+  getRunEvents: (runId: string, signal?: AbortSignal) => Promise<MultiAgentStreamEvent[]>
   runBenchmark: (
     agentId: string,
     signal?: AbortSignal,
@@ -398,6 +400,24 @@ export function createMultiAgentClient(options: MultiAgentClientOptions = {}): M
       )
       if (!isApiHistoryDetail(payload)) throw new MultiAgentResponseError()
       return adaptMultiAgentHistoryDetail(payload)
+    },
+    async getRunEvents(runId, signal) {
+      const payload = await requestJson(
+        `/api/v1/multi-agent/runs/${encodeURIComponent(runId)}/events`,
+        { method: 'GET', headers: authHeaders(options.apiKey, 'application/json') },
+        signal ?? new AbortController().signal,
+      )
+      if (!Array.isArray(payload)) throw new MultiAgentResponseError()
+      const events: MultiAgentStreamEvent[] = []
+      for (const item of payload) {
+        if (!isRecord(item) || typeof item.event !== 'string') {
+          throw new MultiAgentResponseError()
+        }
+        const event = parseMultiAgentStreamEvent(item.event, JSON.stringify(item))
+        if (event === null) throw new MultiAgentResponseError()
+        events.push(event)
+      }
+      return events
     },
     async runBenchmark(agentId, signal, maxSteps) {
       const body: Record<string, unknown> = { agent_id: agentId }

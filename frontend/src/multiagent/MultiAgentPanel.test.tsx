@@ -51,7 +51,85 @@ const liveEvents = (runId: string): MultiAgentStreamEvent[] => [
   },
 ]
 
-const createFakeClient = (events: MultiAgentStreamEvent[]): MultiAgentClient => ({
+const stepToolReplayEvents = (runId: string): MultiAgentStreamEvent[] => [
+  { event: 'run_started', run_id: runId, sequence: 0 },
+  {
+    event: 'subtasks_planned',
+    run_id: runId,
+    sequence: 1,
+    reasoning: 'research first',
+    subtasks: [{ id: 't1', agent_role: 'research', description: 'find sources', depends_on: [] }],
+  },
+  {
+    event: 'subtask_step_started',
+    run_id: runId,
+    sequence: 2,
+    task_id: 't1',
+    agent_role: 'research',
+    step_index: 0,
+  },
+  {
+    event: 'subtask_tool_started',
+    run_id: runId,
+    sequence: 3,
+    task_id: 't1',
+    agent_role: 'research',
+    step_index: 0,
+    tool_name: 'knowledge_search',
+    call_id: 'call-1',
+  },
+  {
+    event: 'subtask_tool_completed',
+    run_id: runId,
+    sequence: 4,
+    task_id: 't1',
+    agent_role: 'research',
+    tool_name: 'knowledge_search',
+    call_id: 'call-1',
+    output_summary: '3 sources',
+  },
+  {
+    event: 'subtask_step_completed',
+    run_id: runId,
+    sequence: 5,
+    task_id: 't1',
+    agent_role: 'research',
+    step_index: 0,
+    output_summary: 'gathered sources',
+  },
+  {
+    event: 'subtask_answer_delta',
+    run_id: runId,
+    sequence: 6,
+    task_id: 't1',
+    agent_role: 'research',
+    output_summary: 'draft notes',
+    agent_event_kind: 'answer_delta',
+  },
+  {
+    event: 'subtask_completed',
+    run_id: runId,
+    sequence: 7,
+    task_id: 't1',
+    agent_role: 'research',
+    output_summary: 'research done',
+    token_usage: 4,
+    duration_ms: 3,
+  },
+  {
+    event: 'run_completed',
+    run_id: runId,
+    sequence: 8,
+    final_output: 'report with sources',
+    total_token_usage: 4,
+    duration_ms: 3,
+  },
+]
+
+const createFakeClient = (
+  events: MultiAgentStreamEvent[],
+  replayEvents: MultiAgentStreamEvent[] = [],
+): MultiAgentClient => ({
   runMultiAgent: vi.fn(),
   streamMultiAgent: vi.fn(
     async (
@@ -107,6 +185,7 @@ const createFakeClient = (events: MultiAgentStreamEvent[]): MultiAgentClient => 
       ],
     },
   })),
+  getRunEvents: vi.fn(async () => replayEvents),
   runBenchmark: vi.fn(async (agentId: string) => ({
     id: 7,
     agentId,
@@ -160,6 +239,27 @@ describe('MultiAgentPanel', () => {
 
     expect(await screen.findByText('stored report')).toBeVisible()
     expect(screen.getByText('Run 回放')).toBeVisible()
+  })
+
+  it('replays persisted step and tool events from the history tab', async () => {
+    const user = userEvent.setup()
+    render(
+      <MultiAgentPanel
+        client={createFakeClient([], stepToolReplayEvents('run-h1'))}
+        apiKeyConfigured
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: '历史' }))
+    expect(await screen.findByText('run-h1'.slice(0, 8))).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '查看' }))
+
+    expect(await screen.findByText('report with sources')).toBeVisible()
+    expect(screen.getAllByText(/knowledge_search/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/3 sources/)).toBeVisible()
+    expect(screen.getByText(/Step 0/)).toBeVisible()
+    expect(screen.getByText(/gathered sources/)).toBeVisible()
+    expect(screen.getByText(/draft notes/)).toBeVisible()
   })
 
   it('disables running without an api key', () => {

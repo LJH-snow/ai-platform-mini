@@ -134,6 +134,34 @@ function Timeline({ run }: { run: MultiAgentRun }): JSX.Element {
                 ))}
               </div>
             )}
+            {subtask.steps.length > 0 && (
+              <div className="subtaskTraces">
+                <span>执行步骤</span>
+                {subtask.steps.map((step) => (
+                  <p key={step.index}>
+                    Step {step.index} · {step.status === 'completed' ? '完成' : '开始'}
+                    {step.outputSummary !== null && ` · ${step.outputSummary}`}
+                  </p>
+                ))}
+              </div>
+            )}
+            {subtask.tools.length > 0 && (
+              <div className="subtaskTraces">
+                <span>工具调用</span>
+                {subtask.tools.map((tool, index) => (
+                  <p key={`${tool.callId ?? 'tool'}-${index}`}>
+                    {tool.name} ·{' '}
+                    {tool.status === 'completed'
+                      ? '完成'
+                      : tool.status === 'failed'
+                        ? '失败'
+                        : '开始'}
+                    {tool.callId !== null && ` · ${tool.callId}`}
+                    {tool.outputSummary !== null && ` · ${tool.outputSummary}`}
+                  </p>
+                ))}
+              </div>
+            )}
             <p>
               Token：
               {subtask.tokenUsage === null ? '--' : String(subtask.tokenUsage)}
@@ -163,6 +191,7 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedDetail, setSelectedDetail] = useState<MultiAgentRunDetail | null>(null)
+  const [replayRun, setReplayRun] = useState<MultiAgentRun | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [benchmarkAgentId, setBenchmarkAgentId] = useState('')
@@ -182,6 +211,7 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
     setHistoryLoading(true)
     setHistoryError(null)
     setSelectedDetail(null)
+    setReplayRun(null)
     setDetailError(null)
     try {
       setHistory(await client.listRuns(50))
@@ -198,13 +228,30 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
   const openDetail = async (runId: string): Promise<void> => {
     setDetailLoading(true)
     setDetailError(null)
+    setSelectedDetail(null)
+    setReplayRun(null)
     try {
-      setSelectedDetail(await client.getRun(runId))
+      const events = await client.getRunEvents(runId)
+      if (events.length > 0) {
+        let state = initialMultiAgentStreamState
+        const ordered = [...events].sort((left, right) => left.sequence - right.sequence)
+        for (const event of ordered) {
+          state = reduceMultiAgentStream(state, event)
+        }
+        if (state.run !== null) {
+          setReplayRun(state.run)
+        } else {
+          setSelectedDetail(await client.getRun(runId))
+        }
+      } else {
+        setSelectedDetail(await client.getRun(runId))
+      }
     } catch (caught) {
       setDetailError(
         caught instanceof MultiAgentBackendError ? caught.message : 'Run 详情加载失败。',
       )
       setSelectedDetail(null)
+      setReplayRun(null)
     } finally {
       setDetailLoading(false)
     }
@@ -348,7 +395,7 @@ export function MultiAgentPanel({ client, apiKeyConfigured }: MultiAgentPanelPro
   }
 
   const liveRun = streamState.run
-  const detailRun = selectedDetail === null ? null : detailToRun(selectedDetail)
+  const detailRun = replayRun ?? (selectedDetail === null ? null : detailToRun(selectedDetail))
   const latestBenchmarkRun = benchmarkRuns[0] ?? null
 
   return (

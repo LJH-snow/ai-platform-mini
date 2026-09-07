@@ -7,6 +7,11 @@ export const MULTI_AGENT_STREAM_EVENTS = [
   'subtask_completed',
   'subtask_failed',
   'subtask_skipped',
+  'subtask_step_started',
+  'subtask_step_completed',
+  'subtask_tool_started',
+  'subtask_tool_completed',
+  'subtask_tool_failed',
   'subtask_answer_delta',
   'run_completed',
   'run_failed',
@@ -44,6 +49,8 @@ export type MultiAgentStreamEvent = {
   subtask_results?: MultiAgentStreamSubtaskResult[] | null
   agent_event_kind?: string | null
   step_index?: number | null
+  tool_name?: string | null
+  call_id?: string | null
 }
 
 export class MultiAgentStreamFormatError extends Error {
@@ -170,6 +177,8 @@ export function parseMultiAgentStreamEvent(
     !isOptionalNullableBoundedInteger(record.total_token_usage, MAX_MULTI_AGENT_TOKEN_USAGE) ||
     (record.agent_event_kind !== undefined && !isNullableString(record.agent_event_kind)) ||
     !isOptionalNullableBoundedInteger(record.step_index, MAX_MULTI_AGENT_TOKEN_USAGE) ||
+    (record.tool_name !== undefined && !isNullableString(record.tool_name)) ||
+    (record.call_id !== undefined && !isNullableString(record.call_id)) ||
     (record.subtasks !== undefined && !isValidSubtasks(record.subtasks)) ||
     (record.subtask_results !== undefined && !isValidSubtaskResults(record.subtask_results))
   ) {
@@ -207,6 +216,8 @@ export function parseMultiAgentStreamEvent(
     ...(isOptionalNullableBoundedInteger(record.step_index, MAX_MULTI_AGENT_TOKEN_USAGE)
       ? { step_index: record.step_index }
       : {}),
+    ...(isOptionalNullableString(record.tool_name) ? { tool_name: record.tool_name } : {}),
+    ...(isOptionalNullableString(record.call_id) ? { call_id: record.call_id } : {}),
     ...(record.subtask_results !== undefined && isValidSubtaskResults(record.subtask_results)
       ? { subtask_results: record.subtask_results }
       : {}),

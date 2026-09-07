@@ -866,3 +866,30 @@ M5 的难点不是“多一个事件类型”，而是把 Agent Runtime 的同�
 再在 `subtask_completed` 前统一 `drain`，避免 delta 晚于子任务结束事件。安全
 边界也顺着 M3/M4 的规则走——透传只发生在 SSE 路径，同步端点不改变行为，且
 每个 delta 仍然脱敏和有界。
+
+### Sprint M6（多 Agent 事件级持久化与全量回放，2026-09-07）
+
+- 新增 `multi_agent_run_events` 事件表与幂等迁移，一行一个已脱敏的公开事件；
+  `MultiAgentRunEventTable` 覆盖多 Agent 生命周期、`answer_delta` 与子任务
+  Step/Tool 事件字段。
+- `MultiAgentEvent` 补齐 `subtask_step_*` / `subtask_tool_*` 与
+  `tool_name`/`call_id`，Orchestrator 用通用子任务事件转发器取代原来的
+  `answer_delta` 专用观察者。
+- `MultiAgentService.run` 用 `ComposedObserver` + `BestEffortObserver` +
+  `SequencedObserver` 组合，让 SSE 与持久化共享同一递增序号，互不拖垮；
+  `MultiAgentEventRecorder` 带 1000 条 / 2MB 上限，写库失败只记日志。
+- 新增 `GET /api/v1/multi-agent/runs/{run_id}/events` 时间线回放端点，
+  租户隔离 404、无 DB 503；前端新增 `getRunEvents`，详情页优先按事件序列
+  重建时间线，摘要仅作兜底，并在时间线渲染 Step/Tool 条目。
+- 门禁：后端 `ruff format --check .`、`ruff check .`、`mypy app tests` 全绿，
+  `pytest` 全量 1063 passed / 41 skipped；前端 `lint`、`typecheck`、
+  `test`（304 passed）、`build` 全绿。新增 Postgres 集成用例
+  `tests/test_multi_agent_events_replay.py` 默认跳过。
+
+#### Sprint M6 学习总结
+
+M6 的关键取舍是“持久化必须与 SSE 共用同一安全边界的同一个递增序号”，否则回放
+口径会和实时流漂移；为此把记录器做成与 SSE bridge 平级的 best-effort observer。
+真正的难点是把 Agent Runtime 里的 Step/Tool 事件映射进多 Agent 事件模型而不
+泄露工具参数和原始 payload，落库字段从安全投影直接取，回放接口再复用同一投影，
+保证三处（事件模型、SSE、持久化）始终对齐。

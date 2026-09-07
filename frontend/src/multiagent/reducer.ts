@@ -3,6 +3,7 @@ import type { MultiAgentStreamEvent } from './stream.ts'
 import type {
   MultiAgentRun,
   MultiAgentRunStatus,
+  MultiAgentStepTrace,
   MultiAgentSubtask,
   MultiAgentSubtaskStatus,
 } from './types.ts'
@@ -82,6 +83,8 @@ const plannedSubtask = (item: MultiAgentStreamSubtask): MultiAgentSubtask => ({
   tokenUsage: null,
   durationMs: null,
   answerDeltas: [],
+  steps: [],
+  tools: [],
 })
 
 const upsertSubtask = (run: MultiAgentRun, subtask: MultiAgentSubtask): MultiAgentRun => {
@@ -137,7 +140,68 @@ export function reduceMultiAgentStream(
         tokenUsage: typeof event.token_usage === 'number' ? event.token_usage : null,
         durationMs: typeof event.duration_ms === 'number' ? event.duration_ms : null,
         answerDeltas: current?.answerDeltas ?? [],
+        steps: current?.steps ?? [],
+        tools: current?.tools ?? [],
       })
+    }
+  }
+
+  if (event.event === 'subtask_step_started' || event.event === 'subtask_step_completed') {
+    if (typeof event.task_id === 'string' && event.task_id && event.step_index != null) {
+      const status = event.event === 'subtask_step_started' ? 'started' : 'completed'
+      run = {
+        ...run,
+        subtasks: run.subtasks.map((item) => {
+          if (item.id !== event.task_id) return item
+          const existing = item.steps.findIndex((step) => step.index === event.step_index)
+          const step: MultiAgentStepTrace = {
+            index: event.step_index as number,
+            status,
+            outputSummary: typeof event.output_summary === 'string' ? event.output_summary : null,
+          }
+          const steps =
+            existing === -1
+              ? [...item.steps, step]
+              : item.steps.map((entry) => (entry.index === event.step_index ? step : entry))
+          return { ...item, steps }
+        }),
+      }
+    }
+  }
+
+  if (
+    event.event === 'subtask_tool_started' ||
+    event.event === 'subtask_tool_completed' ||
+    event.event === 'subtask_tool_failed'
+  ) {
+    if (typeof event.task_id === 'string' && event.task_id && event.tool_name) {
+      const status =
+        event.event === 'subtask_tool_started'
+          ? 'started'
+          : event.event === 'subtask_tool_completed'
+            ? 'completed'
+            : 'failed'
+      run = {
+        ...run,
+        subtasks: run.subtasks.map((item) =>
+          item.id === event.task_id
+            ? {
+                ...item,
+                tools: [
+                  ...item.tools,
+                  {
+                    name: event.tool_name as string,
+                    callId: event.call_id ?? null,
+                    status,
+                    outputSummary:
+                      typeof event.output_summary === 'string' ? event.output_summary : null,
+                    stepIndex: event.step_index ?? null,
+                  },
+                ],
+              }
+            : item,
+        ),
+      }
     }
   }
 
@@ -206,6 +270,8 @@ export function reduceMultiAgentStream(
         tokenUsage: typeof item.token_usage === 'number' ? item.token_usage : null,
         durationMs: typeof item.duration_ms === 'number' ? item.duration_ms : null,
         answerDeltas: current?.answerDeltas ?? [],
+        steps: current?.steps ?? [],
+        tools: current?.tools ?? [],
       })
     }
     run = next

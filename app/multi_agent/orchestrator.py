@@ -82,8 +82,18 @@ _DEFAULT_AGENT_CONFIGS: dict[AgentRole, AgentConfig] = {
 }
 
 
-class _SubtaskAnswerDeltaObserver:
-    """Forward a subtask's inner Agent answer_delta events into the run stream.
+_AGENT_TO_MULTI_EVENT: dict[AgentEventKind, MultiAgentEventKind] = {
+    AgentEventKind.STEP_STARTED: MultiAgentEventKind.SUBTASK_STEP_STARTED,
+    AgentEventKind.STEP_COMPLETED: MultiAgentEventKind.SUBTASK_STEP_COMPLETED,
+    AgentEventKind.TOOL_STARTED: MultiAgentEventKind.SUBTASK_TOOL_STARTED,
+    AgentEventKind.TOOL_COMPLETED: MultiAgentEventKind.SUBTASK_TOOL_COMPLETED,
+    AgentEventKind.TOOL_FAILED: MultiAgentEventKind.SUBTASK_TOOL_FAILED,
+    AgentEventKind.ANSWER_DELTA: MultiAgentEventKind.SUBTASK_ANSWER_DELTA,
+}
+
+
+class _SubtaskRuntimeEventObserver:
+    """Forward a subtask's inner Agent runtime events into the run stream.
 
     The AgentRuntime calls ``observe`` synchronously, so each delta is
     scheduled as an async task against the multi-agent observer and drained
@@ -105,17 +115,21 @@ class _SubtaskAnswerDeltaObserver:
         self._pending: list[asyncio.Task[None]] = []
 
     def observe(self, event: AgentEvent) -> None:
-        if event.kind is not AgentEventKind.ANSWER_DELTA or not event.message:
+        mapped_kind = _AGENT_TO_MULTI_EVENT.get(event.kind)
+        if mapped_kind is None:
             return
+        origin = event.tool_call or event.tool_result
         multi_event = MultiAgentEvent(
             run_id=self._run_id,
-            kind=MultiAgentEventKind.SUBTASK_ANSWER_DELTA,
+            kind=mapped_kind,
             sequence=0,
             task_id=self._task_id,
             agent_role=self._agent_role.value,
-            output_summary=_bounded_summary(event.message),
+            output_summary=(_bounded_summary(event.message) if event.message else None),
             agent_event_kind=event.kind.value,
             step_index=event.step_index,
+            tool_name=origin.name if origin is not None else None,
+            call_id=origin.call_id if origin is not None else None,
         )
         loop = asyncio.get_running_loop()
         task = loop.create_task(self._observer.on_event(multi_event))
@@ -484,9 +498,9 @@ class Orchestrator:
                             request = request.model_copy(
                                 update={"token_budget": agent_config.token_budget}
                             )
-                    delta_observer: _SubtaskAnswerDeltaObserver | None = None
+                    runtime_observer: _SubtaskRuntimeEventObserver | None = None
                     if observer is not None:
-                        delta_observer = _SubtaskAnswerDeltaObserver(
+                        runtime_observer = _SubtaskRuntimeEventObserver(
                             run_id=state.run_id,
                             task_id=task.id,
                             agent_role=task.agent_role,
@@ -497,13 +511,13 @@ class Orchestrator:
                             request,
                             context=context,
                             api_key=api_key,
-                            observer=delta_observer,
+                            observer=runtime_observer,
                             cancel_event=cancel_event,
-                            streaming=delta_observer is not None,
+                            streaming=runtime_observer is not None,
                         )
                     finally:
-                        if delta_observer is not None:
-                            await delta_observer.drain()
+                        if runtime_observer is not None:
+                            await runtime_observer.drain()
                     result.output = outcome.result.answer or ""
                     result.steps_taken = len(outcome.result.state.steps)
                     result.tool_calls = [

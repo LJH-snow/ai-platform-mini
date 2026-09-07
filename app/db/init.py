@@ -23,6 +23,7 @@ from app.db.models import (
     APIKeyTable,
     Base,
     DailyUsageTable,
+    MultiAgentRunEventTable,
     MultiAgentRunRecordTable,
     QuotaReservationTable,
     WorkspaceQuotaTable,
@@ -57,6 +58,7 @@ _CORE_TABLES = [
     SubscriptionTable,
     AgentRunRecordTable,
     MultiAgentRunRecordTable,
+    MultiAgentRunEventTable,
     DailyUsageTable,
     QuotaReservationTable,
     WorkspaceQuotaTable,
@@ -367,6 +369,21 @@ async def migrate_multi_agent_run_records_schema(engine: AsyncEngine) -> None:
         logger.info("migrate_multi_agent_run_records_schema: added workspace_id column")
 
 
+async def migrate_multi_agent_run_events_schema(engine: AsyncEngine) -> None:
+    """Idempotent migration ensuring the multi-agent event log table/indexes."""
+    async with engine.begin() as conn:
+        if not await _table_exists(conn, "multi_agent_run_events"):
+            return
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_multi_agent_run_events_run_id "
+                "ON multi_agent_run_events (run_id)"
+            )
+        )
+        logger.info("migrate_multi_agent_run_events_schema: ensured run_id index")
+
+
 def get_engine() -> AsyncEngine | None:
     return _engine
 
@@ -431,6 +448,7 @@ async def init_db(
         # Upgrade pre-existing run records that predate workspace scoping.
         await migrate_run_records_schema(_engine)
         await migrate_multi_agent_run_records_schema(_engine)
+        await migrate_multi_agent_run_events_schema(_engine)
         # Upgrade pre-existing usage rows that predate workspace scoping.
         await migrate_usage_schema(_engine)
         # Upgrade pre-existing quota reservations that predate workspace scoping.

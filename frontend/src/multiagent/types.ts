@@ -27,6 +27,20 @@ export type MultiAgentSubtaskStatus =
   | 'cancelled'
   | 'unknown'
 
+export type MultiAgentStepTrace = {
+  index: number
+  status: 'started' | 'completed'
+  outputSummary: string | null
+}
+
+export type MultiAgentToolTrace = {
+  name: string
+  callId: string | null
+  status: 'started' | 'completed' | 'failed'
+  outputSummary: string | null
+  stepIndex: number | null
+}
+
 export type MultiAgentSubtask = {
   id: string
   agentRole: string
@@ -38,6 +52,8 @@ export type MultiAgentSubtask = {
   tokenUsage: number | null
   durationMs: number | null
   answerDeltas: string[]
+  steps: MultiAgentStepTrace[]
+  tools: MultiAgentToolTrace[]
 }
 
 export type MultiAgentRun = {

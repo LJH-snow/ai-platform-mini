@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -20,10 +20,13 @@ from pydantic import BaseModel, Field
 
 from app.auth.models import APIKey
 from app.core.context import RequestContext
+from app.db.models import MultiAgentRunEventTable
 from app.evals.multi_agent_compare import MultiAgentCompareRunner
 from app.multi_agent.events import (
     MultiAgentEvent,
     MultiAgentEventKind,
+    SubtaskResultSummary,
+    SubtaskSummary,
     _bounded_result,
 )
 from app.multi_agent.models import (
@@ -45,6 +48,7 @@ from app.schemas.multi_agent import (
     SubtaskSummarySchema,
 )
 from app.services.multi_agent_run_record_service import (
+    MultiAgentEventRecorder,
     MultiAgentRunRecordService,
     project_run_response,
     public_run_payload,
@@ -129,6 +133,15 @@ def _provide_multi_agent_compare_runner() -> MultiAgentCompareRunner:
     from app.core.container import provide_multi_agent_compare_runner
 
     return provide_multi_agent_compare_runner()
+
+
+def _event_recorder(
+    record_service: MultiAgentRunRecordService | None,
+) -> MultiAgentEventRecorder | None:
+    """Return a best-effort event recorder when event persistence is available."""
+    if record_service is None:
+        return None
+    return MultiAgentEventRecorder(record_service)
 
 
 def _owner_scope(request: Request) -> str:
@@ -284,6 +297,7 @@ async def create_multi_agent_run(
         request_id=context.request_id,
         supervisor_model=body.supervisor_model,
         max_subtasks=body.max_subtasks,
+        event_recorder=_event_recorder(record_service),
         context=context,
         api_key=api_key,
     )
@@ -354,6 +368,7 @@ async def stream_multi_agent_run(
                 max_subtasks=body.max_subtasks,
                 observer=stream,
                 cancel_event=cancel_event,
+                event_recorder=_event_recorder(record_service),
                 context=context,
                 api_key=api_key,
             )
@@ -472,6 +487,33 @@ async def get_multi_agent_run(
         **detail_fields,  # type: ignore[arg-type]
         response=project_run_response(payload),
     )
+
+
+@router.get(
+    "/runs/{run_id}/events",
+    response_model=list[MultiAgentStreamEvent],
+    summary="Replay one multi-agent run event timeline",
+)
+async def get_multi_agent_run_events(
+    run_id: str,
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    record_service: Annotated[
+        MultiAgentRunRecordService | None, Depends(_provide_multi_agent_record_service)
+    ] = None,
+    limit: int = 1000,
+) -> list[MultiAgentStreamEvent]:
+    """Fetch the persisted event timeline for one run (tenant-scoped)."""
+    if record_service is None:
+        raise HTTPException(status_code=503, detail="Run history unavailable")
+    context: RequestContext = request.state.context
+    row = await record_service.get_run(run_id, owner_scope=_owner_scope(request))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    rows = await record_service.list_events(run_id, limit=min(max(limit, 1), 1000))
+    return [
+        _to_stream_event(_event_from_row(item), context.request_id) for item in rows
+    ]
 
 
 @router.post(
@@ -636,6 +678,8 @@ def _to_stream_event(event: MultiAgentEvent, request_id: str) -> MultiAgentStrea
         error_code=event.error_code,
         agent_event_kind=event.agent_event_kind,
         step_index=event.step_index,
+        tool_name=event.tool_name,
+        call_id=event.call_id,
         subtasks=[
             SubtaskSummarySchema(
                 id=s.id,
@@ -660,6 +704,40 @@ def _to_stream_event(event: MultiAgentEvent, request_id: str) -> MultiAgentStrea
             )
             for r in event.subtask_results
         ],
+    )
+
+
+def _event_from_row(row: MultiAgentRunEventTable) -> MultiAgentEvent:
+    """Rebuild a public event from a persisted event row."""
+    payload = getattr(row, "payload", {})
+    subtasks = tuple(
+        SubtaskSummary(**item)  # type: ignore[call-arg]
+        for item in payload.get("subtasks", []) or []
+    )
+    subtask_results = tuple(
+        SubtaskResultSummary(**item)  # type: ignore[call-arg]
+        for item in payload.get("subtask_results", []) or []
+    )
+    return MultiAgentEvent(
+        run_id=str(row.run_id),
+        kind=MultiAgentEventKind(str(row.kind)),
+        sequence=int(row.sequence),
+        occurred_at=row.occurred_at or datetime.now(UTC),
+        task_id=row.task_id,
+        agent_role=row.agent_role,
+        duration_ms=row.duration_ms,
+        token_usage=row.token_usage,
+        output_summary=row.output_summary,
+        error_code=row.error_code,
+        subtasks=subtasks,
+        reasoning=row.reasoning,
+        final_output=row.final_output,
+        total_token_usage=row.total_token_usage,
+        subtask_results=subtask_results,
+        agent_event_kind=row.agent_event_kind,
+        step_index=row.step_index,
+        tool_name=row.tool_name,
+        call_id=row.call_id,
     )
 
 

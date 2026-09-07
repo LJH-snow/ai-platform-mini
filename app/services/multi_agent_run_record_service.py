@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.models import APIKey
 from app.core.context import RequestContext
-from app.db.models import MultiAgentRunRecordTable
+from app.db.models import MultiAgentRunEventTable, MultiAgentRunRecordTable
+from app.multi_agent.events import MultiAgentEvent
 from app.multi_agent.models import OrchestrationResult, OrchestrationStatus
+
+logger = logging.getLogger(__name__)
+
+MAX_MULTI_AGENT_EVENTS_PER_RUN = 1000
+MAX_MULTI_AGENT_EVENT_PAYLOAD_BYTES = 2 * 1024 * 1024
 
 
 class MultiAgentRunRecordService:
@@ -101,6 +109,102 @@ class MultiAgentRunRecordService:
             if row.workspace_id is None and row.api_key_hash == owner_scope:
                 return row
             return None
+
+    async def save_event(self, event: MultiAgentEvent) -> None:
+        """Persist one safe public event for the run timeline."""
+        event_dict = event.to_public_dict()
+        row = MultiAgentRunEventTable(
+            run_id=event.run_id,
+            sequence=event.sequence,
+            kind=event.kind.value,
+            occurred_at=event.occurred_at,
+            task_id=event.task_id,
+            agent_role=event.agent_role,
+            agent_event_kind=event.agent_event_kind,
+            step_index=event.step_index,
+            duration_ms=event.duration_ms,
+            token_usage=event.token_usage,
+            output_summary=event.output_summary,
+            error_code=event.error_code,
+            tool_name=event.tool_name,
+            call_id=event.call_id,
+            reasoning=event.reasoning,
+            final_output=event.final_output,
+            total_token_usage=event.total_token_usage,
+            subtasks=(
+                event_dict.get("subtasks") if event_dict.get("subtasks") else None
+            ),
+            subtask_results=(
+                event_dict.get("subtask_results")
+                if event_dict.get("subtask_results")
+                else None
+            ),
+            payload=event_dict,
+        )
+        async with self._session_factory() as session:
+            session.add(row)
+            await session.commit()
+
+    async def list_events(
+        self, run_id: str, *, limit: int = 1000
+    ) -> list[MultiAgentRunEventTable]:
+        """Fetch persisted events for one run in sequence order."""
+        stmt = (
+            select(MultiAgentRunEventTable)
+            .where(MultiAgentRunEventTable.run_id == run_id)
+            .order_by(MultiAgentRunEventTable.sequence)
+            .limit(min(max(limit, 1), MAX_MULTI_AGENT_EVENTS_PER_RUN))
+        )
+        async with self._session_factory() as session:
+            result = await session.scalars(stmt)
+            return list(result)
+
+
+class MultiAgentEventSink(Protocol):
+    """Write side for persisted multi-agent events."""
+
+    async def save_event(self, event: MultiAgentEvent) -> None: ...
+
+
+class MultiAgentEventRecorder:
+    """Best-effort observer persisting the safe event log for one run.
+
+    The cap protects against unbounded answer_delta growth; after the cap is
+    reached the recorder stops writing and logs the skipped tail.
+    """
+
+    def __init__(self, record_service: MultiAgentEventSink) -> None:
+        self._record_service = record_service
+        self._count = 0
+        self._bytes = 0
+
+    async def on_event(self, event: MultiAgentEvent) -> None:
+        if self._count >= MAX_MULTI_AGENT_EVENTS_PER_RUN:
+            logger.warning(
+                "multi_agent_event_recorder_cap run_id=%s skipped_kind=%s",
+                event.run_id,
+                event.kind.value,
+            )
+            return
+        event_dict = event.to_public_dict()
+        payload_bytes = len(json.dumps(event_dict, ensure_ascii=False))
+        if self._bytes + payload_bytes > MAX_MULTI_AGENT_EVENT_PAYLOAD_BYTES:
+            logger.warning(
+                "multi_agent_event_recorder_payload_cap run_id=%s skipped_kind=%s",
+                event.run_id,
+                event.kind.value,
+            )
+            return
+        try:
+            await self._record_service.save_event(event)
+            self._count += 1
+            self._bytes += payload_bytes
+        except Exception:
+            logger.exception(
+                "multi_agent_event_recorder_failed run_id=%s kind=%s",
+                event.run_id,
+                event.kind.value,
+            )
 
 
 def _stop_reason(status: OrchestrationStatus) -> str:

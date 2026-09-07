@@ -15,6 +15,11 @@ StreamEventName = (
     "subtask_completed",
     "subtask_failed",
     "subtask_skipped",
+    "subtask_step_started",
+    "subtask_step_completed",
+    "subtask_tool_started",
+    "subtask_tool_completed",
+    "subtask_tool_failed",
     "subtask_answer_delta",
     "run_completed",
     "run_failed",
@@ -131,6 +136,8 @@ class MultiAgentStreamEvent(BaseModel):
         description="Kind of the forwarded inner Agent event (e.g. answer_delta).",
     )
     step_index: int | None = Field(default=None, ge=0)
+    tool_name: str | None = Field(default=None, max_length=128)
+    call_id: str | None = Field(default=None, max_length=128)
 
 
 class MultiAgentRunSummary(BaseModel):

@@ -48,6 +48,11 @@ class MultiAgentEventKind(StrEnum):
     SUBTASK_COMPLETED = "subtask_completed"
     SUBTASK_FAILED = "subtask_failed"
     SUBTASK_SKIPPED = "subtask_skipped"
+    SUBTASK_STEP_STARTED = "subtask_step_started"
+    SUBTASK_STEP_COMPLETED = "subtask_step_completed"
+    SUBTASK_TOOL_STARTED = "subtask_tool_started"
+    SUBTASK_TOOL_COMPLETED = "subtask_tool_completed"
+    SUBTASK_TOOL_FAILED = "subtask_tool_failed"
     SUBTASK_ANSWER_DELTA = "subtask_answer_delta"
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
@@ -157,6 +162,8 @@ class MultiAgentEvent:
     subtask_results: tuple[SubtaskResultSummary, ...] = ()
     agent_event_kind: str | None = None
     step_index: int | None = None
+    tool_name: str | None = None
+    call_id: str | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -183,6 +190,8 @@ class MultiAgentEvent:
             "subtask_results": [result.to_dict() for result in self.subtask_results],
             "agent_event_kind": self.agent_event_kind,
             "step_index": self.step_index,
+            "tool_name": self.tool_name,
+            "call_id": self.call_id,
         }
 
 
@@ -230,3 +239,20 @@ class SequencedObserver:
         event.sequence = self._sequence
         self._sequence += 1
         await self._inner.on_event(event)
+
+
+class ComposedObserver:
+    """Fan-out events to multiple observers in declaration order.
+
+    Used when one run needs to feed both the SSE bridge and an event
+    recorder from the same sequenced event stream.
+    """
+
+    def __init__(self, observers: tuple[MultiAgentEventObserver, ...]) -> None:
+        if not observers:
+            raise ValueError("ComposedObserver requires at least one observer")
+        self._observers = observers
+
+    async def on_event(self, event: MultiAgentEvent) -> None:
+        for observer in self._observers:
+            await observer.on_event(event)

@@ -10,8 +10,13 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.api.multi_agent import _provide_multi_agent_record_service
+from app.auth.hash import hash_api_key
 from app.main import app
+from app.multi_agent.events import MultiAgentEvent, MultiAgentEventKind
 from app.services.multi_agent_run_record_service import (
+    MAX_MULTI_AGENT_EVENT_PAYLOAD_BYTES,
+    MAX_MULTI_AGENT_EVENTS_PER_RUN,
+    MultiAgentEventRecorder,
     project_run_response,
     public_run_payload,
     public_run_summary,
@@ -60,6 +65,58 @@ def _row(
         total_tokens=10,
         payload=payload,
         workspace_id=None,
+    )
+
+
+def _event_row(
+    run_id: str,
+    sequence: int,
+    *,
+    kind: str = "run_started",
+    task_id: str | None = None,
+    agent_role: str | None = None,
+    step_index: int | None = None,
+    tool_name: str | None = None,
+    call_id: str | None = None,
+    output_summary: str | None = None,
+    final_output: str | None = None,
+) -> SimpleNamespace:
+    payload: dict[str, object] = {
+        "run_id": run_id,
+        "kind": kind,
+        "sequence": sequence,
+        "occurred_at": datetime.now(UTC).isoformat(),
+        "task_id": task_id,
+        "agent_role": agent_role,
+        "step_index": step_index,
+        "tool_name": tool_name,
+        "call_id": call_id,
+        "output_summary": output_summary,
+        "subtasks": [],
+        "subtask_results": [],
+        "final_output": final_output,
+    }
+    return SimpleNamespace(
+        run_id=run_id,
+        sequence=sequence,
+        kind=kind,
+        occurred_at=datetime.now(UTC),
+        task_id=task_id,
+        agent_role=agent_role,
+        duration_ms=None,
+        token_usage=None,
+        output_summary=output_summary,
+        error_code=None,
+        reasoning=None,
+        final_output=final_output,
+        total_token_usage=None,
+        subtasks=[],
+        subtask_results=[],
+        agent_event_kind=None,
+        step_index=step_index,
+        tool_name=tool_name,
+        call_id=call_id,
+        payload=payload,
     )
 
 
@@ -148,6 +205,21 @@ class _ScopedFakeRecordService(_FakeRecordService):
         return None
 
 
+class _EventRecordService(_ScopedFakeRecordService):
+    def __init__(
+        self,
+        rows: list[SimpleNamespace],
+        events: list[SimpleNamespace],
+    ) -> None:
+        super().__init__(rows)
+        self._events = events
+
+    async def list_events(
+        self, run_id: str, *, limit: int = 1000
+    ) -> list[SimpleNamespace]:
+        return [row for row in self._events if row.run_id == run_id][:limit]
+
+
 def _override(records: object) -> None:
     app.dependency_overrides[_provide_multi_agent_record_service] = lambda: records
 
@@ -234,3 +306,128 @@ def test_workspace_history_scopes_by_raw_workspace_id() -> None:
         assert detail_resp.status_code == 404
     finally:
         _clear()
+
+
+def test_events_503_when_no_store() -> None:
+    _override(None)
+    try:
+        response = client.get(
+            "/api/v1/multi-agent/runs/run-1/events", headers=_AUTH_HEADERS
+        )
+    finally:
+        _clear()
+    assert response.status_code == 503
+
+
+def test_events_unknown_run_is_404() -> None:
+    _override(_EventRecordService([], []))
+    try:
+        response = client.get(
+            "/api/v1/multi-agent/runs/nope/events", headers=_AUTH_HEADERS
+        )
+    finally:
+        _clear()
+    assert response.status_code == 404
+
+
+def test_events_cross_tenant_read_is_404() -> None:
+    mine = _row(run_id="mine-events")
+    mine.api_key_hash = "owner-mine"
+    other = _row(run_id="other-events")
+    other.api_key_hash = "owner-other"
+    service = _EventRecordService([mine, other], [])
+    import asyncio
+
+    assert (
+        asyncio.run(service.get_run("other-events", owner_scope="owner-mine")) is None
+    )
+    assert (
+        asyncio.run(service.get_run("mine-events", owner_scope="owner-mine"))
+        is not None
+    )
+
+
+def test_events_replay_returns_safe_sequence() -> None:
+    run = _row(run_id="run-events")
+    run.api_key_hash = hash_api_key("sk-test-integration")
+    events = [
+        _event_row(
+            "run-events",
+            0,
+            task_id="t1",
+            agent_role="research",
+            step_index=0,
+            tool_name="knowledge_search",
+            call_id="call-1",
+            output_summary="3 sources",
+            kind="subtask_tool_completed",
+        ),
+        _event_row(
+            "run-events",
+            1,
+            final_output="report",
+            kind="run_completed",
+        ),
+        _event_row("run-events", 2, kind="run_completed"),
+    ]
+    _override(_EventRecordService([run], events))
+    try:
+        response = client.get(
+            "/api/v1/multi-agent/runs/run-events/events", headers=_AUTH_HEADERS
+        )
+    finally:
+        _clear()
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body) == 3
+    assert [row["sequence"] for row in body] == [0, 1, 2]
+    assert body[0]["event"] == "subtask_tool_completed"
+    assert body[0]["tool_name"] == "knowledge_search"
+    assert body[0]["call_id"] == "call-1"
+    assert body[1]["event"] == "run_completed"
+    assert body[1]["final_output"] == "report"
+
+
+def test_event_recorder_caps_count_and_payload() -> None:
+    saved: list[MultiAgentEvent] = []
+
+    class FakeService:
+        async def save_event(self, event: MultiAgentEvent) -> None:
+            saved.append(event)
+
+    recorder = MultiAgentEventRecorder(FakeService())
+
+    async def run_capped() -> None:
+        for sequence in range(MAX_MULTI_AGENT_EVENTS_PER_RUN + 2):
+            await recorder.on_event(
+                MultiAgentEvent(
+                    run_id="run-cap",
+                    kind=MultiAgentEventKind.RUN_STARTED,
+                    sequence=sequence,
+                )
+            )
+
+    import asyncio
+
+    asyncio.run(run_capped())
+    assert len(saved) == MAX_MULTI_AGENT_EVENTS_PER_RUN
+
+    oversized = MultiAgentEvent(
+        run_id="run-big",
+        kind=MultiAgentEventKind.SUBTASK_ANSWER_DELTA,
+        sequence=0,
+        output_summary="x" * (MAX_MULTI_AGENT_EVENT_PAYLOAD_BYTES * 2),
+    )
+    saved_oversized: list[MultiAgentEvent] = []
+
+    class FakePayloadService:
+        async def save_event(self, event: MultiAgentEvent) -> None:
+            saved_oversized.append(event)
+
+    payload_recorder = MultiAgentEventRecorder(FakePayloadService())
+
+    async def save_oversized() -> None:
+        await payload_recorder.on_event(oversized)
+
+    asyncio.run(save_oversized())
+    assert saved_oversized == []

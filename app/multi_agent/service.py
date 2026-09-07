@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from app.multi_agent.events import (
     BestEffortObserver,
+    ComposedObserver,
     MultiAgentEvent,
     MultiAgentEventKind,
     MultiAgentEventObserver,
@@ -74,6 +75,7 @@ class MultiAgentService:
         supervisor_model: str | None = None,
         max_subtasks: int = 5,
         observer: MultiAgentEventObserver | None = None,
+        event_recorder: MultiAgentEventObserver | None = None,
         cancel_event: asyncio.Event | None = None,
         context: RequestContext | None = None,
         api_key: APIKey | None = None,
@@ -88,8 +90,10 @@ class MultiAgentService:
             len(user_input),
         )
 
-        # Best-effort event emission so the SSE stream can never break the run.
-        sink = BestEffortObserver(observer) if observer is not None else None
+        # Best-effort event emission so neither SSE nor persistence can break
+        # the run.  Both consumers share one sequence stamp.
+        sinks = tuple(sink for sink in (observer, event_recorder) if sink is not None)
+        sink = BestEffortObserver(ComposedObserver(sinks)) if sinks else None
         sequenced = SequencedObserver(sink) if sink is not None else None
 
         async def emit(event: MultiAgentEvent) -> None:

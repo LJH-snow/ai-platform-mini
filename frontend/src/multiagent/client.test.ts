@@ -143,6 +143,46 @@ describe('createMultiAgentClient', () => {
     expect(listUrl).toBe('/api/v1/multi-agent/runs?limit=10')
   })
 
+  it('fetches and parses a replay event timeline', async () => {
+    const eventPayload = [
+      { event: 'subtask_step_started', run_id: 'run-h', sequence: 0, task_id: 't1', step_index: 0 },
+      {
+        event: 'subtask_tool_completed',
+        run_id: 'run-h',
+        sequence: 1,
+        task_id: 't1',
+        tool_name: 'knowledge_search',
+        call_id: 'call-1',
+        output_summary: '3 sources',
+      },
+      {
+        event: 'run_completed',
+        run_id: 'run-h',
+        sequence: 2,
+        final_output: 'report',
+        total_token_usage: 5,
+        duration_ms: 2,
+      },
+    ]
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(eventPayload))
+    const client = createMultiAgentClient({ apiBaseUrl: 'http://x', apiKey: 'k', fetchImpl })
+
+    const events = await client.getRunEvents('run-h')
+    expect(events).toHaveLength(3)
+    expect(events[0]).toMatchObject({ event: 'subtask_step_started', step_index: 0 })
+    expect(events[1]).toMatchObject({ tool_name: 'knowledge_search', call_id: 'call-1' })
+    expect(events[2]).toMatchObject({ event: 'run_completed', final_output: 'report' })
+    expect(fetchImpl.mock.calls[0][0]).toBe('http://x/api/v1/multi-agent/runs/run-h/events')
+  })
+
+  it('rejects malformed replay event timelines', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse([{ event: 'unknown', run_id: 'run-h', sequence: 0 }]))
+    const client = createMultiAgentClient({ apiBaseUrl: 'http://x', apiKey: 'k', fetchImpl })
+    await expect(client.getRunEvents('run-h')).rejects.toThrow(MultiAgentResponseError)
+  })
+
   it('runs and lists multi-agent benchmark comparison runs', async () => {
     const benchmarkPayload = {
       id: 7,

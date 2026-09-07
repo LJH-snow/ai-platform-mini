@@ -6,6 +6,7 @@ import pytest
 
 from app.multi_agent.events import (
     BestEffortObserver,
+    ComposedObserver,
     MultiAgentEvent,
     MultiAgentEventKind,
     SequencedObserver,
@@ -115,6 +116,38 @@ class TestEventPublicDict:
         assert data["step_index"] == 1
         assert data["output_summary"] == "partial answer"
 
+    def test_subtask_step_projection(self) -> None:
+        event = MultiAgentEvent(
+            run_id="run-1",
+            kind=MultiAgentEventKind.SUBTASK_STEP_STARTED,
+            sequence=5,
+            task_id="t1",
+            agent_role="research",
+            step_index=0,
+        )
+        data = event.to_public_dict()
+        assert data["kind"] == "subtask_step_started"
+        assert data["task_id"] == "t1"
+        assert data["step_index"] == 0
+
+    def test_subtask_tool_projection(self) -> None:
+        event = MultiAgentEvent(
+            run_id="run-1",
+            kind=MultiAgentEventKind.SUBTASK_TOOL_COMPLETED,
+            sequence=6,
+            task_id="t1",
+            agent_role="research",
+            step_index=0,
+            tool_name="knowledge_search",
+            call_id="call-1",
+            output_summary="3 sources",
+        )
+        data = event.to_public_dict()
+        assert data["kind"] == "subtask_tool_completed"
+        assert data["tool_name"] == "knowledge_search"
+        assert data["call_id"] == "call-1"
+        assert data["output_summary"] == "3 sources"
+
 
 class TestSequencedObserver:
     """SequencedObserver assigns monotonic sequence numbers."""
@@ -153,6 +186,34 @@ class TestBestEffortObserver:
                 run_id="r", kind=MultiAgentEventKind.RUN_STARTED, sequence=0
             )
         )
+
+
+class TestComposedObserver:
+    """ComposedObserver fans out to every observer in declaration order."""
+
+    @pytest.mark.asyncio
+    async def test_fans_out_to_each_sink(self) -> None:
+        seen: list[str] = []
+
+        class SinkA:
+            async def on_event(self, event: MultiAgentEvent) -> None:
+                seen.append(f"a-{event.sequence}")
+
+        class SinkB:
+            async def on_event(self, event: MultiAgentEvent) -> None:
+                seen.append(f"b-{event.sequence}")
+
+        composed = ComposedObserver((SinkA(), SinkB()))
+        await composed.on_event(
+            MultiAgentEvent(
+                run_id="r", kind=MultiAgentEventKind.RUN_STARTED, sequence=0
+            )
+        )
+        assert seen == ["a-0", "b-0"]
+
+    def test_requires_at_least_one_observer(self) -> None:
+        with pytest.raises(ValueError):
+            ComposedObserver(())
 
 
 class TestErrorCode:

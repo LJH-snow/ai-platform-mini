@@ -104,6 +104,70 @@ describe('reduceMultiAgentStream', () => {
     expect(state.run?.subtasks[0].answerDeltas).toEqual(['first chunk', 'second chunk'])
   })
 
+  it('records step traces for subtasks', () => {
+    let state = reduceMultiAgentStream(initialMultiAgentStreamState, started)
+    state = reduceMultiAgentStream(state, planned)
+    state = reduceMultiAgentStream(state, {
+      event: 'subtask_step_started',
+      sequence: 2,
+      ...base,
+      task_id: 't1',
+      step_index: 0,
+    })
+    expect(state.run?.subtasks[0].steps).toEqual([
+      { index: 0, status: 'started', outputSummary: null },
+    ])
+    state = reduceMultiAgentStream(state, {
+      event: 'subtask_step_completed',
+      sequence: 3,
+      ...base,
+      task_id: 't1',
+      step_index: 0,
+      output_summary: 'drafted',
+    })
+    expect(state.run?.subtasks[0].steps).toEqual([
+      { index: 0, status: 'completed', outputSummary: 'drafted' },
+    ])
+  })
+
+  it('records tool traces for subtasks', () => {
+    let state = reduceMultiAgentStream(initialMultiAgentStreamState, started)
+    state = reduceMultiAgentStream(state, planned)
+    state = reduceMultiAgentStream(state, {
+      event: 'subtask_tool_started',
+      sequence: 2,
+      ...base,
+      task_id: 't1',
+      step_index: 0,
+      tool_name: 'knowledge_search',
+      call_id: 'call-1',
+    })
+    expect(state.run?.subtasks[0].tools).toEqual([
+      {
+        name: 'knowledge_search',
+        callId: 'call-1',
+        status: 'started',
+        outputSummary: null,
+        stepIndex: 0,
+      },
+    ])
+    state = reduceMultiAgentStream(state, {
+      event: 'subtask_tool_failed',
+      sequence: 3,
+      ...base,
+      task_id: 't1',
+      tool_name: 'knowledge_search',
+      call_id: 'call-1',
+      error_code: 'internal_error',
+    })
+    expect(state.run?.subtasks[0].tools[1]).toMatchObject({
+      status: 'failed',
+      name: 'knowledge_search',
+      callId: 'call-1',
+      outputSummary: null,
+    })
+  })
+
   it('closes the run on a terminal event with output and totals', () => {
     let state = reduceMultiAgentStream(initialMultiAgentStreamState, started)
     state = reduceMultiAgentStream(state, {

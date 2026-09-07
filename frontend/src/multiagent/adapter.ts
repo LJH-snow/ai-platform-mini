@@ -52,6 +52,8 @@ const adaptSyncSubtask = (item: MultiAgentSubtaskApiResult): MultiAgentSubtask =
   tokenUsage: item.token_usage,
   durationMs: item.duration_ms ?? null,
   answerDeltas: [],
+  steps: [],
+  tools: [],
 })
 
 export function adaptMultiAgentRunResponse(payload: MultiAgentRunApiResponse): MultiAgentRun {
@@ -82,6 +84,8 @@ const adaptHistorySubtask = (item: MultiAgentHistorySubtaskResult): MultiAgentSu
   tokenUsage: item.tokenUsage,
   durationMs: item.durationMs,
   answerDeltas: [],
+  steps: [],
+  tools: [],
 })
 
 /** Convert a stored history detail into a replayable run for the timeline. */

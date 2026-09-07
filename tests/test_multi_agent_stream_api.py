@@ -354,6 +354,27 @@ def test_stream_projection_answer_delta_fields() -> None:
     assert projected.step_index == 1
 
 
+def test_stream_projection_step_tool_fields() -> None:
+    event = MultiAgentEvent(
+        run_id="run-1",
+        kind=MultiAgentEventKind.SUBTASK_TOOL_COMPLETED,
+        sequence=5,
+        task_id="t1",
+        agent_role="research",
+        step_index=0,
+        tool_name="knowledge_search",
+        call_id="call-1",
+        output_summary="3 sources",
+    )
+    projected = _to_stream_event(event, "req-1")
+    assert projected.event == "subtask_tool_completed"
+    assert projected.task_id == "t1"
+    assert projected.step_index == 0
+    assert projected.tool_name == "knowledge_search"
+    assert projected.call_id == "call-1"
+    assert projected.output_summary == "3 sources"
+
+
 class _CaptureRecordService:
     """Record service double that captures save() kwargs for assertions."""
 
