@@ -893,3 +893,45 @@ M6 的关键取舍是“持久化必须与 SSE 共用同一安全边界的同一
 真正的难点是把 Agent Runtime 里的 Step/Tool 事件映射进多 Agent 事件模型而不
 泄露工具参数和原始 payload，落库字段从安全投影直接取，回放接口再复用同一投影，
 保证三处（事件模型、SSE、持久化）始终对齐。
+
+### Sprint M7（多 Agent 编排画布，2026-09-08）
+
+- 新增 `MultiAgentConfigTable` 持久化 DAG 配置，`/api/v1/multi-agent/configs`
+  配置 CRUD；`DecisionFactory` 把画布 DAG 直接转为 `SupervisorDecision`
+  跳过 Supervisor 拆分。
+- 前端 ReactFlow 画布：拖拽节点、连接边、节点配置（role/model/maxSteps）、
+  编排设置（failurePolicy/maxConcurrency/timeout）、保存/运行。
+- 门禁：后端 `ruff format --check .`、`ruff check .`、`mypy app tests`、
+  `pytest` 全绿；前端 `lint`、`typecheck`、`test`、`build` 全绿。
+
+#### Sprint M7 学习总结
+
+M7 的核心取舍是把"画布 DAG"和"Supervisor 拆分"两条路径统一到同一个
+`SupervisorDecision` 模型：画布只是另一种决策输入，不引入第二套执行语义。
+前端 ReactFlow 画布保持"配置即代码"——节点/边的视觉表达与后端配置表一一对应，
+避免把所有内部类都画成节点，既保留可读性也能随 Sprint 演进更新。
+
+### Sprint M8（OpenAI 适配器健壮性修复，2026-09-09）
+
+- `_parse_created_at()` 对无时区 ISO 时间戳强制解释为 UTC：
+  `datetime.fromisoformat()` 遇到 naive 时间戳会返回 naive datetime，
+  直接 `.timestamp()` 会按主机时区偏移；现在 `dt.tzinfo is None` 时
+  显式 `dt.replace(tzinfo=UTC)` 再取时间戳。
+- `chat_completions_stream()` 空流 fallback 块使用已解析的 `model` 而非
+  `self._chat_service.default_model`：当 provider 返回空流时，fallback
+  块原来总是填 default_model，导致用户显式请求的模型名丢失；现在与正常
+  流第一分支保持一致，使用 `chat_request.model or default_model`。
+- 新增/更新测试：`test_naive_created_at_uses_utc` 覆盖 naive/aware 两种
+  时间戳；`test_stream_empty_provider_uses_requested_model_for_fallback_chunk`
+  覆盖空流回退模型字段。
+- 门禁：后端 `ruff format --check .`、`ruff check .`、`mypy app tests`、
+  `pytest` 全量 1063 passed / 41 skipped。
+
+#### Sprint M8 学习总结
+
+M8 的修复都属于"边界条件与时区/模型语义正确性"：naive created_at 在
+非 UTC 主机场景下会悄悄偏移，空流 fallback 则让用户请求的模型名被
+default_model 覆盖。两个修复都只需要改一行核心逻辑，但都需要独立的
+回归测试来锁住行为——尤其是时区问题，测试必须同时覆盖 naive 和 aware
+两种输入，否则换个时区部署就会回归。
+

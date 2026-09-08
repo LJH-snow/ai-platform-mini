@@ -952,6 +952,12 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     画布支持拖拽节点、连接边、节点配置（role/model/maxSteps）、编排设置
     （failurePolicy/maxConcurrency/timeout）、保存/运行；后端/前端门禁全绿
 
+15. **Sprint M8（已完成）**：OpenAI 适配器健壮性修复——
+    `_parse_created_at()` 对无时区 ISO 时间戳强制解释为 UTC，避免主机时区偏移；
+    `chat_completions_stream()` 空流 fallback 块使用已解析的 `model` 而非
+    `default_model`，保证用户请求的模型名在空流回退时仍正确回填；
+    后端门禁全绿
+
     `answer_delta` 与子任务 Step/Tool 事件统一落 `multi_agent_run_events` 表
     （1000 条 / 2MB 上限、best-effort 写库），新增
     `GET /runs/{run_id}/events` 回放端点；前端详情页优先按事件序列回放并渲染

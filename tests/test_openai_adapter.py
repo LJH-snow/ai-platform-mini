@@ -212,10 +212,11 @@ def test_naive_created_at_uses_utc() -> None:
         fallback_created=_FIXTURE_FALLBACK_CREATED,
     )
 
-    from datetime import datetime
+    from datetime import UTC, datetime
 
-    from datetime import UTC
-    expected = int(datetime.fromisoformat("2026-08-03T00:00:00").replace(tzinfo=UTC).timestamp())
+    expected = int(
+        datetime.fromisoformat("2026-08-03T00:00:00").replace(tzinfo=UTC).timestamp()
+    )
     assert result.created == expected
 
 
