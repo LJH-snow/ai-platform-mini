@@ -203,7 +203,7 @@ def test_invalid_created_at_uses_fallback() -> None:
     assert result.created == 1234
 
 
-def test_naive_created_at_uses_host_timezone() -> None:
+def test_naive_created_at_uses_utc() -> None:
     fixture = _AdapterFixture()
     response = _chat_response(created_at="2026-08-03T00:00:00")
     result = fixture.adapter.to_chat_response(
@@ -214,7 +214,8 @@ def test_naive_created_at_uses_host_timezone() -> None:
 
     from datetime import datetime
 
-    expected = int(datetime.fromisoformat("2026-08-03T00:00:00").timestamp())
+    from datetime import UTC
+    expected = int(datetime.fromisoformat("2026-08-03T00:00:00").replace(tzinfo=UTC).timestamp())
     assert result.created == expected
 
 

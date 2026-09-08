@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.schemas.openai import (
@@ -75,6 +75,8 @@ class OpenAIAdapter:
             return fallback
         try:
             dt = datetime.fromisoformat(created_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
             return int(dt.timestamp())
         except (ValueError, TypeError):
             return fallback
