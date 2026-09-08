@@ -45,6 +45,7 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
   `answer_delta` 以及 Step/Tool 内部事件一并落库（单 run 1000 条 / 2MB 上限），
   提供租户隔离的 `GET /runs/{run_id}/events` 时间线回放；前端详情页优先按事件
   序列重建时间线，摘要仅作兜底。
+- **多 Agent 编排画布**：M7 提供 ReactFlow 可视化 DAG 设计器，拖拽节点、连接边、配置 role/model/maxSteps，支持 failurePolicy/maxConcurrency/timeout 编排设置；`DecisionFactory` 把画布 DAG 直接转为 `SupervisorDecision` 跳过 Supervisor 拆分，配置持久化到 `MultiAgentConfigTable` 并支持 CRUD 管理。
 - **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool
   Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
 - **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和
@@ -945,6 +946,12 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
    可配置摘要长度；较早的历史被压缩为 deterministic summary 并合并到
    system prompt
 13. **Sprint M6（已完成）**：多 Agent 事件级持久化与全量回放——生命周期、
+14. **Sprint M7（已完成）**：多 Agent 编排画布——`MultiAgentConfigTable` 持久化
+    DAG 配置、`DecisionFactory` 把画布 DAG 转成 `SupervisorDecision` 跳过
+    Supervisor 拆分、`/api/v1/multi-agent/configs` 配置 CRUD；前端 ReactFlow
+    画布支持拖拽节点、连接边、节点配置（role/model/maxSteps）、编排设置
+    （failurePolicy/maxConcurrency/timeout）、保存/运行；后端/前端门禁全绿
+
     `answer_delta` 与子任务 Step/Tool 事件统一落 `multi_agent_run_events` 表
     （1000 条 / 2MB 上限、best-effort 写库），新增
     `GET /runs/{run_id}/events` 回放端点；前端详情页优先按事件序列回放并渲染
