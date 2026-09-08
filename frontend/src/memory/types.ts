@@ -23,4 +23,3 @@ export type MemoryInput = {
   confidence?: number
   metadata?: Record<string, unknown>
 }
-

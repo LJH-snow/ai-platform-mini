@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState, type JSX } from 'react'
 
-import {
-  ConfigApiError,
-  type ConfigClient,
-  type UsageDashboard,
-} from './config-client.ts'
+import { ConfigApiError, type ConfigClient, type UsageDashboard } from './config-client.ts'
 
 type UsageDashboardProps = {
   client: ConfigClient
@@ -112,9 +108,7 @@ function RankingList({
               aria-valuemin={0}
               aria-valuemax={100}
             >
-              <span
-                style={{ width: `${Math.max(2, (entry.total_tokens / max) * 100)}%` }}
-              />
+              <span style={{ width: `${Math.max(2, (entry.total_tokens / max) * 100)}%` }} />
             </div>
           </li>
         ))}
@@ -144,9 +138,7 @@ export function UsageDashboardPage({ client }: UsageDashboardProps): JSX.Element
       anchor.remove()
       URL.revokeObjectURL(url)
     } catch (caught) {
-      setError(
-        caught instanceof ConfigApiError ? caught.message : '导出失败，请重试。',
-      )
+      setError(caught instanceof ConfigApiError ? caught.message : '导出失败，请重试。')
     } finally {
       setExporting(null)
     }
@@ -164,9 +156,7 @@ export function UsageDashboardPage({ client }: UsageDashboardProps): JSX.Element
       })
       .catch((caught: unknown) => {
         if (cancelled) return
-        setError(
-          caught instanceof ConfigApiError ? caught.message : '用量数据加载失败。',
-        )
+        setError(caught instanceof ConfigApiError ? caught.message : '用量数据加载失败。')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -182,10 +172,7 @@ export function UsageDashboardPage({ client }: UsageDashboardProps): JSX.Element
         <h2>Usage Dashboard</h2>
         <label className="daysPicker">
           时间范围：
-          <select
-            value={days}
-            onChange={(event) => setDays(Number(event.target.value))}
-          >
+          <select value={days} onChange={(event) => setDays(Number(event.target.value))}>
             <option value={7}>近 7 天</option>
             <option value={14}>近 14 天</option>
             <option value={30}>近 30 天</option>
@@ -211,7 +198,11 @@ export function UsageDashboardPage({ client }: UsageDashboardProps): JSX.Element
       </div>
 
       {loading && <p>加载中…</p>}
-      {error !== null && <p className="inlineError" role="alert">{error}</p>}
+      {error !== null && (
+        <p className="inlineError" role="alert">
+          {error}
+        </p>
+      )}
 
       {data !== null && (
         <>

@@ -210,10 +210,7 @@ describe('PromptStudio', () => {
       is_active: false,
     }))
     render(
-      <PromptStudio
-        client={createConfigClient({ createPromptVersion })}
-        onUsePrompt={vi.fn()}
-      />,
+      <PromptStudio client={createConfigClient({ createPromptVersion })} onUsePrompt={vi.fn()} />,
     )
 
     await screen.findByRole('button', { name: /custom_prompt/ })
@@ -235,12 +232,7 @@ describe('PromptStudio', () => {
       content: 'v1 content',
       is_active: true,
     }))
-    render(
-      <PromptStudio
-        client={createConfigClient({ activatePrompt })}
-        onUsePrompt={vi.fn()}
-      />,
-    )
+    render(<PromptStudio client={createConfigClient({ activatePrompt })} onUsePrompt={vi.fn()} />)
 
     await screen.findByRole('button', { name: /custom_prompt/ })
     const buttons = await screen.findAllByRole('button', { name: '设为当前版本' })
@@ -319,9 +311,7 @@ describe('AgentStudio', () => {
       tool_names: [],
     }))
     const deleteAgent = vi.fn(async () => null)
-    render(
-      <AgentStudio client={createConfigClient({ listAgents, updateAgent, deleteAgent })} />,
-    )
+    render(<AgentStudio client={createConfigClient({ listAgents, updateAgent, deleteAgent })} />)
 
     await screen.findByText('研究助手')
     await user.click(screen.getByRole('button', { name: /研究助手/ }))
@@ -329,10 +319,7 @@ describe('AgentStudio', () => {
     await user.type(screen.getByLabelText('最大步数'), '5')
     await user.click(screen.getByRole('button', { name: '保存修改' }))
 
-    expect(updateAgent).toHaveBeenCalledWith(
-      'agent-1',
-      expect.objectContaining({ max_steps: 5 }),
-    )
+    expect(updateAgent).toHaveBeenCalledWith('agent-1', expect.objectContaining({ max_steps: 5 }))
     expect(await screen.findByRole('status')).toHaveTextContent('Agent 已更新')
 
     await user.click(screen.getByRole('button', { name: '删除' }))
@@ -358,12 +345,7 @@ describe('RunList', () => {
       },
     ])
     const onOpenRun = vi.fn()
-    render(
-      <RunList
-        client={createConfigClient({ listRuns })}
-        onOpenRun={onOpenRun}
-      />,
-    )
+    render(<RunList client={createConfigClient({ listRuns })} onOpenRun={onOpenRun} />)
 
     expect(await screen.findByText('qwen3:4b')).toBeInTheDocument()
     expect(screen.getByText('已完成')).toBeInTheDocument()
@@ -425,9 +407,7 @@ describe('RunDetail', () => {
       },
     }))
     const onBack = vi.fn()
-    render(
-      <RunDetail client={createConfigClient({ getRun })} runId="run-1" onBack={onBack} />,
-    )
+    render(<RunDetail client={createConfigClient({ getRun })} runId="run-1" onBack={onBack} />)
 
     await screen.findByText('Step 1')
     expect(screen.getByText('calculator')).toBeInTheDocument()
@@ -451,15 +431,9 @@ describe('UsageDashboard', () => {
         { name: 'qwen3:4b', total_tokens: 3000, request_count: 10 },
         { name: 'gpt-4o-mini', total_tokens: 500, request_count: 3 },
       ],
-      key_ranking: [
-        { name: 'abcd1234', total_tokens: 3000, request_count: 10 },
-      ],
+      key_ranking: [{ name: 'abcd1234', total_tokens: 3000, request_count: 10 }],
     }))
-    render(
-      <UsageDashboardPage
-        client={createConfigClient({ getUsageDashboard })}
-      />,
-    )
+    render(<UsageDashboardPage client={createConfigClient({ getUsageDashboard })} />)
 
     expect(await screen.findByText('每日 Token 用量')).toBeInTheDocument()
     expect(screen.getByText('按模型')).toBeInTheDocument()
@@ -475,11 +449,7 @@ describe('UsageDashboard', () => {
   it('downloads the CSV export through the authenticated client', async () => {
     const user = userEvent.setup()
     const downloadUsageExport = vi.fn(async () => new Blob(['csv']))
-    render(
-      <UsageDashboardPage
-        client={createConfigClient({ downloadUsageExport })}
-      />,
-    )
+    render(<UsageDashboardPage client={createConfigClient({ downloadUsageExport })} />)
     await screen.findByText('每日 Token 用量')
 
     await user.click(screen.getByRole('button', { name: '导出 CSV' }))
@@ -494,9 +464,7 @@ describe('UsageDashboard', () => {
       model_ranking: [],
       key_ranking: [],
     }))
-    render(
-      <UsageDashboardPage client={createConfigClient({ getUsageDashboard })} />,
-    )
+    render(<UsageDashboardPage client={createConfigClient({ getUsageDashboard })} />)
     await screen.findByText('每日 Token 用量')
 
     await user.selectOptions(screen.getByRole('combobox'), '30')
@@ -548,9 +516,7 @@ describe('AgentStudio benchmark', () => {
       },
     ])
     render(
-      <AgentStudio
-        client={createConfigClient({ listAgents, runBenchmark, listBenchmarkRuns })}
-      />,
+      <AgentStudio client={createConfigClient({ listAgents, runBenchmark, listBenchmarkRuns })} />,
     )
 
     await screen.findByText('研究助手')

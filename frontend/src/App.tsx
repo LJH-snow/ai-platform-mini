@@ -49,6 +49,8 @@ import { useRagRuntimeStatus } from './platform/rag-status.ts'
 import { ChatBackendError, createChatClient, type ChatClient } from './chat/client.ts'
 import { createMultiAgentClient } from './multiagent/client.ts'
 import { MultiAgentPanel } from './multiagent/MultiAgentPanel.tsx'
+import { CanvasPage } from './canvas/CanvasPage.tsx'
+import { createCanvasClient } from './canvas/client.ts'
 import { createWorkflowClient } from './workflow/client.ts'
 import { WorkflowPanel } from './workflow/WorkflowPanel.tsx'
 import { WorkflowBuilder } from './workflow-builder/WorkflowBuilder.tsx'
@@ -72,6 +74,7 @@ type AppPage =
   | 'members'
   | 'agents'
   | 'multi-agent'
+  | 'canvas'
   | 'tools'
   | 'run'
   | 'usage'
@@ -630,6 +633,14 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       }),
     [effectiveApiKey, runtimeConfig.apiBaseUrl],
   )
+  const canvasClient = useMemo(
+    () =>
+      createCanvasClient({
+        apiKey: effectiveApiKey ?? undefined,
+      }),
+    [effectiveApiKey],
+  )
+
   const multiAgentClient = useMemo(
     () =>
       createMultiAgentClient({
@@ -1313,6 +1324,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
       { id: 'agents', label: 'Agent Studio', shortLabel: 'Agent' },
       { id: 'multi-agent', label: '多 Agent 编排', shortLabel: '多Agent' },
+      { id: 'canvas', label: '编排画布', shortLabel: '画布' },
       { id: 'tools', label: 'Tool Center', shortLabel: '工具' },
       { id: 'usage', label: '用量仪表盘', shortLabel: '用量' },
       { id: 'billing', label: 'Billing / 计划', shortLabel: '计划' },
@@ -1514,6 +1526,19 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   if (page === 'agents') {
     return renderPlatformShell(<AgentStudio client={configClient} />)
   }
+  if (page === 'canvas') {
+    return renderPlatformShell(
+      <CanvasPage
+        client={canvasClient}
+        onRunConfig={(configId, _userInput) => {
+          // Switch to multi-agent page with config_id for execution
+          // For now, just show a message
+          setAnnouncement(`Running config ${configId}...`)
+          setPage('multi-agent')
+        }}
+      />,
+    )
+  }
   if (page === 'multi-agent') {
     return renderPlatformShell(
       <MultiAgentPanel client={multiAgentClient} apiKeyConfigured={Boolean(effectiveApiKey)} />,
@@ -1565,10 +1590,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   }
   if (page === 'memory') {
     return renderPlatformShell(
-      <MemoryPanel
-        apiKeyConfigured={Boolean(effectiveApiKey)}
-        client={memoryClient}
-      />,
+      <MemoryPanel apiKeyConfigured={Boolean(effectiveApiKey)} client={memoryClient} />,
     )
   }
   if (page === 'members') {

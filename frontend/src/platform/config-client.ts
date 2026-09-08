@@ -154,12 +154,9 @@ const errorMessage = (status: number): string => {
 }
 
 const asObject = (payload: unknown): Record<string, unknown> =>
-  typeof payload === 'object' && payload !== null
-    ? (payload as Record<string, unknown>)
-    : {}
+  typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {}
 
-const asArray = (payload: unknown): unknown[] =>
-  Array.isArray(payload) ? payload : []
+const asArray = (payload: unknown): unknown[] => (Array.isArray(payload) ? payload : [])
 
 const asString = (value: unknown, fallback: string): string =>
   typeof value === 'string' ? value : fallback
@@ -185,8 +182,7 @@ const normalizePromptSummary = (payload: unknown): PromptSummary[] =>
     })
     return {
       name: asString(item.name, ''),
-      active_version:
-        typeof item.active_version === 'number' ? item.active_version : null,
+      active_version: typeof item.active_version === 'number' ? item.active_version : null,
       versions,
     }
   })
@@ -238,10 +234,8 @@ const normalizeRunSummaries = (payload: unknown): RunRecordSummary[] =>
       stop_reason: asString(item.stop_reason, ''),
       started_at: typeof item.started_at === 'string' ? item.started_at : null,
       completed_at: typeof item.completed_at === 'string' ? item.completed_at : null,
-      duration_ms:
-        typeof item.duration_ms === 'number' ? item.duration_ms : null,
-      total_tokens:
-        typeof item.total_tokens === 'number' ? item.total_tokens : null,
+      duration_ms: typeof item.duration_ms === 'number' ? item.duration_ms : null,
+      total_tokens: typeof item.total_tokens === 'number' ? item.total_tokens : null,
       tool_count: asNumber(item.tool_count, 0),
       rag_reference_count: asNumber(item.rag_reference_count, 0),
     }
@@ -257,11 +251,8 @@ const normalizeBenchmarkRuns = (payload: unknown): BenchmarkRun[] =>
       tool_call_accuracy:
         typeof item.tool_call_accuracy === 'number' ? item.tool_call_accuracy : null,
       task_completion_rate:
-        typeof item.task_completion_rate === 'number'
-          ? item.task_completion_rate
-          : null,
-      average_steps:
-        typeof item.average_steps === 'number' ? item.average_steps : null,
+        typeof item.task_completion_rate === 'number' ? item.task_completion_rate : null,
+      average_steps: typeof item.average_steps === 'number' ? item.average_steps : null,
       average_latency_ms:
         typeof item.average_latency_ms === 'number' ? item.average_latency_ms : null,
       task_count: asNumber(item.task_count, 0),
@@ -272,18 +263,20 @@ const normalizeBenchmarkRuns = (payload: unknown): BenchmarkRun[] =>
 
 const normalizeBenchmarkRun = (payload: unknown): BenchmarkRun => {
   const runs = normalizeBenchmarkRuns([payload])
-  return runs[0] ?? {
-    id: 0,
-    agent_id: '',
-    task_set: '',
-    tool_call_accuracy: null,
-    task_completion_rate: null,
-    average_steps: null,
-    average_latency_ms: null,
-    task_count: 0,
-    completed_count: 0,
-    created_at: null,
-  }
+  return (
+    runs[0] ?? {
+      id: 0,
+      agent_id: '',
+      task_set: '',
+      tool_call_accuracy: null,
+      task_completion_rate: null,
+      average_steps: null,
+      average_latency_ms: null,
+      task_count: 0,
+      completed_count: 0,
+      created_at: null,
+    }
+  )
 }
 
 const normalizeBilling = (payload: unknown): BillingInfo => {
@@ -295,10 +288,7 @@ const normalizeBilling = (payload: unknown): BillingInfo => {
           const planItem = asObject(planValue)
           const rawFeatures = asObject(planItem.features)
           const featuresValue: Record<string, boolean> = Object.fromEntries(
-            Object.entries(rawFeatures).map(([key, value]) => [
-              key,
-              value === true,
-            ]),
+            Object.entries(rawFeatures).map(([key, value]) => [key, value === true]),
           )
           return {
             id: asString(planItem.id, ''),
@@ -307,21 +297,15 @@ const normalizeBilling = (payload: unknown): BillingInfo => {
             status: asString(planItem.status, ''),
             features: featuresValue,
             daily_token_limit:
-              typeof planItem.daily_token_limit === 'number'
-                ? planItem.daily_token_limit
-                : null,
+              typeof planItem.daily_token_limit === 'number' ? planItem.daily_token_limit : null,
             monthly_token_limit:
               typeof planItem.monthly_token_limit === 'number'
                 ? planItem.monthly_token_limit
                 : null,
-            max_agents:
-              typeof planItem.max_agents === 'number' ? planItem.max_agents : null,
+            max_agents: typeof planItem.max_agents === 'number' ? planItem.max_agents : null,
             max_documents:
-              typeof planItem.max_documents === 'number'
-                ? planItem.max_documents
-                : null,
-            max_members:
-              typeof planItem.max_members === 'number' ? planItem.max_members : null,
+              typeof planItem.max_documents === 'number' ? planItem.max_documents : null,
+            max_members: typeof planItem.max_members === 'number' ? planItem.max_members : null,
           }
         })()
       : null
@@ -445,11 +429,8 @@ export const createConfigClient = (options: ConfigClientOptions = {}) => {
   return {
     listPrompts: () => request('GET', '/api/v1/prompts', null, normalizePromptSummary),
     getPromptVersions: (name: string) =>
-      request(
-        'GET',
-        `/api/v1/prompts/${encodeURIComponent(name)}/versions`,
-        null,
-        (payload) => asArray(payload).map(normalizePromptVersion),
+      request('GET', `/api/v1/prompts/${encodeURIComponent(name)}/versions`, null, (payload) =>
+        asArray(payload).map(normalizePromptVersion),
       ),
     createPromptVersion: (name: string, content: string) =>
       request(
@@ -467,12 +448,7 @@ export const createConfigClient = (options: ConfigClientOptions = {}) => {
       ),
     listTools: () => request('GET', '/api/v1/tools', null, normalizeTools),
     setToolEnabled: (toolName: string, enabled: boolean) =>
-      request(
-        'PUT',
-        `/api/v1/tools/${encodeURIComponent(toolName)}`,
-        { enabled },
-        normalizeTool,
-      ),
+      request('PUT', `/api/v1/tools/${encodeURIComponent(toolName)}`, { enabled }, normalizeTool),
     listAgents: () => request('GET', '/api/v1/agents', null, normalizeAgents),
     createAgent: (draft: AgentDraft) =>
       request('POST', '/api/v1/agents', draft, (payload) => normalizeAgents([payload])[0]),
@@ -488,21 +464,14 @@ export const createConfigClient = (options: ConfigClientOptions = {}) => {
     listRuns: (agentId?: string) =>
       request(
         'GET',
-        agentId
-          ? `/api/v1/runs?agent_id=${encodeURIComponent(agentId)}`
-          : '/api/v1/runs',
+        agentId ? `/api/v1/runs?agent_id=${encodeURIComponent(agentId)}` : '/api/v1/runs',
         null,
         normalizeRunSummaries,
       ),
     getRun: (runId: string) =>
       request('GET', `/api/v1/runs/${encodeURIComponent(runId)}`, null, normalizeRunDetail),
     getUsageDashboard: (days = 7) =>
-      request(
-        'GET',
-        `/api/v1/usage/dashboard?days=${days}`,
-        null,
-        normalizeUsageDashboard,
-      ),
+      request('GET', `/api/v1/usage/dashboard?days=${days}`, null, normalizeUsageDashboard),
     runBenchmark: (agentId: string, taskSet = 'default') =>
       request(
         'POST',

@@ -357,10 +357,9 @@ describe('WorkflowPanel history list', () => {
       threadId: 't-old',
       draftSummary: 'Old task draft',
     }
-    const listRuns = vi.fn().mockResolvedValue([
-      summary('t-old', 'old.pdf'),
-      summary('t-current', 'current.pdf'),
-    ])
+    const listRuns = vi
+      .fn()
+      .mockResolvedValue([summary('t-old', 'old.pdf'), summary('t-current', 'current.pdf')])
     const getStatus = vi.fn().mockResolvedValueOnce(lastStatus)
     const client = createClient({ listRuns, getStatus })
 

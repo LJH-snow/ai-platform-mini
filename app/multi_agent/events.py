@@ -148,6 +148,7 @@ class MultiAgentEvent:
     run_id: str
     kind: MultiAgentEventKind
     sequence: int
+    run_source: str = "supervisor"
     occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     task_id: str | None = None
     agent_role: str | None = None
@@ -176,6 +177,7 @@ class MultiAgentEvent:
             "run_id": self.run_id,
             "kind": self.kind.value,
             "sequence": self.sequence,
+            "run_source": self.run_source,
             "occurred_at": self.occurred_at.isoformat(),
             "task_id": self.task_id,
             "agent_role": self.agent_role,

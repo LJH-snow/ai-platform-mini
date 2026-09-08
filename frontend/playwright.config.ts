@@ -2,8 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 const REPO_ROOT = '..'
 const E2E_DATABASE_URL =
-  process.env.E2E_DATABASE_URL ??
-  'postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform'
+  process.env.E2E_DATABASE_URL ?? 'postgresql+asyncpg://postgres:postgres@localhost:5432/aiplatform'
 
 export default defineConfig({
   testDir: './e2e',

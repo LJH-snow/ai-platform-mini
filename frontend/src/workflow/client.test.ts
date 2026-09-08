@@ -221,9 +221,9 @@ describe('listRuns', () => {
   })
 
   it('returns an empty list when the payload is not an array', async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ detail: 'Not Found' }), { status: 404 }),
-    )
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ detail: 'Not Found' }), { status: 404 }))
     const client = createWorkflowClient({ apiBaseUrl: 'http://test', apiKey: 'k', fetchImpl })
 
     await expect(client.listRuns(20)).rejects.toThrow(WorkflowApiError)

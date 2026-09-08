@@ -106,8 +106,16 @@ export function PromptStudio({ client, onUsePrompt }: PromptStudioProps): JSX.El
       </div>
 
       {loading && <p>加载中…</p>}
-      {error !== null && <p className="inlineError" role="alert">{error}</p>}
-      {notice !== null && <p className="inlineNotice" role="status">{notice}</p>}
+      {error !== null && (
+        <p className="inlineError" role="alert">
+          {error}
+        </p>
+      )}
+      {notice !== null && (
+        <p className="inlineNotice" role="status">
+          {notice}
+        </p>
+      )}
 
       {!loading && prompts.length === 0 && error === null && (
         <p>暂无 Prompt 模板。请先在后端 seed 内置模板（应用启动时自动完成）。</p>
@@ -125,9 +133,7 @@ export function PromptStudio({ client, onUsePrompt }: PromptStudioProps): JSX.El
               >
                 <strong>{prompt.name}</strong>
                 <span>
-                  {prompt.active_version === null
-                    ? '未激活'
-                    : `当前 v${prompt.active_version}`}
+                  {prompt.active_version === null ? '未激活' : `当前 v${prompt.active_version}`}
                 </span>
               </button>
             ))}

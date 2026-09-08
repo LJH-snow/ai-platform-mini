@@ -100,4 +100,3 @@ describe('createMemoryClient', () => {
     await expect(client.create({ content: '' })).rejects.toThrow('content must not be empty')
   })
 })
-

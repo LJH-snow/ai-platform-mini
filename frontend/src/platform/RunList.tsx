@@ -1,10 +1,6 @@
 import { useEffect, useState, type JSX } from 'react'
 
-import {
-  ConfigApiError,
-  type ConfigClient,
-  type RunRecordSummary,
-} from './config-client.ts'
+import { ConfigApiError, type ConfigClient, type RunRecordSummary } from './config-client.ts'
 
 type RunListProps = {
   client: ConfigClient
@@ -59,9 +55,7 @@ export function RunList({ client, onOpenRun }: RunListProps): JSX.Element {
   useEffect(() => {
     client
       .listAgents()
-      .then((items) =>
-        setAgents(items.map((agent) => ({ id: agent.id, name: agent.name }))),
-      )
+      .then((items) => setAgents(items.map((agent) => ({ id: agent.id, name: agent.name }))))
       .catch(() => setAgents([]))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client])
@@ -72,10 +66,7 @@ export function RunList({ client, onOpenRun }: RunListProps): JSX.Element {
         <h2>Run 历史</h2>
         <label className="daysPicker">
           Agent 过滤：
-          <select
-            value={agentFilter}
-            onChange={(event) => setAgentFilter(event.target.value)}
-          >
+          <select value={agentFilter} onChange={(event) => setAgentFilter(event.target.value)}>
             <option value="">全部</option>
             {agents.map((agent) => (
               <option key={agent.id} value={agent.id}>
@@ -87,7 +78,11 @@ export function RunList({ client, onOpenRun }: RunListProps): JSX.Element {
       </div>
 
       {loading && <p>加载中…</p>}
-      {error !== null && <p className="inlineError" role="alert">{error}</p>}
+      {error !== null && (
+        <p className="inlineError" role="alert">
+          {error}
+        </p>
+      )}
 
       {!loading && runs.length === 0 && error === null && (
         <p>暂无 Run 记录。先运行一次 Agent 请求，再回到这里查看回放。</p>
@@ -113,9 +108,7 @@ export function RunList({ client, onOpenRun }: RunListProps): JSX.Element {
                 <td>{formatTime(run.started_at)}</td>
                 <td>{run.model}</td>
                 <td>{statusLabel(run.status)}</td>
-                <td>
-                  {run.duration_ms === null ? '--' : `${Math.round(run.duration_ms)} ms`}
-                </td>
+                <td>{run.duration_ms === null ? '--' : `${Math.round(run.duration_ms)} ms`}</td>
                 <td>{run.total_tokens === null ? '--' : String(run.total_tokens)}</td>
                 <td>{run.tool_count}</td>
                 <td>{run.rag_reference_count}</td>

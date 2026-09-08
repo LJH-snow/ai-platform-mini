@@ -170,3 +170,80 @@ class MultiAgentRunDetail(BaseModel):
     duration_ms: float | None = None
     total_tokens: int | None = Field(default=None, ge=0)
     response: dict[str, object] = Field(default_factory=dict)
+
+
+class CanvasNodeConfig(BaseModel):
+    """Per-node configuration in a canvas DAG."""
+
+    model: str | None = Field(default=None, max_length=128)
+    system_prompt: str | None = Field(default=None, max_length=4096)
+    max_steps: int | None = Field(default=None, ge=1, le=50)
+    token_budget: int | None = Field(default=None, ge=1)
+
+
+class CanvasNode(BaseModel):
+    """One node in a canvas DAG."""
+
+    id: str = Field(..., min_length=1, max_length=64)
+    role: str = Field(default="custom", max_length=64)
+    description: str = Field(default="", max_length=1024)
+    config: CanvasNodeConfig = Field(default_factory=CanvasNodeConfig)
+    position: dict[str, float] = Field(default_factory=dict)
+
+
+class CanvasEdge(BaseModel):
+    """One edge (dependency) in a canvas DAG."""
+
+    id: str = Field(..., min_length=1, max_length=128)
+    source: str = Field(..., min_length=1, max_length=64)
+    target: str = Field(..., min_length=1, max_length=64)
+
+
+class CanvasDAG(BaseModel):
+    """Full canvas DAG definition."""
+
+    nodes: list[CanvasNode] = Field(..., min_length=1, max_length=20)
+    edges: list[CanvasEdge] = Field(default_factory=list)
+
+
+class MultiAgentConfigCreate(BaseModel):
+    """Request body for creating a canvas configuration."""
+
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    dag: CanvasDAG
+    orchestration_config: dict[str, object] = Field(default_factory=dict)
+
+
+class MultiAgentConfigUpdate(BaseModel):
+    """Request body for updating a canvas configuration."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=512)
+    dag: CanvasDAG | None = None
+    orchestration_config: dict[str, object] | None = None
+
+
+class MultiAgentConfigResponse(BaseModel):
+    """Response for a canvas configuration."""
+
+    id: str
+    workspace_id: str | None = None
+    name: str
+    description: str | None = None
+    version: int
+    dag: CanvasDAG
+    orchestration_config: dict[str, object]
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    created_by: str | None = None
+
+
+class MultiAgentConfigExport(BaseModel):
+    """Export/import format for a canvas configuration."""
+
+    name: str
+    description: str | None = None
+    dag: CanvasDAG
+    orchestration_config: dict[str, object] = Field(default_factory=dict)
+    exported_at: datetime = Field(default_factory=lambda: datetime.now())

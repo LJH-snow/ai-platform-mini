@@ -107,11 +107,13 @@ class _SubtaskRuntimeEventObserver:
         task_id: str,
         agent_role: AgentRole,
         observer: MultiAgentEventObserver,
+        run_source: str = "supervisor",
     ) -> None:
         self._run_id = run_id
         self._task_id = task_id
         self._agent_role = agent_role
         self._observer = observer
+        self._run_source = run_source
         self._pending: list[asyncio.Task[None]] = []
 
     def observe(self, event: AgentEvent) -> None:
@@ -130,6 +132,7 @@ class _SubtaskRuntimeEventObserver:
             step_index=event.step_index,
             tool_name=origin.name if origin is not None else None,
             call_id=origin.call_id if origin is not None else None,
+            run_source=self._run_source,
         )
         loop = asyncio.get_running_loop()
         task = loop.create_task(self._observer.on_event(multi_event))
@@ -172,6 +175,7 @@ class Orchestrator:
         cancel_event: asyncio.Event | None = None,
         context: RequestContext | None = None,
         api_key: APIKey | None = None,
+        run_source: str = "supervisor",
     ) -> OrchestrationResult:
         """Execute all subtasks respecting dependencies and policies."""
         config = config or OrchestrationConfig()
@@ -210,6 +214,7 @@ class Orchestrator:
                 cancel_event=cancel_event,
                 context=context,
                 api_key=api_key,
+                run_source=run_source,
             )
         except asyncio.CancelledError:
             state.status = OrchestrationStatus.CANCELLED
@@ -261,6 +266,7 @@ class Orchestrator:
         cancel_event: asyncio.Event | None,
         context: RequestContext | None,
         api_key: APIKey | None,
+        run_source: str = "supervisor",
     ) -> None:
         """Execute tasks respecting dependencies (DAG execution)."""
         pending = set(task_map.keys())
@@ -322,6 +328,7 @@ class Orchestrator:
                                     kind=MultiAgentEventKind.SUBTASK_SKIPPED,
                                     sequence=0,
                                     task_id=task_id,
+                                    run_source=run_source,
                                 )
                             )
                         pending.discard(task_id)
@@ -344,6 +351,7 @@ class Orchestrator:
                         cancel_event=cancel_event,
                         context=context,
                         api_key=api_key,
+                        run_source=run_source,
                     )
                 )
 
@@ -414,6 +422,7 @@ class Orchestrator:
         cancel_event: asyncio.Event | None,
         context: RequestContext | None,
         api_key: APIKey | None,
+        run_source: str = "supervisor",
     ) -> SubtaskResult:
         """Execute a single subtask using AgentRuntime."""
         start_time = time.monotonic()
@@ -468,6 +477,7 @@ class Orchestrator:
                             sequence=0,
                             task_id=task.id,
                             agent_role=task.agent_role.value,
+                            run_source=run_source,
                         )
                     )
                 if (
@@ -505,6 +515,7 @@ class Orchestrator:
                             task_id=task.id,
                             agent_role=task.agent_role,
                             observer=observer,
+                            run_source=run_source,
                         )
                     try:
                         outcome = await self._agent_service.run(
@@ -578,6 +589,7 @@ class Orchestrator:
                                 duration_ms=result.duration_ms,
                                 token_usage=result.token_usage,
                                 output_summary=_bounded_summary(result.output),
+                                run_source=run_source,
                             )
                         )
                     else:
@@ -590,6 +602,7 @@ class Orchestrator:
                                 agent_role=task.agent_role.value,
                                 duration_ms=result.duration_ms,
                                 error_code="subtask_failed",
+                                run_source=run_source,
                             )
                         )
             except asyncio.CancelledError:

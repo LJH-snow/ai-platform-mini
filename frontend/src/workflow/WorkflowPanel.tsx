@@ -341,9 +341,7 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
               新建任务
             </button>
           ) : null}
-          {viewingLast ? (
-            <span className="workflowViewingLast">正在查看历史任务</span>
-          ) : null}
+          {viewingLast ? <span className="workflowViewingLast">正在查看历史任务</span> : null}
           {returnThreadId !== null ? (
             <button
               type="button"
@@ -353,11 +351,7 @@ export function WorkflowPanel({ apiKeyConfigured, client }: WorkflowPanelProps):
               返回当前任务
             </button>
           ) : null}
-          <button
-            type="button"
-            className="secondaryButton"
-            onClick={() => void loadHistory()}
-          >
+          <button type="button" className="secondaryButton" onClick={() => void loadHistory()}>
             历史任务
           </button>
           {showHistory && history.length > 0 ? (

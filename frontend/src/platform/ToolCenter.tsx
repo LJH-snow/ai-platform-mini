@@ -1,10 +1,6 @@
 import { useEffect, useState, type JSX } from 'react'
 
-import {
-  ConfigApiError,
-  type ConfigClient,
-  type ToolInfo,
-} from './config-client.ts'
+import { ConfigApiError, type ConfigClient, type ToolInfo } from './config-client.ts'
 
 type ToolCenterProps = {
   client: ConfigClient
@@ -40,12 +36,8 @@ export function ToolCenter({ client }: ToolCenterProps): JSX.Element {
     try {
       const updated = await client.setToolEnabled(tool.name, !tool.enabled)
       if (updated === null) return
-      setTools((current) =>
-        current.map((item) => (item.name === updated.name ? updated : item)),
-      )
-      setNotice(
-        `工具「${updated.name}」已${updated.enabled ? '启用' : '禁用'}（本 workspace）。`,
-      )
+      setTools((current) => current.map((item) => (item.name === updated.name ? updated : item)))
+      setNotice(`工具「${updated.name}」已${updated.enabled ? '启用' : '禁用'}（本 workspace）。`)
     } catch (caught) {
       setError(caught instanceof ConfigApiError ? caught.message : '切换失败。')
     }
@@ -71,8 +63,16 @@ export function ToolCenter({ client }: ToolCenterProps): JSX.Element {
       </div>
 
       {loading && <p>加载中…</p>}
-      {error !== null && <p className="inlineError" role="alert">{error}</p>}
-      {notice !== null && <p className="inlineNotice" role="status">{notice}</p>}
+      {error !== null && (
+        <p className="inlineError" role="alert">
+          {error}
+        </p>
+      )}
+      {notice !== null && (
+        <p className="inlineNotice" role="status">
+          {notice}
+        </p>
+      )}
 
       {!loading && tools.length === 0 && error === null && (
         <p>暂无工具。请先在后端 seed 内置工具（应用启动时自动完成）。</p>
@@ -89,11 +89,7 @@ export function ToolCenter({ client }: ToolCenterProps): JSX.Element {
                 </div>
                 <label
                   className="switchRow"
-                  title={
-                    tool.can_manage
-                      ? undefined
-                      : '需要 workspace 才能修改工具启用状态'
-                  }
+                  title={tool.can_manage ? undefined : '需要 workspace 才能修改工具启用状态'}
                 >
                   <input
                     type="checkbox"
@@ -109,9 +105,7 @@ export function ToolCenter({ client }: ToolCenterProps): JSX.Element {
                 {expanded.has(tool.name) ? '收起 Schema' : '展开 Schema'}
               </button>
               {expanded.has(tool.name) && (
-                <pre className="schemaView">
-                  {JSON.stringify(tool.parameters_schema, null, 2)}
-                </pre>
+                <pre className="schemaView">{JSON.stringify(tool.parameters_schema, null, 2)}</pre>
               )}
             </li>
           ))}

@@ -180,17 +180,16 @@ export const createWorkflowClient = (options: WorkflowClientOptions = {}) => {
         `/api/v1/workflows?limit=${limit}`,
       )
       return Array.isArray(records)
-        ? records.map((record: Record<string, unknown>): WorkflowRunSummary => ({
-            threadId: typeof record.thread_id === 'string' ? record.thread_id : '',
-            status:
-              typeof record.status === 'string' ? record.status : 'failed',
-            stage: typeof record.stage === 'string' ? record.stage : 'failed',
-            filename: typeof record.filename === 'string' ? record.filename : null,
-            reportTopic:
-              typeof record.report_topic === 'string' ? record.report_topic : null,
-            createdAt:
-              typeof record.created_at === 'string' ? record.created_at : null,
-          }))
+        ? records.map(
+            (record: Record<string, unknown>): WorkflowRunSummary => ({
+              threadId: typeof record.thread_id === 'string' ? record.thread_id : '',
+              status: typeof record.status === 'string' ? record.status : 'failed',
+              stage: typeof record.stage === 'string' ? record.stage : 'failed',
+              filename: typeof record.filename === 'string' ? record.filename : null,
+              reportTopic: typeof record.report_topic === 'string' ? record.report_topic : null,
+              createdAt: typeof record.created_at === 'string' ? record.created_at : null,
+            }),
+          )
         : []
     },
 

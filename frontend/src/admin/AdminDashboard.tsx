@@ -238,9 +238,7 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
     try {
       const quota = await client.getWorkspaceQuota(quotaWorkspaceId.trim())
       setQuotaDaily(quota.daily_token_limit === null ? '' : String(quota.daily_token_limit))
-      setQuotaMonthly(
-        quota.monthly_token_limit === null ? '' : String(quota.monthly_token_limit),
-      )
+      setQuotaMonthly(quota.monthly_token_limit === null ? '' : String(quota.monthly_token_limit))
       setQuotaNotice('已加载当前配额设置。')
     } catch (caught) {
       setQuotaError(caught instanceof Error ? caught.message : '配额读取失败。')
@@ -613,7 +611,10 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
         <div className="panelHeader">
           <div>
             <h2>Workspace 配额</h2>
-            <p>设置 workspace 级每日/每月 Token 限额；空值 = 继承全局默认（QUOTA_SCOPE=workspace 时生效）。</p>
+            <p>
+              设置 workspace 级每日/每月 Token 限额；空值 = 继承全局默认（QUOTA_SCOPE=workspace
+              时生效）。
+            </p>
           </div>
         </div>
         <div className="quotaForm">
@@ -646,8 +647,16 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
             保存
           </button>
         </div>
-        {quotaError !== null && <p className="inlineError" role="alert">{quotaError}</p>}
-        {quotaNotice !== null && <p className="inlineNotice" role="status">{quotaNotice}</p>}
+        {quotaError !== null && (
+          <p className="inlineError" role="alert">
+            {quotaError}
+          </p>
+        )}
+        {quotaNotice !== null && (
+          <p className="inlineNotice" role="status">
+            {quotaNotice}
+          </p>
+        )}
       </section>
 
       <section className="panel adminCard auditCard">
@@ -661,7 +670,9 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
           </button>
         </div>
         {auditError !== null && (
-          <p className="inlineError" role="alert">{auditError}</p>
+          <p className="inlineError" role="alert">
+            {auditError}
+          </p>
         )}
         {auditEvents !== null && auditEvents.length === 0 && (
           <p className="formHint">暂无审计记录。</p>
@@ -692,11 +703,7 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
                     {event.resource_type}/{event.resource_id}
                   </td>
                   <td>{event.user_id ?? event.api_key_hash?.slice(0, 8) ?? '--'}</td>
-                  <td>
-                    {event.after !== null
-                      ? JSON.stringify(event.after).slice(0, 80)
-                      : '--'}
-                  </td>
+                  <td>{event.after !== null ? JSON.stringify(event.after).slice(0, 80) : '--'}</td>
                 </tr>
               ))}
             </tbody>

@@ -201,3 +201,35 @@ class WorkspaceQuotaTable(Base):
     updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class MultiAgentConfigTable(Base):
+    """Persistence for multi-agent orchestration canvas configurations."""
+
+    __tablename__ = "multi_agent_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "name", name="uq_multi_agent_config_workspace_name"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        Uuid(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    dag_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    orchestration_config: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False
+    )
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by: Mapped[str | None] = mapped_column(Uuid(as_uuid=False), nullable=True)

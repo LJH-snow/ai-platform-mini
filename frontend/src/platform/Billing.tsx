@@ -1,10 +1,6 @@
 import { useEffect, useState, type JSX } from 'react'
 
-import {
-  ConfigApiError,
-  type BillingInfo,
-  type ConfigClient,
-} from './config-client.ts'
+import { ConfigApiError, type BillingInfo, type ConfigClient } from './config-client.ts'
 
 type BillingProps = {
   client: ConfigClient
@@ -16,13 +12,7 @@ const formatTokens = (tokens: number): string => {
   return String(tokens)
 }
 
-function UsageBar({
-  used,
-  limit,
-}: {
-  used: number
-  limit: number | null
-}): JSX.Element {
+function UsageBar({ used, limit }: { used: number; limit: number | null }): JSX.Element {
   if (limit === null || limit <= 0) {
     return <p className="billingUnlimited">不限</p>
   }
@@ -81,9 +71,7 @@ export function Billing({ client }: BillingProps): JSX.Element {
       })
       .catch((caught: unknown) => {
         if (!cancelled) {
-          setError(
-            caught instanceof ConfigApiError ? caught.message : 'Billing 信息加载失败。',
-          )
+          setError(caught instanceof ConfigApiError ? caught.message : 'Billing 信息加载失败。')
         }
       })
       .finally(() => {
@@ -104,7 +92,11 @@ export function Billing({ client }: BillingProps): JSX.Element {
       </div>
 
       {loading && <p>加载中…</p>}
-      {error !== null && <p className="inlineError" role="alert">{error}</p>}
+      {error !== null && (
+        <p className="inlineError" role="alert">
+          {error}
+        </p>
+      )}
 
       {billing !== null && (
         <>
@@ -132,10 +124,7 @@ export function Billing({ client }: BillingProps): JSX.Element {
 
           <div className="billingSection">
             <h3>本月用量</h3>
-            <UsageBar
-              used={billing.usage.total_tokens}
-              limit={plan?.monthly_token_limit ?? null}
-            />
+            <UsageBar used={billing.usage.total_tokens} limit={plan?.monthly_token_limit ?? null} />
           </div>
 
           <div className="billingSection">
@@ -151,9 +140,7 @@ export function Billing({ client }: BillingProps): JSX.Element {
               <ul className="billingFeatures">
                 {Object.entries(plan.features).map(([feature, enabled]) => (
                   <li key={feature}>
-                    <span className={enabled ? undefined : 'billingFeatureOff'}>
-                      {feature}
-                    </span>
+                    <span className={enabled ? undefined : 'billingFeatureOff'}>{feature}</span>
                     {enabled ? '已启用' : '未启用'}
                   </li>
                 ))}

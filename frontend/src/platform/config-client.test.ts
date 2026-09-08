@@ -178,10 +178,7 @@ describe('createConfigClient', () => {
 
     await client.listRuns('agent-1')
 
-    expect(fetchImpl).toHaveBeenCalledWith(
-      '/api/v1/runs?agent_id=agent-1',
-      expect.anything(),
-    )
+    expect(fetchImpl).toHaveBeenCalledWith('/api/v1/runs?agent_id=agent-1', expect.anything())
   })
 
   it('surfaces network failures as a stable error', async () => {

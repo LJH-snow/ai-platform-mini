@@ -74,9 +74,7 @@ export function AgentStudio({ client }: AgentStudioProps): JSX.Element {
       setPrompts(promptItems)
       setTools(toolItems)
     } catch (caught) {
-      setError(
-        caught instanceof ConfigApiError ? caught.message : 'Agent 配置加载失败。',
-      )
+      setError(caught instanceof ConfigApiError ? caught.message : 'Agent 配置加载失败。')
     } finally {
       setLoading(false)
     }
@@ -163,8 +161,16 @@ export function AgentStudio({ client }: AgentStudioProps): JSX.Element {
       </div>
 
       {loading && <p>加载中…</p>}
-      {error !== null && <p className="inlineError" role="alert">{error}</p>}
-      {notice !== null && <p className="inlineNotice" role="status">{notice}</p>}
+      {error !== null && (
+        <p className="inlineError" role="alert">
+          {error}
+        </p>
+      )}
+      {notice !== null && (
+        <p className="inlineNotice" role="status">
+          {notice}
+        </p>
+      )}
 
       {!loading && (
         <>
@@ -213,17 +219,13 @@ export function AgentStudio({ client }: AgentStudioProps): JSX.Element {
                 Prompt 模板
                 <select
                   value={draft.prompt_ref}
-                  onChange={(event) =>
-                    setDraft({ ...draft, prompt_ref: event.target.value })
-                  }
+                  onChange={(event) => setDraft({ ...draft, prompt_ref: event.target.value })}
                 >
                   <option value="">（内置协议）</option>
                   {prompts.map((prompt) => (
                     <option key={prompt.name} value={prompt.name}>
                       {prompt.name}
-                      {prompt.active_version === null
-                        ? ''
-                        : `（当前 v${prompt.active_version}）`}
+                      {prompt.active_version === null ? '' : `（当前 v${prompt.active_version}）`}
                     </option>
                   ))}
                 </select>
@@ -327,9 +329,7 @@ export function AgentStudio({ client }: AgentStudioProps): JSX.Element {
                             ? '--'
                             : run.task_completion_rate.toFixed(2)}
                         </td>
-                        <td>
-                          {run.average_steps === null ? '--' : run.average_steps.toFixed(2)}
-                        </td>
+                        <td>{run.average_steps === null ? '--' : run.average_steps.toFixed(2)}</td>
                         <td>
                           {run.average_latency_ms === null
                             ? '--'

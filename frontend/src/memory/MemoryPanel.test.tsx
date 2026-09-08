@@ -65,12 +65,10 @@ describe('MemoryPanel', () => {
   })
 
   it('edits and deletes memory', async () => {
-    const update = vi.fn(
-      async (_id: string, _input: Record<string, unknown>) => ({
-        ...memoryItem,
-        content: '先给结论再展开',
-      }),
-    )
+    const update = vi.fn(async (_id: string, _input: Record<string, unknown>) => ({
+      ...memoryItem,
+      content: '先给结论再展开',
+    }))
     const del = vi.fn(async () => undefined)
     const client = createClient({
       list: vi.fn(async () => [memoryItem]),
@@ -87,7 +85,10 @@ describe('MemoryPanel', () => {
     await user.click(screen.getByRole('button', { name: '保存修改' }))
 
     await waitFor(() =>
-      expect(update).toHaveBeenCalledWith('memory-1', expect.objectContaining({ content: '先给结论再展开' })),
+      expect(update).toHaveBeenCalledWith(
+        'memory-1',
+        expect.objectContaining({ content: '先给结论再展开' }),
+      ),
     )
 
     await user.click(screen.getByRole('button', { name: '删除' }))

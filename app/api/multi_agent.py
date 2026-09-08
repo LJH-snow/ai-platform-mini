@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.auth.models import APIKey
 from app.core.context import RequestContext
-from app.db.models import MultiAgentRunEventTable
+from app.db.models import MultiAgentConfigTable, MultiAgentRunEventTable
 from app.evals.multi_agent_compare import MultiAgentCompareRunner
 from app.multi_agent.events import (
     MultiAgentEvent,
@@ -38,6 +38,10 @@ from app.multi_agent.service import MultiAgentService
 from app.ratelimit.dependencies import require_rate_limit
 from app.schemas.agent import MAX_AGENT_MAX_STEPS
 from app.schemas.multi_agent import (
+    MultiAgentConfigCreate,
+    MultiAgentConfigExport,
+    MultiAgentConfigResponse,
+    MultiAgentConfigUpdate,
     MultiAgentRunDetail,
     MultiAgentRunRequest,
     MultiAgentRunResponse,
@@ -47,6 +51,7 @@ from app.schemas.multi_agent import (
     SubtaskResultSummarySchema,
     SubtaskSummarySchema,
 )
+from app.services.multi_agent_config_service import MultiAgentConfigService
 from app.services.multi_agent_run_record_service import (
     MultiAgentEventRecorder,
     MultiAgentRunRecordService,
@@ -115,10 +120,18 @@ def _subtask_public_error(result: SubtaskResult) -> str | None:
 
 def _provide_multi_agent_service() -> MultiAgentService:
     """Provide MultiAgentService instance via container."""
-    from app.core.container import provide_agent_service, provide_chat_service
+    from app.core.container import (
+        provide_agent_service,
+        provide_chat_service,
+        provide_multi_agent_config_service,
+    )
 
     chat_service = provide_chat_service()
-    return MultiAgentService(chat_service, agent_service=provide_agent_service())
+    return MultiAgentService(
+        chat_service,
+        agent_service=provide_agent_service(),
+        config_service=provide_multi_agent_config_service(),
+    )
 
 
 def _provide_multi_agent_record_service() -> MultiAgentRunRecordService | None:
@@ -126,6 +139,13 @@ def _provide_multi_agent_record_service() -> MultiAgentRunRecordService | None:
     from app.core.container import provide_multi_agent_run_record_service
 
     return provide_multi_agent_run_record_service()
+
+
+def _provide_multi_agent_config_service() -> MultiAgentConfigService | None:
+    """Provide the config service; None when no engine is configured."""
+    from app.core.container import provide_multi_agent_config_service
+
+    return provide_multi_agent_config_service()
 
 
 def _provide_multi_agent_compare_runner() -> MultiAgentCompareRunner:
@@ -751,3 +771,209 @@ def _set_rate_limit_headers(http_request: Request, response: Response) -> None:
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     if reset_after is not None:
         response.headers["X-RateLimit-Reset"] = str(reset_after)
+
+
+# --- Canvas config CRUD endpoints ---
+
+
+@router.post(
+    "/configs",
+    response_model=MultiAgentConfigResponse,
+    status_code=201,
+)
+async def create_config(
+    request: Request,
+    body: MultiAgentConfigCreate,
+    api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    config_service: Annotated[
+        MultiAgentConfigService | None, Depends(_provide_multi_agent_config_service)
+    ],
+) -> MultiAgentConfigResponse:
+    """Create a new canvas configuration."""
+    if config_service is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    context: RequestContext = request.state.context
+    row = await config_service.create(
+        name=body.name,
+        description=body.description,
+        dag_json=body.dag.model_dump(mode="json"),
+        orchestration_config=body.orchestration_config,
+        context=context,
+        api_key=api_key,
+    )
+    return _config_to_response(row)
+
+
+@router.get(
+    "/configs",
+    response_model=list[MultiAgentConfigResponse],
+)
+async def list_configs(
+    request: Request,
+    api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    config_service: Annotated[
+        MultiAgentConfigService | None, Depends(_provide_multi_agent_config_service)
+    ],
+) -> list[MultiAgentConfigResponse]:
+    """List canvas configurations for the current tenant."""
+    if config_service is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    context: RequestContext = request.state.context
+    owner_scope = context.identity.workspace_id if context.identity else None
+    rows = await config_service.list_configs(owner_scope=owner_scope)
+    return [_config_to_response(row) for row in rows]
+
+
+@router.get(
+    "/configs/{config_id}",
+    response_model=MultiAgentConfigResponse,
+)
+async def get_config(
+    request: Request,
+    config_id: str,
+    api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    config_service: Annotated[
+        MultiAgentConfigService | None, Depends(_provide_multi_agent_config_service)
+    ],
+) -> MultiAgentConfigResponse:
+    """Get a canvas configuration by ID."""
+    if config_service is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    context: RequestContext = request.state.context
+    owner_scope = context.identity.workspace_id if context.identity else None
+    row = await config_service.get_config(config_id, owner_scope=owner_scope)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Config not found")
+    return _config_to_response(row)
+
+
+@router.put(
+    "/configs/{config_id}",
+    response_model=MultiAgentConfigResponse,
+)
+async def update_config(
+    request: Request,
+    config_id: str,
+    body: MultiAgentConfigUpdate,
+    api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    config_service: Annotated[
+        MultiAgentConfigService | None, Depends(_provide_multi_agent_config_service)
+    ],
+) -> MultiAgentConfigResponse:
+    """Update a canvas configuration."""
+    if config_service is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    context: RequestContext = request.state.context
+    owner_scope = context.identity.workspace_id if context.identity else None
+    dag_json = body.dag.model_dump(mode="json") if body.dag is not None else None
+    row = await config_service.update_config(
+        config_id,
+        name=body.name,
+        description=body.description,
+        dag_json=dag_json,
+        orchestration_config=body.orchestration_config,
+        owner_scope=owner_scope,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Config not found")
+    return _config_to_response(row)
+
+
+@router.delete(
+    "/configs/{config_id}",
+    status_code=204,
+)
+async def delete_config(
+    request: Request,
+    config_id: str,
+    api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    config_service: Annotated[
+        MultiAgentConfigService | None, Depends(_provide_multi_agent_config_service)
+    ],
+) -> None:
+    """Delete a canvas configuration."""
+    if config_service is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    context: RequestContext = request.state.context
+    owner_scope = context.identity.workspace_id if context.identity else None
+    deleted = await config_service.delete_config(config_id, owner_scope=owner_scope)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Config not found")
+
+
+@router.get(
+    "/configs/{config_id}/export",
+    response_model=MultiAgentConfigExport,
+)
+async def export_config(
+    request: Request,
+    config_id: str,
+    api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    config_service: Annotated[
+        MultiAgentConfigService | None, Depends(_provide_multi_agent_config_service)
+    ],
+) -> MultiAgentConfigExport:
+    """Export a canvas configuration as a portable JSON."""
+    if config_service is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    context: RequestContext = request.state.context
+    owner_scope = context.identity.workspace_id if context.identity else None
+    row = await config_service.get_config(config_id, owner_scope=owner_scope)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Config not found")
+    from app.schemas.multi_agent import CanvasDAG
+
+    dag = CanvasDAG.model_validate(row.dag_json)
+    return MultiAgentConfigExport(
+        name=row.name,
+        description=row.description,
+        dag=dag,
+        orchestration_config=row.orchestration_config,
+    )
+
+
+@router.post(
+    "/configs/import",
+    response_model=MultiAgentConfigResponse,
+    status_code=201,
+)
+async def import_config(
+    request: Request,
+    body: MultiAgentConfigExport,
+    api_key: Annotated[APIKey, Depends(require_rate_limit)],
+    config_service: Annotated[
+        MultiAgentConfigService | None, Depends(_provide_multi_agent_config_service)
+    ],
+) -> MultiAgentConfigResponse:
+    """Import a canvas configuration from a portable JSON."""
+    if config_service is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    context: RequestContext = request.state.context
+    row = await config_service.create(
+        name=body.name,
+        description=body.description,
+        dag_json=body.dag.model_dump(mode="json"),
+        orchestration_config=body.orchestration_config,
+        context=context,
+        api_key=api_key,
+    )
+    return _config_to_response(row)
+
+
+def _config_to_response(row: MultiAgentConfigTable) -> MultiAgentConfigResponse:
+    """Convert a config DB row to a response schema."""
+    from app.schemas.multi_agent import CanvasDAG
+
+    dag = CanvasDAG.model_validate(row.dag_json)
+    return MultiAgentConfigResponse(
+        id=row.id,
+        workspace_id=row.workspace_id,
+        name=row.name,
+        description=row.description,
+        version=row.version or 1,
+        dag=dag,
+        orchestration_config=row.orchestration_config,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        created_by=row.created_by,
+    )

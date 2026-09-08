@@ -1,10 +1,6 @@
 import { useEffect, useState, type JSX } from 'react'
 
-import {
-  ConfigApiError,
-  type ConfigClient,
-  type RunRecordDetail,
-} from './config-client.ts'
+import { ConfigApiError, type ConfigClient, type RunRecordDetail } from './config-client.ts'
 
 type RunDetailProps = {
   client: ConfigClient
@@ -23,7 +19,11 @@ type StepTool = {
   rag: {
     status: string
     warning: string
-    references: Array<{ document_id: string | null; chunk_id: string | null; content: string | null }>
+    references: Array<{
+      document_id: string | null
+      chunk_id: string | null
+      content: string | null
+    }>
   } | null
 }
 
@@ -46,8 +46,7 @@ const asStepList = (value: unknown): Step[] => {
     return [
       {
         index: typeof step.index === 'number' ? step.index : 0,
-        decision_kind:
-          typeof step.decision_kind === 'string' ? step.decision_kind : 'invalid',
+        decision_kind: typeof step.decision_kind === 'string' ? step.decision_kind : 'invalid',
         tool_names: Array.isArray(step.tool_names)
           ? step.tool_names.filter((name): name is string => typeof name === 'string')
           : [],
@@ -65,10 +64,8 @@ const asStepList = (value: unknown): Step[] => {
                   name: typeof item.name === 'string' ? item.name : 'unknown',
                   succeeded: typeof item.succeeded === 'boolean' ? item.succeeded : null,
                   error_code: typeof item.error_code === 'string' ? item.error_code : null,
-                  error_message:
-                    typeof item.error_message === 'string' ? item.error_message : null,
-                  input_summary:
-                    typeof item.input_summary === 'string' ? item.input_summary : null,
+                  error_message: typeof item.error_message === 'string' ? item.error_message : null,
+                  input_summary: typeof item.input_summary === 'string' ? item.input_summary : null,
                   output_summary:
                     typeof item.output_summary === 'string' ? item.output_summary : null,
                   rag:
@@ -113,9 +110,7 @@ export function RunDetail({ client, runId, onBack }: RunDetailProps): JSX.Elemen
       })
       .catch((caught: unknown) => {
         if (cancelled) return
-        setError(
-          caught instanceof ConfigApiError ? caught.message : 'Run 详情加载失败。',
-        )
+        setError(caught instanceof ConfigApiError ? caught.message : 'Run 详情加载失败。')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -127,9 +122,7 @@ export function RunDetail({ client, runId, onBack }: RunDetailProps): JSX.Elemen
 
   const steps = run === null ? [] : asStepList(run.response.steps)
   const answer =
-    run !== null && typeof run.response.answer === 'string'
-      ? (run.response.answer as string)
-      : null
+    run !== null && typeof run.response.answer === 'string' ? (run.response.answer as string) : null
 
   return (
     <section className="platformPage">
@@ -141,7 +134,11 @@ export function RunDetail({ client, runId, onBack }: RunDetailProps): JSX.Elemen
       </div>
 
       {loading && <p>加载中…</p>}
-      {error !== null && <p className="inlineError" role="alert">{error}</p>}
+      {error !== null && (
+        <p className="inlineError" role="alert">
+          {error}
+        </p>
+      )}
 
       {run !== null && (
         <>
@@ -184,12 +181,8 @@ export function RunDetail({ client, runId, onBack }: RunDetailProps): JSX.Elemen
                       <li key={tool.call_id}>
                         <strong>{tool.name}</strong>
                         {tool.succeeded === false && <span>（失败）</span>}
-                        {tool.input_summary !== null && (
-                          <p>输入：{tool.input_summary}</p>
-                        )}
-                        {tool.output_summary !== null && (
-                          <p>输出：{tool.output_summary}</p>
-                        )}
+                        {tool.input_summary !== null && <p>输入：{tool.input_summary}</p>}
+                        {tool.output_summary !== null && <p>输出：{tool.output_summary}</p>}
                         {tool.rag !== null && (
                           <details>
                             <summary>

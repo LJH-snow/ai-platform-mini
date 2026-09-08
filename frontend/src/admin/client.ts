@@ -101,9 +101,7 @@ export const createAdminClient = (options: AdminClientOptions) => {
     getRun: (runId: string) =>
       request<AgentRunRecord>(`/admin/agent-runs/${encodeURIComponent(runId)}`),
     getWorkspaceQuota: (workspaceId: string) =>
-      request<WorkspaceQuota>(
-        `/admin/workspaces/${encodeURIComponent(workspaceId)}/quota`,
-      ),
+      request<WorkspaceQuota>(`/admin/workspaces/${encodeURIComponent(workspaceId)}/quota`),
     listAuditEvents: (params: { workspace_id?: string; action?: string; limit?: number } = {}) => {
       const query = new URLSearchParams()
       if (params.workspace_id) query.set('workspace_id', params.workspace_id)
@@ -115,13 +113,10 @@ export const createAdminClient = (options: AdminClientOptions) => {
       workspaceId: string,
       body: { daily_token_limit: number | null; monthly_token_limit: number | null },
     ) =>
-      request<WorkspaceQuota>(
-        `/admin/workspaces/${encodeURIComponent(workspaceId)}/quota`,
-        {
-          method: 'PUT',
-          body: JSON.stringify(body),
-        },
-      ),
+      request<WorkspaceQuota>(`/admin/workspaces/${encodeURIComponent(workspaceId)}/quota`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
   }
 }
 

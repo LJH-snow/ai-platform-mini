@@ -197,4 +197,3 @@ export const createMemoryClient = (options: MemoryClientOptions = {}) => {
 }
 
 export type MemoryClient = ReturnType<typeof createMemoryClient>
-

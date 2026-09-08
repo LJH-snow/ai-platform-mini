@@ -23,6 +23,7 @@ from app.db.models import (
     APIKeyTable,
     Base,
     DailyUsageTable,
+    MultiAgentConfigTable,
     MultiAgentRunEventTable,
     MultiAgentRunRecordTable,
     QuotaReservationTable,
@@ -59,6 +60,7 @@ _CORE_TABLES = [
     AgentRunRecordTable,
     MultiAgentRunRecordTable,
     MultiAgentRunEventTable,
+    MultiAgentConfigTable,
     DailyUsageTable,
     QuotaReservationTable,
     WorkspaceQuotaTable,
@@ -384,6 +386,34 @@ async def migrate_multi_agent_run_events_schema(engine: AsyncEngine) -> None:
         logger.info("migrate_multi_agent_run_events_schema: ensured run_id index")
 
 
+async def migrate_multi_agent_configs_schema(engine: AsyncEngine) -> None:
+    """Idempotent migration adding workspace scoping to multi-agent configs."""
+    async with engine.begin() as conn:
+        if not await _table_exists(conn, "multi_agent_configs"):
+            return
+        result = await conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'multi_agent_configs' "
+                "AND column_name = 'workspace_id' "
+                "AND table_schema = current_schema()"
+            )
+        )
+        if result.first() is not None:
+            return
+        await conn.execute(
+            text("ALTER TABLE multi_agent_configs ADD COLUMN workspace_id VARCHAR(64)")
+        )
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_multi_agent_configs_workspace_id "
+                "ON multi_agent_configs (workspace_id)"
+            )
+        )
+        logger.info("migrate_multi_agent_configs_schema: added workspace_id column")
+
+
 def get_engine() -> AsyncEngine | None:
     return _engine
 
@@ -453,6 +483,8 @@ async def init_db(
         await migrate_usage_schema(_engine)
         # Upgrade pre-existing quota reservations that predate workspace scoping.
         await migrate_quota_schema(_engine)
+        # Upgrade pre-existing configs that predate workspace scoping.
+        await migrate_multi_agent_configs_schema(_engine)
     except BaseException:
         # Engine was created but schema init failed — dispose to
         # prevent leaking the connection pool.  Re-raise so the

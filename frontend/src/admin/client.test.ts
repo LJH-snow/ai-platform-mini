@@ -92,9 +92,6 @@ describe('admin workspace quota client', () => {
 
     await client.getWorkspaceQuota('ws 1')
 
-    expect(fetchImpl).toHaveBeenCalledWith(
-      '/admin/workspaces/ws%201/quota',
-      expect.anything(),
-    )
+    expect(fetchImpl).toHaveBeenCalledWith('/admin/workspaces/ws%201/quota', expect.anything())
   })
 })

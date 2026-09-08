@@ -18,9 +18,9 @@ async function register(page: Page, email: string): Promise<void> {
   await page.getByLabel('密码').fill('secret123')
   await page.getByRole('button', { name: '注册', exact: true }).click()
   // Registration auto-logs-in and lands on the platform shell.
-  await expect(
-    page.getByRole('button', { name: '对话工作台', exact: true }),
-  ).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('button', { name: '对话工作台', exact: true })).toBeVisible({
+    timeout: 30_000,
+  })
 }
 
 test('register → chat with the mock provider', async ({ page }) => {
@@ -73,9 +73,7 @@ test('PDF workflow: upload → draft → approve → complete', async ({ page })
   })
 })
 
-test('knowledge base: upload PDF, then ask via RAG agent preset', async ({
-  page,
-}) => {
+test('knowledge base: upload PDF, then ask via RAG agent preset', async ({ page }) => {
   await register(page, `e2e-rag-${Date.now()}@test.com`)
 
   await page.getByRole('button', { name: '知识库', exact: true }).click()

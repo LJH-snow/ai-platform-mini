@@ -259,4 +259,3 @@ export function MemoryPanel({ apiKeyConfigured, client }: MemoryPanelProps): JSX
     </div>
   )
 }
-
