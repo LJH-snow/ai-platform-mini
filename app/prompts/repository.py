@@ -20,6 +20,7 @@ class PromptRepository(Protocol):
     async def find_by_name_and_version(
         self, workspace_id: str | None, name: str, version: int
     ) -> PromptRecord | None: ...
+    async def list_names(self, workspace_id: str | None) -> list[str]: ...
     async def list_versions(
         self, workspace_id: str | None, name: str
     ) -> list[PromptRecord]: ...
@@ -74,6 +75,16 @@ class InMemoryPromptRepository:
             for r in self._records
             if r.workspace_id == workspace_id and r.name == name
         ]
+
+    async def list_names(self, workspace_id: str | None) -> list[str]:
+        """Return distinct visible template names, active or not."""
+        names = {
+            r.name
+            for r in self._records
+            if r.workspace_id == workspace_id
+            or (workspace_id is not None and r.workspace_id is None)
+        }
+        return sorted(names)
 
     async def set_active(
         self, workspace_id: str | None, name: str, version: int
@@ -179,6 +190,22 @@ class PostgresPromptRepository:
             )
             result = await session.scalars(stmt)
             return [_row_to_record(row) for row in result]
+
+    async def list_names(self, workspace_id: str | None) -> list[str]:
+        async with self._session_factory() as session:
+            stmt = (
+                select(PromptTemplateTable.name)
+                .where(
+                    or_(
+                        PromptTemplateTable.workspace_id == workspace_id,
+                        PromptTemplateTable.workspace_id.is_(None),
+                    )
+                )
+                .distinct()
+                .order_by(PromptTemplateTable.name)
+            )
+            result = await session.scalars(stmt)
+            return [name for name in result]
 
     async def set_active(
         self, workspace_id: str | None, name: str, version: int

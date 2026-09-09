@@ -191,6 +191,8 @@ class PromptRegistryService:
         self, name: str, *, workspace_id: str | None = None
     ) -> list[PromptVersionSummary]:
         records = await self._repo.list_versions(workspace_id, name)
+        if not records and workspace_id is not None:
+            records = await self._repo.list_versions(None, name)
         return [
             PromptVersionSummary(
                 name=r.name,
@@ -200,6 +202,10 @@ class PromptRegistryService:
             )
             for r in records
         ]
+
+    async def list_names(self, *, workspace_id: str | None = None) -> list[str]:
+        """Return distinct template names visible to the workspace."""
+        return await self._repo.list_names(workspace_id)
 
     async def list_active_templates(
         self, *, workspace_id: str | None = None

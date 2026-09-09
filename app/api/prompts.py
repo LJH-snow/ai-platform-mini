@@ -60,8 +60,22 @@ async def list_prompts(
                 versions=versions,
             )
         )
-    # Also include names with no active version
-    # TODO: list_versions without having an active template
+    # Also include templates that exist but have no active version for the
+    # current workspace (workspace records plus the global fallback scope).
+    names = await registry.list_names(workspace_id=ws_id)
+    for name in names:
+        if name in seen:
+            continue
+        versions = await registry.list_versions(name, workspace_id=ws_id)
+        if not versions:
+            continue
+        result.append(
+            PromptSummaryResponse(
+                name=name,
+                active_version=None,
+                versions=versions,
+            )
+        )
     return result
 
 

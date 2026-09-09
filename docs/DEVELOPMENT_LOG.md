@@ -1166,3 +1166,29 @@ feature 集合按启用项降噪输出。分配订阅表单把 Workspace、Plan�
 不需要再引入独立的版本表。把“载入快照”做成显式动作，比自动覆盖画布更安全：
 用户先查看 node results，再决定是否回到那次运行的定义继续调整。对已发布流程，
 前端只提示边界而不绕过后端的取消发布约束，保持发布即冻结的既有语义。
+
+
+### Sprint M18（Prompt 列表补全无 active 模板的版本，2026-09-09）
+
+- `PromptRepository` 协议新增 `list_names(workspace_id)`，返回当前工作空间可见
+  的全部模板名（workspace 记录 + global fallback），InMemory 与 PostgreSQL 实现
+  都按 `workspace_id = :ws OR workspace_id IS NULL` 合并去重。
+- `PromptRegistryService.list_versions()` 在 workspace 没有本地版本时回退读取
+  global 版本，保证“仅存在全局版本”的模板也能在列表里展示。
+- `GET /api/v1/prompts` 在返回 active 模板之外，额外遍历 `list_names()` 中尚未
+  出现的名字：只要该名字存在可见版本，就以 `active_version = null` 一并返回，
+  彻底收掉原来 `# TODO: list_versions without having an active template`。
+- 新增 `tests/test_prompt_registry_api.py`：覆盖 active 模板、无 active 但存在
+  版本、空 workspace、多版本回滚、global fallback 五个场景，使用
+  `PromptSummaryResponse.model_validate()` 做类型化断言。
+- 门禁：`ruff format --check .`、`ruff check .`、`mypy app tests`、`pytest`
+  全量 1116 passed / 47 skipped。
+
+#### Sprint M18 学习总结
+
+M18 的要点是把“模板可见性”从“是否 active”放宽为“是否存在可见版本”：原来
+`list_prompts()` 只遍历 active templates，导致仅有未激活版本或仅存在全局旧版本
+的模板在 Prompt Studio 列表里消失。修复分三层落地——repository 提供可见名、
+service 在版本查询里补 global fallback、API 把无 active 的名字也拼进返回——
+避免只在 API 层硬编码名字列表。测试上特别加入了“空 workspace 返回 []”和
+“global fallback 也带版本”两条，防止把可见性放宽做成越权泄漏。
