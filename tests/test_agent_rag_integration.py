@@ -58,7 +58,7 @@ def test_agent_service_keeps_calculator_only_when_rag_is_disabled(
     service = isolated_agent_container(None)
 
     assert isinstance(service, AgentService)
-    assert _tool_names(service) == ["calculator"]
+    assert _tool_names(service) == ["calculator", "code_executor"]
     assert service._tool_registry.get("knowledge_search") is None  # noqa: SLF001
 
 
@@ -69,5 +69,5 @@ def test_agent_service_registers_knowledge_search_when_rag_is_available(
     service = isolated_agent_container(rag_service)
 
     assert isinstance(service, AgentService)
-    assert _tool_names(service) == ["calculator", "knowledge_search"]
+    assert _tool_names(service) == ["calculator", "code_executor", "knowledge_search"]
     assert service._tool_registry.get("knowledge_search") is not None  # noqa: SLF001

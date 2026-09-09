@@ -46,8 +46,9 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
   提供租户隔离的 `GET /runs/{run_id}/events` 时间线回放；前端详情页优先按事件
   序列重建时间线，摘要仅作兜底。
 - **多 Agent 编排画布**：M7 提供 ReactFlow 可视化 DAG 设计器，拖拽节点、连接边、配置 role/model/maxSteps，支持 failurePolicy/maxConcurrency/timeout 编排设置；`DecisionFactory` 把画布 DAG 直接转为 `SupervisorDecision` 跳过 Supervisor 拆分，配置持久化到 `MultiAgentConfigTable` 并支持 CRUD 管理。
-- **真实 Tool Calling**：内置 `calculator` 和 `knowledge_search`，通过 Tool
-  Registry/Executor 做 Schema 校验、权限边界、超时和输出截断。
+- **真实 Tool Calling**：内置 `calculator`、`code_executor` 和
+  `knowledge_search`，通过 Tool Registry/Executor 做 Schema 校验、权限边界、
+  超时和输出截断。
 - **可观察性**：Agent SSE 实时发送步骤计划、Tool Call、RAG 状态、回答增量和
   终态；前端 Trace 展示真实事件，不补造时间、来源或回答。
 - **RAG 闭环**：文档入库（PDF/TXT/Markdown/DOCX/XLSX/HTML）→ 注入安全评估 →
@@ -56,7 +57,7 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
 - **安全与多租户**：API Key 哈希存储、scrypt 密码哈希、限流、Token 配额、
   计费计划、审计日志；RAG 文档按租户隔离；Prompt、原始 Tool payload、Provider
   响应和敏感信息不公开。
-- **工程质量**：后端 93 个测试文件、1104 个测试用例（默认 1063 通过、41 个
+- **工程质量**：后端 97 个测试文件、1117 个测试用例（默认 1076 通过、41 个
   PostgreSQL 集成用例按需启用）+ 前端 Vitest/Playwright/a11y 门禁、真实浏览器
   验证、失败/超时/断连回归、多 Python 版本 CI 和 Code Review 记录。
 
@@ -173,7 +174,9 @@ trace + metrics"]
 - `POST /api/v1/agent/runs`（同步）与 `POST /api/v1/agent/runs/stream`（SSE）：
   复用现有鉴权、限流、配额、Usage 和统一异常边界
 - Tool Registry/Executor：Schema 参数校验、超时、异常安全归一化、输出截断和
-  工具 Schema 导出；内置低风险 `calculator`（AST 白名单，不使用 `eval()`）与
+  工具 Schema 导出；内置低风险 `calculator`（AST 白名单，不使用 `eval()`）、
+  `code_executor`（受限 Python 沙箱，允许基础容器/数学函数，禁用 import、
+  函数/类定义、with/try/raise 与 dunder 名称，线程池 5 秒超时）与
   `knowledge_search`（RAG 工具），默认不开放任意文件、网络或 Shell 能力
 - MCP foundation：stdio JSON-RPC Client、工具发现、allowlist、
   `MCPToolAdapter`、生命周期 health/readiness 查询；不可用 Server 被隔离，
@@ -946,6 +949,10 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
    可配置摘要长度；较早的历史被压缩为 deterministic summary 并合并到
    system prompt
 13. **Sprint M6（已完成）**：多 Agent 事件级持久化与全量回放——生命周期、
+    `answer_delta` 与子任务 Step/Tool 事件统一落 `multi_agent_run_events` 表
+    （1000 条 / 2MB 上限、best-effort 写库），新增
+    `GET /runs/{run_id}/events` 回放端点；前端详情页优先按事件序列回放并渲染
+    Step/Tool 时间线，后端/前端门禁全绿（Postgres 集成用例按需启用）
 14. **Sprint M7（已完成）**：多 Agent 编排画布——`MultiAgentConfigTable` 持久化
     DAG 配置、`DecisionFactory` 把画布 DAG 转成 `SupervisorDecision` 跳过
     Supervisor 拆分、`/api/v1/multi-agent/configs` 配置 CRUD；前端 ReactFlow
@@ -958,7 +965,8 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     `default_model`，保证用户请求的模型名在空流回退时仍正确回填；
     后端门禁全绿
 
-    `answer_delta` 与子任务 Step/Tool 事件统一落 `multi_agent_run_events` 表
-    （1000 条 / 2MB 上限、best-effort 写库），新增
-    `GET /runs/{run_id}/events` 回放端点；前端详情页优先按事件序列回放并渲染
-    Step/Tool 时间线，后端/前端门禁全绿（Postgres 集成用例按需启用）
+16. **Sprint M9（已完成）**：代码执行工具 `code_executor`——安全 Python 沙箱，
+    支持算术、字符串、list/dict 推导与常用 math 函数，禁止 import、函数/类
+    定义、with/try/raise、lambda/dunder 与超长/复杂 AST；print 输出和最后表达式
+    结果统一返回，线程池 5 秒超时并标记为高风险工具；新增 13 个执行器测试并更新
+    Agent 工具注册契约，后端门禁全绿

@@ -414,7 +414,9 @@ def provide_agent_service() -> AgentService:
     from app.tools.registry import ToolRegistry
 
     mcp_manager = provide_mcp_manager()
-    tools: list[Tool] = [CalculatorTool()]
+    from app.tools.code_executor import CodeExecutorTool
+
+    tools: list[Tool] = [CalculatorTool(), CodeExecutorTool()]
     rag_service = provide_rag_service()
     if rag_service is not None:
         from app.tools.knowledge_search import KnowledgeSearchTool

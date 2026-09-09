@@ -935,3 +935,33 @@ default_model 覆盖。两个修复都只需要改一行核心逻辑，但都需
 回归测试来锁住行为——尤其是时区问题，测试必须同时覆盖 naive 和 aware
 两种输入，否则换个时区部署就会回归。
 
+
+### Sprint M9（代码执行工具 code_executor，2026-09-09）
+
+- 新增 `app/tools/code_executor.py`：`CodeExecutorTool` 在受限 Python 沙箱中
+  执行 `code` 参数，支持基础容器操作、字符串/数值运算、list/dict 推导和常用
+  math 函数；结果统一返回最后表达式 `repr()` 或 print 输出，单次输出上限
+  2000 字符，代码长度上限 1000 字符，AST 节点上限 200。
+- 安全边界：AST 校验禁止 `import`/`from`、`with`/`try`/`raise`/`assert`、
+  `lambda`/`yield`/`await`、函数/类定义等节点，禁止 `__dunder__` 名称；
+  builtins 仅暴露 `_ALLOWED_BUILTINS` 安全子集，不开放文件、网络、Shell 或
+  attribute access。
+- 资源限制：使用单 worker `ThreadPoolExecutor` 执行，5 秒超时；语法错误、
+  执行异常和安全违规统一返回可读错误文本，不外泄 traceback。
+- 工具注册：`app/core/container.py` 将 `CodeExecutorTool()` 加入 Agent 默认
+  ToolRegistry，`app/tools/__init__.py` 同步导出，`risk_level = HIGH`。
+- 测试：`tests/test_code_executor.py` 新增 13 个用例，覆盖成功计算、print、
+  syntax error、禁用 import/函数定义/类定义、非字符串参数、超长代码、
+  复杂 AST 与字典操作；`tests/test_agent_rag_integration.py` 更新工具列表断言。
+- 门禁：`ruff format --check .`、`ruff check .`、`mypy app tests`、
+  `pytest` 全量 1076 passed / 41 skipped。
+
+#### Sprint M9 学习总结
+
+M9 的取舍是把“代码执行能力”做成工具而不是新的执行器抽象：Agent 仍然通过
+ToolRegistry/Executor 走同一套参数校验、超时、输出截断和权限边界，代码沙箱
+只在工具内部承担安全执行职责。安全校验放在执行前的 AST 白名单/黑名单检查，
+而不是依赖 `eval/exec` 名称猜测，能显著降低 import 和对象内省滥用；同时用
+明确的上限（代码长度、AST 节点数、执行时长）让异常行为可预测。最后结果与
+print 输出统一返回，是为了让 Agent 拿到结构化、可回填的计算结果，又不丢失
+用户可见的中间输出。
