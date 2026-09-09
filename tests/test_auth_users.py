@@ -11,6 +11,7 @@ from app.api.auth import (
     provide_workspace_service,
 )
 from app.auth.dependencies import provide_api_key_service
+from app.auth.hash import hash_api_key
 from app.auth.memory_repository import InMemoryAPIKeyRepository
 from app.auth.service import APIKeyService
 from app.auth.user_service import UserService
@@ -392,6 +393,146 @@ def test_logout_without_auth_returns_401() -> None:
     _ = _setup_test_services()
     try:
         response = client.post("/api/v1/auth/logout")
+        assert response.status_code == 401
+    finally:
+        _teardown_overrides()
+
+
+# ── User API Key management ────────────────────────────────────────────────
+
+
+def test_user_can_list_and_create_own_api_keys() -> None:
+    user_repo, ws_repo, key_repo = _setup_test_services()
+    try:
+        reg_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "keyowner@example.com",
+                "display_name": "Key Owner",
+                "password": "secret123",
+            },
+        )
+        assert reg_response.status_code == 201
+        api_key = reg_response.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        list_before = client.get("/api/v1/auth/keys", headers=headers)
+        assert list_before.status_code == 200
+        assert len(list_before.json()) == 1
+        assert list_before.json()[0]["status"] == "active"
+
+        create_response = client.post(
+            "/api/v1/auth/keys",
+            headers=headers,
+            json={"name": "ci-dev"},
+        )
+        assert create_response.status_code == 201
+        body = create_response.json()
+        assert body["raw_key"].startswith("sk-")
+        assert len(body["key_hash_prefix"]) == 8
+
+        list_after = client.get("/api/v1/auth/keys", headers=headers)
+        assert list_after.status_code == 200
+        assert len(list_after.json()) == 2
+        assert {item["name"] for item in list_after.json()} >= {
+            "keyowner@example.com-default",
+            "ci-dev",
+        }
+
+        me_with_new_key = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {body['raw_key']}"},
+        )
+        assert me_with_new_key.status_code == 200
+    finally:
+        _teardown_overrides()
+
+
+def test_user_can_revoke_own_api_key_by_prefix() -> None:
+    user_repo, ws_repo, key_repo = _setup_test_services()
+    try:
+        reg_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "revoker@example.com",
+                "display_name": "Revoker",
+                "password": "secret123",
+            },
+        )
+        assert reg_response.status_code == 201
+        api_key = reg_response.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        create_response = client.post(
+            "/api/v1/auth/keys",
+            headers=headers,
+            json={"name": "expire-me"},
+        )
+        assert create_response.status_code == 201
+        created = create_response.json()
+
+        revoke_response = client.delete(
+            f"/api/v1/auth/keys/{created['key_hash_prefix']}",
+            headers=headers,
+        )
+        assert revoke_response.status_code == 200
+        assert revoke_response.json()["revoked"] is True
+
+        me_with_revoked_key = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {created['raw_key']}"},
+        )
+        assert me_with_revoked_key.status_code == 401
+    finally:
+        _teardown_overrides()
+
+
+def test_user_cannot_revoke_another_users_key() -> None:
+    user_repo, ws_repo, key_repo = _setup_test_services()
+    try:
+        user_a = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "owner-a@example.com",
+                "display_name": "Owner A",
+                "password": "secret123",
+            },
+        )
+        assert user_a.status_code == 201
+        key_a = user_a.json()["api_key"]
+        headers_a = {"Authorization": f"Bearer {key_a}"}
+
+        user_b = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "owner-b@example.com",
+                "display_name": "Owner B",
+                "password": "secret123",
+            },
+        )
+        assert user_b.status_code == 201
+        key_b = user_b.json()["api_key"]
+        prefix_b = hash_api_key(key_b)[:8]
+
+        revoke_b = client.delete(
+            f"/api/v1/auth/keys/{prefix_b}",
+            headers=headers_a,
+        )
+        assert revoke_b.status_code == 404
+
+        me_b = client.get(
+            "/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {key_b}"},
+        )
+        assert me_b.status_code == 200
+    finally:
+        _teardown_overrides()
+
+
+def test_user_key_endpoints_require_auth() -> None:
+    _ = _setup_test_services()
+    try:
+        response = client.get("/api/v1/auth/keys")
         assert response.status_code == 401
     finally:
         _teardown_overrides()

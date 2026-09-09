@@ -1045,3 +1045,27 @@ API Key 口径；本次只新增了一个按 IP 的 service provider 和 depende
 做用户绑定校验、`APIKeyService.revoke_key()` 做状态变更，因此无状态授权链
 不引入新的 session/JWT 概念。真正要紧的约束是“只能撤销当前用户自己的 Key”，
 读到的 identity 必须来自当前请求，不能用前端传参指定要撤销谁。
+
+
+### Sprint M13（用户级 API Key 管理，2026-09-09）
+
+- 新增 `GET /api/v1/auth/keys` 列出当前用户自己的 API Key，`POST
+  /api/v1/auth/keys` 创建绑定当前用户/工作空间的新 Key，
+  `DELETE /api/v1/auth/keys/{key_hash_prefix}` 按 8 位哈希前缀撤销自己的 Key。
+- Repository 层为 `APIKeyRepository` 增加 `find_by_key_hash_prefix_for_user` /
+  `list_keys_for_user`，内存与 PostgreSQL 实现都按 `user_id` 过滤，防止跨用户
+  读取或撤销。
+- Service 层增加 `list_keys_for_user`、`find_hash_by_prefix_for_user` 和
+  `revoke_key_for_user`；`revoke_key_for_user` 先校验 record 归属，再复用既有
+  `revoke_key`，不新增撤销抽象。
+- 测试新增：用户列表/创建/撤销自有 Key、不能撤销他人 Key、未鉴权 401，以及
+  service 层的 owner scoped 列表/前缀查找/撤销校验。
+- 门禁：`ruff format --check .`、`ruff check .`、`mypy app tests`、
+  `pytest` 全量 1109 passed / 47 skipped。
+
+#### Sprint M13 学习总结
+
+用户级 Key 管理的关键不是“能创建/撤销 Key”，而是“任何 Key 操作都必须绑定到当前
+identity”。因此 Sprint M13 没有走 admin 的全量 Key 表视图，而是在 repository
+查询里直接用 `user_id` 过滤，服务层撤销前还做二次归属校验。这个约束放得越早，
+后续加前端入口时越不容易出现“看到别人的 Key / 撤销别人的 Key”的越权漏洞。

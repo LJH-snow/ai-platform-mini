@@ -58,7 +58,7 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
   计费计划、审计日志；RAG 文档按租户隔离；Prompt、原始 Tool payload、Provider
   响应和敏感信息不公开。
 - 公开认证端点按 IP 限流（默认 20 次/分钟，可通过环境变量调整或关闭）。
-- **工程质量**：后端 97 个测试文件、1149 个测试用例（默认 1102 通过、47 个
+- **工程质量**：后端 97 个测试文件、1156 个测试用例（默认 1109 通过、47 个
   PostgreSQL 集成用例按需启用）+ 前端 Vitest/Playwright/a11y 门禁、真实浏览器
   验证、失败/超时/断连回归、多 Python 版本 CI 和 Code Review 记录。
 
@@ -989,3 +989,7 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
 19. **Sprint M12（已完成）**：用户 API Key 退出/自我撤销——新增
     `POST /api/v1/auth/logout`，校验当前 Bearer 已绑定用户身份后吊销该 Key，
     旧凭证立即失效；后续 `/me` 等受保护端点返回 401
+20. **Sprint M13（已完成）**：用户级 API Key 管理——新增
+    `GET/POST /api/v1/auth/keys` 列出现有/创建当前用户新 Key，
+    `DELETE /api/v1/auth/keys/{prefix}` 按 8 位哈希前缀撤销属于当前用户的 Key，
+    并按 `user_id` 做租户隔离

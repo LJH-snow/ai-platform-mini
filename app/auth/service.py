@@ -83,6 +83,19 @@ class APIKeyService:
             for r in records
         ]
 
+    async def list_keys_for_user(self, user_id: str) -> list[APIKeyMetadata]:
+        records = await self._repository.list_keys_for_user(user_id)
+        return [
+            APIKeyMetadata(
+                key_hash_prefix=r.key_hash[:8],
+                name=r.name,
+                status=r.status,
+                created_at=r.created_at,
+                last_used_at=r.last_used_at,
+            )
+            for r in records
+        ]
+
     async def find_hash_by_prefix(self, prefix: str) -> str | None:
         if len(prefix) != 8 or not all(c in "0123456789abcdef" for c in prefix):
             raise ValidationError(
@@ -94,6 +107,28 @@ class APIKeyService:
         if len(matches) > 1:
             raise ConflictError(f"key_hash_prefix '{prefix}' matches multiple keys.")
         return matches[0].key_hash
+
+    async def find_hash_by_prefix_for_user(
+        self, prefix: str, user_id: str
+    ) -> str | None:
+        if len(prefix) != 8 or not all(c in "0123456789abcdef" for c in prefix):
+            raise ValidationError(
+                "key_hash_prefix must be exactly 8 lowercase hex characters."
+            )
+        matches = await self._repository.find_by_key_hash_prefix_for_user(
+            prefix, user_id
+        )
+        if len(matches) == 0:
+            return None
+        if len(matches) > 1:
+            raise ConflictError(f"key_hash_prefix '{prefix}' matches multiple keys.")
+        return matches[0].key_hash
+
+    async def revoke_key_for_user(self, key_hash: str, user_id: str) -> bool:
+        record = await self._repository.find_by_key_hash(key_hash)
+        if record is None or record.user_id != user_id:
+            return False
+        return await self.revoke_key(key_hash)
 
     async def ensure_initial_key(self, raw_key: str, name: str) -> bool:
         key_hash = hash_api_key(raw_key)

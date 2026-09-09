@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from functools import lru_cache
 from typing import Annotated
 
@@ -80,6 +81,27 @@ class LogoutResponse(BaseModel):
     revoked: bool
 
 
+class CreateUserAPIKeyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
+class UserAPIKeyResponse(BaseModel):
+    key_hash_prefix: str
+    name: str
+    status: str
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+
+
+class CreateUserAPIKeyResponse(UserAPIKeyResponse):
+    raw_key: str
+
+
+class RevokeUserAPIKeyResponse(BaseModel):
+    key_hash_prefix: str
+    revoked: bool
+
+
 class MeResponse(BaseModel):
     user: UserResponse
     workspaces: list[WorkspaceSummary]
@@ -153,6 +175,23 @@ def _apply_rate_limit_headers(request: Request, response: Response) -> None:
     response.headers["X-RateLimit-Limit"] = str(limit)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Reset"] = str(reset_after)
+
+
+def _require_user_identity(request: Request) -> IdentityContext:
+    context: RequestContext = request.state.context
+    identity = context.identity
+    if identity is None or identity.user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Only user-bound API keys can be used.",
+        )
+    return identity
+
+
+def _require_user_id(request: Request) -> str:
+    identity = _require_user_identity(request)
+    assert identity.user_id is not None
+    return identity.user_id
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -283,13 +322,7 @@ async def logout(
     _api_key: Annotated[APIKey, Depends(require_api_key)],
     key_service: Annotated[APIKeyService, Depends(provide_api_key_service)],
 ) -> LogoutResponse:
-    context: RequestContext = request.state.context
-    identity = context.identity
-    if identity is None or identity.user_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Only user-bound API keys can be logged out.",
-        )
+    identity = _require_user_identity(request)
 
     revoked = await key_service.revoke_key(identity.api_key_hash)
     if not revoked:
@@ -302,6 +335,85 @@ async def logout(
     )
     return LogoutResponse(
         key_hash_prefix=identity.api_key_hash[:8],
+        revoked=revoked,
+    )
+
+
+@router.get(
+    "/keys",
+    response_model=list[UserAPIKeyResponse],
+    summary="List current user's API keys",
+)
+async def list_user_api_keys(
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_api_key)],
+    key_service: Annotated[APIKeyService, Depends(provide_api_key_service)],
+) -> list[UserAPIKeyResponse]:
+    user_id = _require_user_id(request)
+    keys = await key_service.list_keys_for_user(user_id)
+    return [
+        UserAPIKeyResponse(
+            key_hash_prefix=key.key_hash_prefix,
+            name=key.name,
+            status=key.status,
+            created_at=key.created_at,
+            last_used_at=key.last_used_at,
+        )
+        for key in keys
+    ]
+
+
+@router.post(
+    "/keys",
+    response_model=CreateUserAPIKeyResponse,
+    status_code=201,
+    summary="Create a new API key for the current user",
+)
+async def create_user_api_key(
+    body: CreateUserAPIKeyRequest,
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_api_key)],
+    key_service: Annotated[APIKeyService, Depends(provide_api_key_service)],
+) -> CreateUserAPIKeyResponse:
+    identity = _require_user_identity(request)
+    user_id = _require_user_id(request)
+    metadata, raw_key = await key_service.create_key(
+        name=body.name,
+        user_id=user_id,
+        workspace_id=identity.workspace_id,
+    )
+    return CreateUserAPIKeyResponse(
+        key_hash_prefix=metadata.key_hash_prefix,
+        name=metadata.name,
+        status=metadata.status,
+        created_at=metadata.created_at,
+        last_used_at=metadata.last_used_at,
+        raw_key=raw_key,
+    )
+
+
+@router.delete(
+    "/keys/{key_hash_prefix}",
+    response_model=RevokeUserAPIKeyResponse,
+    summary="Revoke one of the current user's API keys",
+)
+async def revoke_user_api_key(
+    key_hash_prefix: str,
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_api_key)],
+    key_service: Annotated[APIKeyService, Depends(provide_api_key_service)],
+) -> RevokeUserAPIKeyResponse:
+    user_id = _require_user_id(request)
+    target_hash = await key_service.find_hash_by_prefix_for_user(
+        key_hash_prefix, user_id
+    )
+    if target_hash is None:
+        raise HTTPException(status_code=404, detail="API key not found")
+    revoked = await key_service.revoke_key_for_user(target_hash, user_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="API key not found")
+    return RevokeUserAPIKeyResponse(
+        key_hash_prefix=key_hash_prefix,
         revoked=revoked,
     )
 

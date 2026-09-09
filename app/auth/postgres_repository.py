@@ -29,9 +29,30 @@ class PostgresAPIKeyRepository:
             result = await session.scalars(stmt)
             return [_row_to_record(row) for row in result]
 
+    async def find_by_key_hash_prefix_for_user(
+        self, prefix: str, user_id: str
+    ) -> list[APIKeyRecord]:
+        async with self._session_factory() as session:
+            stmt = select(APIKeyTable).where(
+                APIKeyTable.key_hash.startswith(prefix),
+                APIKeyTable.user_id == user_id,
+            )
+            result = await session.scalars(stmt)
+            return [_row_to_record(row) for row in result]
+
     async def list_keys(self) -> list[APIKeyRecord]:
         async with self._session_factory() as session:
             stmt = select(APIKeyTable).order_by(APIKeyTable.created_at)
+            result = await session.scalars(stmt)
+            return [_row_to_record(row) for row in result]
+
+    async def list_keys_for_user(self, user_id: str) -> list[APIKeyRecord]:
+        async with self._session_factory() as session:
+            stmt = (
+                select(APIKeyTable)
+                .where(APIKeyTable.user_id == user_id)
+                .order_by(APIKeyTable.created_at)
+            )
             result = await session.scalars(stmt)
             return [_row_to_record(row) for row in result]
 

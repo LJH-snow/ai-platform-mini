@@ -17,8 +17,20 @@ class InMemoryAPIKeyRepository:
     async def find_by_key_hash_prefix(self, prefix: str) -> list[APIKeyRecord]:
         return [r for r in self._records.values() if r.key_hash.startswith(prefix)]
 
+    async def find_by_key_hash_prefix_for_user(
+        self, prefix: str, user_id: str
+    ) -> list[APIKeyRecord]:
+        return [
+            r
+            for r in self._records.values()
+            if r.user_id == user_id and r.key_hash.startswith(prefix)
+        ]
+
     async def list_keys(self) -> list[APIKeyRecord]:
         return list(self._records.values())
+
+    async def list_keys_for_user(self, user_id: str) -> list[APIKeyRecord]:
+        return [r for r in self._records.values() if r.user_id == user_id]
 
     async def create_key(self, record: APIKeyRecord) -> APIKeyRecord:
         self._records[record.key_hash] = record

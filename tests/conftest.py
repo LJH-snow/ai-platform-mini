@@ -8,6 +8,10 @@ from app.auth.hash import hash_api_key
 from app.auth.memory_repository import InMemoryAPIKeyRepository
 from app.auth.models import APIKeyRecord
 from app.auth.service import APIKeyService
+from app.core.container import (
+    provide_auth_ip_rate_limit_service,
+    provide_auth_ip_rate_limiter,
+)
 from app.core.settings import get_settings
 
 # Keep the test suite hermetic when a local .env enables PostgreSQL or RAG.
@@ -37,3 +41,12 @@ def _override_auth() -> Generator[None, None, None]:
     app.dependency_overrides[provide_api_key_service] = override
     yield
     app.dependency_overrides = {}
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_ip_rate_limit() -> Generator[None, None, None]:
+    provide_auth_ip_rate_limit_service.cache_clear()
+    provide_auth_ip_rate_limiter.cache_clear()
+    yield
+    provide_auth_ip_rate_limit_service.cache_clear()
+    provide_auth_ip_rate_limiter.cache_clear()

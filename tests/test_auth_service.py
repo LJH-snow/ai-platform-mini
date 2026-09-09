@@ -119,3 +119,83 @@ async def test_find_hash_by_prefix_exact_match() -> None:
     service = _make_service("sk-unique")
     result = await service.find_hash_by_prefix(key_hash[:8])
     assert result == key_hash
+
+
+@pytest.mark.asyncio
+async def test_list_keys_for_user_filters_by_owner() -> None:
+    repo = InMemoryAPIKeyRepository(
+        [
+            APIKeyRecord(
+                key_hash=hash_api_key("sk-user-a"),
+                name="user-a-key",
+                status="active",
+                user_id="user-a",
+            ),
+            APIKeyRecord(
+                key_hash=hash_api_key("sk-user-b"),
+                name="user-b-key",
+                status="active",
+                user_id="user-b",
+            ),
+        ]
+    )
+    service = APIKeyService(repository=repo)
+
+    keys = await service.list_keys_for_user("user-a")
+    assert len(keys) == 1
+    assert keys[0].name == "user-a-key"
+
+
+@pytest.mark.asyncio
+async def test_find_hash_by_prefix_for_user_is_scoped_to_owner() -> None:
+    repo = InMemoryAPIKeyRepository(
+        [
+            APIKeyRecord(
+                key_hash="abcdef0012345678",
+                name="a",
+                status="active",
+                user_id="user-a",
+            ),
+            APIKeyRecord(
+                key_hash="abcdef0098765432",
+                name="b",
+                status="active",
+                user_id="user-b",
+            ),
+        ]
+    )
+    service = APIKeyService(repository=repo)
+
+    result_a = await service.find_hash_by_prefix_for_user("abcdef00", "user-a")
+    assert result_a == "abcdef0012345678"
+    result_b = await service.find_hash_by_prefix_for_user("abcdef00", "user-b")
+    assert result_b == "abcdef0098765432"
+
+
+@pytest.mark.asyncio
+async def test_revoke_key_for_user_only_revokes_own_key() -> None:
+    repo = InMemoryAPIKeyRepository(
+        [
+            APIKeyRecord(
+                key_hash=hash_api_key("sk-own"),
+                name="own",
+                status="active",
+                user_id="user-a",
+            ),
+            APIKeyRecord(
+                key_hash=hash_api_key("sk-other"),
+                name="other",
+                status="active",
+                user_id="user-b",
+            ),
+        ]
+    )
+    service = APIKeyService(repository=repo)
+
+    revoked_other = await service.revoke_key_for_user(
+        hash_api_key("sk-other"), "user-a"
+    )
+    assert revoked_other is False
+
+    revoked_own = await service.revoke_key_for_user(hash_api_key("sk-own"), "user-a")
+    assert revoked_own is True
