@@ -229,4 +229,22 @@ describe('WorkflowBuilder', () => {
     expect(await screen.findByText('输出：分析结果')).toBeInTheDocument()
     expect(screen.getByText('输出：输入摘要')).toBeInTheDocument()
   })
+
+  it('loads a run snapshot into the canvas', async () => {
+    const client = createBuilderClient({
+      listWorkflows: vi.fn(async () => [draftWorkflow]),
+      listRuns: vi.fn(async () => [completedRun]),
+    })
+    const user = userEvent.setup()
+    render(<WorkflowBuilder apiKeyConfigured client={client} configClient={createConfigClient()} />)
+
+    await user.click(await screen.findByRole('button', { name: /测试流程/ }))
+    await user.click(await screen.findByRole('button', { name: /completed/ }))
+    await user.click(screen.getByRole('button', { name: '载入快照到画布' }))
+
+    expect(await screen.findByText('已从运行快照载入画布；保存草稿后生效。')).toBeInTheDocument()
+    expect(screen.getByLabelText('输入 JSON')).toHaveValue(
+      JSON.stringify(completedRun.inputs, null, 2),
+    )
+  })
 })

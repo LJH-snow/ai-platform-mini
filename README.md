@@ -1007,3 +1007,7 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     `listPlans` / `listSubscriptions` / `assignSubscription`，
     AdminDashboard 展示计划列表/订阅列表，并支持给 Workspace 分配或变更
     订阅计划与状态；复用后端已有 admin billing API，无需修改后端
+24. **Sprint M17（已完成）**：Workflow Builder 运行快照恢复——用户在运行历史
+    中可阅读历史 node results，并可一键把该次运行的 definition 快照载回画布，
+    同时把输入 JSON 一起回填，便于复现/继续调整同一次工作流；纯前端能力，
+    复用了已有 `listRuns` 返回的不可变快照，无需修改后端

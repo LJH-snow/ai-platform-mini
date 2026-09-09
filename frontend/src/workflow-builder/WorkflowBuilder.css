@@ -406,6 +406,11 @@
   font-weight: 700;
 }
 
+.workflowBuilderRunLoadButton {
+  justify-self: start;
+  margin: 0 0 0.75rem;
+}
+
 .workflowBuilderRunTimeline {
   display: grid;
   gap: 0.55rem;

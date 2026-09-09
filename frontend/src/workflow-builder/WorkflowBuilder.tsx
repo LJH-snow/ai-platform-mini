@@ -621,6 +621,21 @@ export function WorkflowBuilder({
     [client],
   )
 
+  const loadRunSnapshot = (): void => {
+    if (selectedRun === null) return
+    const canvas = definitionToCanvas(selectedRun.definition)
+    setNodes(canvas.nodes)
+    setEdges(canvas.edges)
+    setSelectedNodeId(null)
+    setRunInput(stringifyJson(selectedRun.inputs))
+    setError(null)
+    setNotice(
+      selectedWorkflow?.status === 'published'
+        ? '已从运行快照载入画布；发布流程需先取消发布再保存。'
+        : '已从运行快照载入画布；保存草稿后生效。',
+    )
+  }
+
   const runWorkflow = async (): Promise<void> => {
     if (selectedWorkflow === null) {
       setError('请先保存草稿，再进行试运行。')
@@ -889,6 +904,14 @@ export function WorkflowBuilder({
                       <span>耗时：{selectedRun.total_duration_ms ?? '-'} ms</span>
                       <span>开始：{formatTimestamp(selectedRun.created_at)}</span>
                     </div>
+                    <button
+                      type="button"
+                      className="secondaryButton workflowBuilderRunLoadButton"
+                      disabled={!apiKeyConfigured}
+                      onClick={loadRunSnapshot}
+                    >
+                      载入快照到画布
+                    </button>
                     {selectedRun.error ? (
                       <p className="workflowBuilderError">{selectedRun.error}</p>
                     ) : null}
