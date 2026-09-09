@@ -30,7 +30,7 @@ import { createAuthClient } from './auth/client.ts'
 import { LoginPage } from './auth/LoginPage.tsx'
 import { RegisterPage } from './auth/RegisterPage.tsx'
 import { WorkspaceSwitcher } from './auth/WorkspaceSwitcher.tsx'
-import { MemberManagement } from './auth/MemberManagement.tsx'
+import { WorkspaceManagement } from './auth/WorkspaceManagement.tsx'
 import { formatAgentTimestamp } from './agent/time.ts'
 import { Dashboard } from './platform/Dashboard.tsx'
 import { createKnowledgeClient } from './platform/knowledge.ts'
@@ -576,9 +576,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   const [replayRunId, setReplayRunId] = useState<string | null>(null)
   // Workspace selection
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
-  // activeWorkspaceRole will be set by WorkspaceSwitcher in Sprint A5 X-Workspace-Id integration
-  const [activeWorkspaceRole, setActiveWorkspaceRole] = useState<string | null>(null)
-  void setActiveWorkspaceRole // referenced for future use
+  // activeWorkspaceRole will be derived from workspace list in WorkspaceManagement
   const effectiveApiKey = userApiKey.trim() || runtimeConfig.apiKey
   // Auth client (recreated when apiKey changes)
   const authClient = useMemo(
@@ -1322,6 +1320,7 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
       { id: 'memory', label: '长期记忆', shortLabel: '记忆' },
       { id: 'knowledge', label: '知识库', shortLabel: 'RAG' },
       { id: 'prompts', label: 'Prompt Studio', shortLabel: 'Prompt' },
+      { id: 'members', label: '工作空间', shortLabel: '空间' },
       { id: 'agents', label: 'Agent Studio', shortLabel: 'Agent' },
       { id: 'multi-agent', label: '多 Agent 编排', shortLabel: '多Agent' },
       { id: 'canvas', label: '编排画布', shortLabel: '画布' },
@@ -1595,11 +1594,13 @@ function App({ chatClient, agentClient }: AppProps): JSX.Element {
   }
   if (page === 'members') {
     return renderPlatformShell(
-      <MemberManagement
+      <WorkspaceManagement
         client={authClient}
         apiKey={effectiveApiKey ?? ''}
-        workspaceId={activeWorkspaceId ?? ''}
-        currentUserRole={activeWorkspaceRole ?? 'member'}
+        currentWorkspaceId={activeWorkspaceId}
+        onWorkspaceChange={(id) => {
+          setActiveWorkspaceId(id)
+        }}
       />,
     )
   }
