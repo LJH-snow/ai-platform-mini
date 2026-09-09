@@ -1,8 +1,10 @@
 import type {
+  CreatedUserApiKey,
   LoginResponse,
   MeResponse,
   MemberSummary,
   RegisterResponse,
+  UserApiKeySummary,
   WorkspaceSummary,
 } from './types.ts'
 
@@ -123,6 +125,25 @@ export const createAuthClient = (options: AuthClientOptions) => {
     removeMember: (apiKey: string, workspaceId: string, userId: string) =>
       request<{ status: string }>(
         `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`,
+        { method: 'DELETE' },
+        apiKey,
+      ),
+
+    /** List API keys owned by the current user. */
+    listKeys: (apiKey: string) => request<UserApiKeySummary[]>('/api/v1/auth/keys', {}, apiKey),
+
+    /** Create an API key owned by the current user. */
+    createKey: (apiKey: string, name: string) =>
+      request<CreatedUserApiKey>(
+        '/api/v1/auth/keys',
+        { method: 'POST', body: JSON.stringify({ name }) },
+        apiKey,
+      ),
+
+    /** Revoke one of the current user's API keys by hash prefix. */
+    revokeKey: (apiKey: string, prefix: string) =>
+      request<{ key_hash_prefix: string; revoked: boolean }>(
+        `/api/v1/auth/keys/${encodeURIComponent(prefix)}`,
         { method: 'DELETE' },
         apiKey,
       ),

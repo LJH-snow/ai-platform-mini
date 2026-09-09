@@ -38,3 +38,15 @@ export interface MemberSummary {
   role: string
   created_at: string | null
 }
+
+export interface UserApiKeySummary {
+  key_hash_prefix: string
+  name: string
+  status: string
+  created_at: string | null
+  last_used_at: string | null
+}
+
+export interface CreatedUserApiKey extends UserApiKeySummary {
+  raw_key: string
+}

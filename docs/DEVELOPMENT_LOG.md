@@ -1069,3 +1069,26 @@ API Key 口径；本次只新增了一个按 IP 的 service provider 和 depende
 identity”。因此 Sprint M13 没有走 admin 的全量 Key 表视图，而是在 repository
 查询里直接用 `user_id` 过滤，服务层撤销前还做二次归属校验。这个约束放得越早，
 后续加前端入口时越不容易出现“看到别人的 Key / 撤销别人的 Key”的越权漏洞。
+
+
+### Sprint M14（用户 API Key 管理 UI，2026-09-09）
+
+- 前端新增 `UserApiKeyManagement` 组件并接入工作空间页：列出当前用户自己的
+  API Key，显示 key hash 前缀与状态；支持创建新 Key 并复制完整密钥；支持按
+  前缀撤销自己的 Key，撤销前需确认。
+- `auth/types.ts` 增加 `UserApiKeySummary` / `CreatedUserApiKey` 类型，
+  `auth/client.ts` 封装 `listKeys` / `createKey` / `revokeKey`，与 M13 的
+  `GET/POST /api/v1/auth/keys`、`DELETE /api/v1/auth/keys/{prefix}` 对齐。
+- `App.css` 补充工作空间 section 与 Key 创建表单的布局，保持现有页面风格。
+- 测试：`client.test.ts` 覆盖列表/创建/撤销请求契约；`UserApiKeyManagement.test.tsx`
+  覆盖列表渲染、创建流程、复制、撤销确认与错误回退。
+- 门禁：前端 `npm run typecheck`、`npm run lint`、`npm run format:check`、
+  全量 vitest（312 passed）和 `npm run build` 全绿。
+
+#### Sprint M14 学习总结
+
+API Key 管理 UI 的核心是不要让前端越权：组件只消费当前用户自己的 Key 列表和撤销
+入口，权限边界仍由后端 owner scoped 查询保证。创建 Key 的唯一完整明文只在服务端
+响应中出现一次，所以 UI 在成功后立即展示并可复制，不设计成再次查询明文。撤销操作
+属于不可逆动作，前端用确认交互兜底；接口层面继续复用已有 REST 设计，没有引入新的
+状态管理或额外 API，保持前端与后端契约一一对应。

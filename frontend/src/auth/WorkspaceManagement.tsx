@@ -2,6 +2,7 @@ import { type FormEvent, type JSX, useEffect, useState } from 'react'
 import { type AuthClient } from './client.ts'
 import type { WorkspaceSummary } from './types.ts'
 import { MemberManagement } from './MemberManagement.tsx'
+import { UserApiKeyManagement } from './UserApiKeyManagement.tsx'
 
 interface WorkspaceManagementProps {
   client: AuthClient
@@ -83,7 +84,11 @@ export function WorkspaceManagement({
             {workspaces.map((ws) => (
               <li
                 key={ws.id}
-                className={ws.id === currentWorkspaceId ? 'workspaceItem workspaceItemActive' : 'workspaceItem'}
+                className={
+                  ws.id === currentWorkspaceId
+                    ? 'workspaceItem workspaceItemActive'
+                    : 'workspaceItem'
+                }
               >
                 <button
                   type="button"
@@ -118,11 +123,11 @@ export function WorkspaceManagement({
           client={client}
           apiKey={apiKey}
           workspaceId={currentWorkspaceId}
-          currentUserRole={
-            workspaces.find((ws) => ws.id === currentWorkspaceId)?.role ?? 'member'
-          }
+          currentUserRole={workspaces.find((ws) => ws.id === currentWorkspaceId)?.role ?? 'member'}
         />
       ) : null}
+
+      <UserApiKeyManagement client={client} apiKey={apiKey} />
     </div>
   )
 }

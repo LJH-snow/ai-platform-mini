@@ -2946,6 +2946,45 @@ select:focus-visible {
   margin-bottom: 1rem;
 }
 
+.workspaceManagementSection {
+  padding: 1.5rem;
+}
+
+.workspaceManagementSection h3 {
+  margin-bottom: 1rem;
+}
+
+.userKeyManagementSection {
+  border-top: 1px solid #e7ebf3;
+  margin-top: 1.5rem;
+}
+
+.createWorkspaceForm {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.createWorkspaceForm input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.createWorkspaceForm button {
+  padding: 0.45rem 0.9rem;
+  background: var(--accent, #4f46e5);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .addMemberForm {
   display: flex;
   gap: 0.5rem;

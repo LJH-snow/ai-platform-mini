@@ -993,3 +993,7 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     `GET/POST /api/v1/auth/keys` 列出现有/创建当前用户新 Key，
     `DELETE /api/v1/auth/keys/{prefix}` 按 8 位哈希前缀撤销属于当前用户的 Key，
     并按 `user_id` 做租户隔离
+21. **Sprint M14（已完成）**：用户 API Key 管理 UI——工作空间页接入
+    `UserApiKeyManagement`，支持列出/创建/复制/撤销当前用户自己的 Key；前端
+    API client 与类型定义覆盖 `listKeys`/`createKey`/`revokeKey`，新增组件与
+    client/组件测试；前端 `typecheck`、`lint`、`test`、`build` 全绿
