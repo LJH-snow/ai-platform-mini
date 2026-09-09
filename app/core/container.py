@@ -511,14 +511,15 @@ def provide_tool_registry() -> ToolRegistry:
     """Provide the single runtime ToolRegistry used by validation and tools.
 
     Built from the same seeds as the agent whitelist (calculator +
-    knowledge_search + MCP tools) so workflow-builder validation and the
-    runtime tool surface can never drift apart. Must NOT call
-    provide_agent_service() here to avoid a circular import.
+    code_executor + knowledge_search + MCP tools) so workflow-builder
+    validation and the runtime tool surface can never drift apart. Must NOT
+    call provide_agent_service() here to avoid a circular import.
     """
     from app.tools.calculator import CalculatorTool
+    from app.tools.code_executor import CodeExecutorTool
     from app.tools.registry import ToolRegistry
 
-    registry = ToolRegistry([CalculatorTool()])
+    registry = ToolRegistry([CalculatorTool(), CodeExecutorTool()])
     rag_service = provide_rag_service()
     if rag_service is not None:
         from app.tools.knowledge_search import KnowledgeSearchTool
@@ -643,15 +644,31 @@ def provide_workflow_builder_engine() -> WorkflowEngine:
     ``WorkflowExecutionContext`` ContextVar (the engine's context argument
     is frozen to ``{}`` by P1 semantics).
     """
+    from app.tools.code_executor import CodeExecutorTool
     from app.tools.executor import ToolExecutor
+    from app.tools.models import ToolContext
     from app.workflow_builder.executors import (
         AgentNodeExecutor,
+        CodeNodeExecutor,
         KnowledgeNodeExecutor,
         LlmNodeExecutor,
         ToolNodeExecutor,
     )
     from app.workflows.engine.executor import WorkflowEngine
     from app.workflows.engine.models import NodeType
+
+    code_executor = CodeExecutorTool()
+
+    async def _run_workflow_code(code: str) -> str:
+        return await code_executor.execute(
+            {"code": code},
+            ToolContext(
+                run_id="workflow-builder",
+                step_index=0,
+                request_id="workflow-builder",
+                metadata={},
+            ),
+        )
 
     return WorkflowEngine(
         {
@@ -663,6 +680,7 @@ def provide_workflow_builder_engine() -> WorkflowEngine:
                     granted_permissions=provide_mcp_manager().granted_permissions(),
                 )
             ),
+            NodeType.CODE: CodeNodeExecutor(_run_workflow_code),
             NodeType.AGENT: AgentNodeExecutor(
                 provide_agent_service(),
                 provide_agent_definition_service(),

@@ -16,10 +16,12 @@ from app.agent_config.service import AgentDefinitionService
 from app.audit.service import AuditActor, AuditService, InMemoryAuditRepository
 from app.exceptions.base import ConflictError, ValidationError
 from app.tools.calculator import CalculatorTool
-from app.tools.models import ToolExecutionResult, ToolExecutionStatus
+from app.tools.code_executor import CodeExecutorTool
+from app.tools.models import ToolContext, ToolExecutionResult, ToolExecutionStatus
 from app.tools.registry import ToolRegistry
 from app.workflow_builder.executors import (
     AgentNodeExecutor,
+    CodeNodeExecutor,
     KnowledgeNodeExecutor,
     LlmNodeExecutor,
     ToolNodeExecutor,
@@ -41,6 +43,7 @@ from workflow_builder_fakes import (
     FakeRAGService,
     FakeToolExecutor,
     agent_definition_dict,
+    code_definition_dict,
     definition_dict,
     get_prompt_template,
     run_with_context,
@@ -49,6 +52,13 @@ from workflow_builder_fakes import (
 )
 
 # ── Service/engine fixture helpers ──────────────────────────────────────────
+
+
+async def _run_workflow_code(code: str) -> str:
+    return await CodeExecutorTool().execute(
+        {"code": code},
+        ToolContext(run_id="workflow-test", step_index=0, request_id="workflow-test"),
+    )
 
 
 def build_service(
@@ -65,7 +75,7 @@ def build_service(
     InMemoryWorkflowRepository,
     InMemoryWorkflowRunRepository,
 ]:
-    tool_registry = ToolRegistry([CalculatorTool()])
+    tool_registry = ToolRegistry([CalculatorTool(), CodeExecutorTool()])
     agent_def_repo = InMemoryAgentDefinitionRepository()
     agent_svc = AgentDefinitionService(
         repository=agent_def_repo,
@@ -79,6 +89,7 @@ def build_service(
             NodeType.TOOL: ToolNodeExecutor(
                 tool_executor or FakeToolExecutor()  # type: ignore[arg-type]
             ),
+            NodeType.CODE: CodeNodeExecutor(_run_workflow_code),
             NodeType.AGENT: AgentNodeExecutor(
                 agent_service or FakeAgentService(),  # type: ignore[arg-type]
                 agent_svc,
@@ -399,6 +410,54 @@ async def test_tool_executor_failure_is_passed_through() -> None:
 
 
 @pytest.mark.asyncio
+async def test_code_executor_renders_template_and_returns_output() -> None:
+    calls: list[str] = []
+
+    async def fake_runner(code: str) -> str:
+        calls.append(code)
+        return "13"
+
+    executor = CodeNodeExecutor(fake_runner)
+    node = WorkflowNode(
+        id="n2",
+        type=NodeType.CODE,
+        config={"code_template": "x = {{input.a}} + {{input.b}}\nx"},
+    )
+    output = await executor.execute(node, {"input.a": 6, "input.b": 7}, {})
+    assert output.error is None
+    assert output.output == "13"
+    assert "6 + 7" in calls[-1]
+
+
+@pytest.mark.asyncio
+async def test_code_executor_missing_template_returns_chinese_error() -> None:
+    async def fake_runner(code: str) -> str:
+        del code
+        return ""
+
+    executor = CodeNodeExecutor(fake_runner)
+    node = WorkflowNode(id="n2", type=NodeType.CODE, config={})
+    output = await run_with_context(executor, node, {})
+    assert output.error is not None and "code_template" in output.error
+
+
+@pytest.mark.asyncio
+async def test_code_executor_passes_sandbox_errors_through() -> None:
+    async def fake_runner(code: str) -> str:
+        del code
+        return "Code executor error: disallowed syntax: Import"
+
+    executor = CodeNodeExecutor(fake_runner)
+    node = WorkflowNode(
+        id="n2",
+        type=NodeType.CODE,
+        config={"code_template": "import os"},
+    )
+    output = await run_with_context(executor, node, {})
+    assert output.error is not None and "代码执行失败" in output.error
+
+
+@pytest.mark.asyncio
 async def test_agent_executor_resolves_agent_and_returns_answer() -> None:
     tool_registry = ToolRegistry([CalculatorTool()])
     agent_def_repo = InMemoryAgentDefinitionRepository()
@@ -578,6 +637,34 @@ async def test_workspace_dependency_validation_rejects_disabled_tool() -> None:
     await agent_svc.set_tool_enabled(WS_A, TOOL_CALCULATOR, enabled=False)
     with pytest.raises(ValidationError, match="未启用"):
         await service.create_workflow(WS_A, "流程", tool_definition_dict())
+
+
+@pytest.mark.asyncio
+async def test_workspace_dependency_validation_rejects_missing_code_template() -> None:
+    service, _, _, _, _ = build_service()
+    bad = code_definition_dict(code_template="")
+    with pytest.raises(ValidationError, match="code_template"):
+        await service.create_workflow(WS_A, "流程", bad)
+
+
+@pytest.mark.asyncio
+async def test_code_node_workflow_run_succeeds() -> None:
+    service, _, _, _, run_repo = build_service()
+    record = await service.create_workflow(
+        WS_A, "代码流程", code_definition_dict("max([{{input.a}}, {{input.b}}])")
+    )
+    run = await service.run_workflow(record.id, WS_A, {"a": 3, "b": 8})
+    assert run is not None
+    assert run.status == "completed"
+    assert run.error is None
+    node_ids = [item["node_id"] for item in run.node_results]
+    assert node_ids == ["n1", "n2", "n3"]
+    assert run.node_results[1]["type"] == "code"
+    assert run.node_results[1]["output_summary"] == "8"
+    assert run.node_results[-1]["output_summary"] == "8"
+
+    persisted = await run_repo.get_run(run.id, WS_A)
+    assert persisted is not None and persisted.status == "completed"
 
 
 @pytest.mark.asyncio

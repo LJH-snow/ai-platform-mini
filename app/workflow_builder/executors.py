@@ -10,7 +10,7 @@ Chinese messages so the engine fails the run with an auditable record.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING
 
 from app.agent_config.service import AgentDefinitionService
@@ -182,6 +182,48 @@ class ToolNodeExecutor:
             output=result.output,
             input_summary=truncate_summary(str(arguments)),
             output_summary=truncate_summary(result.output),
+        )
+
+
+class CodeNodeExecutor:
+    """Code node: render ``code_template`` then run it in the sandbox.
+
+    The injected runner is intentionally a narrow ``Callable`` so tests never
+    need the real executor and the workflow code path stays explicit about its
+    only external dependency.
+    """
+
+    def __init__(self, code_runner: Callable[[str], Awaitable[str]]) -> None:
+        self._code_runner = code_runner
+
+    async def execute(
+        self,
+        node: WorkflowNode,
+        variables: Mapping[str, object],
+        context: Mapping[str, object],
+    ) -> NodeOutput:
+        del context
+        config = node.config
+        code_template = config.get("code_template")
+        if not isinstance(code_template, str) or not code_template.strip():
+            return NodeOutput(error=f"code 节点 {node.id} 缺少 code_template 配置")
+        code = render_template(code_template, variables)
+        if not code.strip():
+            return NodeOutput(
+                error=f"code 节点 {node.id} 的 code_template 渲染结果为空"
+            )
+
+        result = await self._code_runner(code)
+        if result.startswith("Code executor error:"):
+            return NodeOutput(
+                error=f"代码执行失败：{result}",
+                input_summary=truncate_summary(code),
+                output_summary="",
+            )
+        return NodeOutput(
+            output=result,
+            input_summary=truncate_summary(code),
+            output_summary=truncate_summary(result),
         )
 
 

@@ -26,6 +26,7 @@ class NodeType(StrEnum):
     LLM = "llm"
     KNOWLEDGE = "knowledge"
     TOOL = "tool"
+    CODE = "code"
     CONDITION = "condition"
     AGENT = "agent"
     OUTPUT = "output"

@@ -130,6 +130,7 @@ const builderNodeTypes: NodeTypes = {
   llm: BuilderNode,
   knowledge: BuilderNode,
   tool: BuilderNode,
+  code: BuilderNode,
   condition: BuilderNode,
   agent: BuilderNode,
   output: BuilderNode,
@@ -1036,6 +1037,25 @@ export function WorkflowBuilder({
                     <p className="workflowBuilderError">{toolArgumentsError}</p>
                   ) : null}
                 </>
+              ) : null}
+
+              {selectedDefinitionNode.type === 'code' ? (
+                <label>
+                  Python 代码模板
+                  <textarea
+                    className="workflowBuilderJsonInput"
+                    rows={7}
+                    value={
+                      typeof selectedDefinitionNode.config.code_template === 'string'
+                        ? selectedDefinitionNode.config.code_template
+                        : ''
+                    }
+                    placeholder="如 max([{{input.a}}, {{input.b}}])"
+                    onChange={(event) =>
+                      updateSelectedConfig({ code_template: event.target.value })
+                    }
+                  />
+                </label>
               ) : null}
 
               {selectedDefinitionNode.type === 'condition' ? (

@@ -965,3 +965,34 @@ ToolRegistry/Executor 走同一套参数校验、超时、输出截断和权限�
 明确的上限（代码长度、AST 节点数、执行时长）让异常行为可预测。最后结果与
 print 输出统一返回，是为了让 Agent 拿到结构化、可回填的计算结果，又不丢失
 用户可见的中间输出。
+
+
+### Sprint M10（Workflow Builder code 节点，2026-09-09）
+
+- `NodeType.CODE = "code"` 加入通用工作流引擎，`code` 节点通过
+  `code_template` 渲染前置节点输出和 input 变量，再把代码交给
+  `CodeExecutorTool` 执行；最后表达式结果或 print 输出会成为节点 `output`。
+- 新增 `CodeNodeExecutor`（`app/workflow_builder/executors.py`）：接受窄的
+  `Callable[[str], Awaitable[str]]` runner，便于测试替换；沙箱错误统一转为
+  中文节点错误，保持 `WorkflowEngine` 的 fail-fast 语义。
+- `_validate_with_workspace` 对 `code` 节点要求 `code_template` 非空，并要求
+  `code_executor` 已在运行时 ToolRegistry 注册且当前工作空间启用。
+- 容器层修复工具注册漂移：`provide_tool_registry()` 补入 `CodeExecutorTool()`
+  （此前只有 calculator + knowledge_search + MCP），避免 Agent 默认工具表与
+  Workflow Builder 校验/工具中心视图不一致。
+- 前端 `Workflow Builder`：节点面板新增“代码”节点，画布支持拖入；选中后配置
+  Python 代码模板文本域，保存前本地校验缺少 `code_template`。
+- 测试：新增 `CodeNodeExecutor` 渲染/缺模板/错误透传 3 个用例，工作流服务
+  验证缺模板和 code 节点试运行 2 个用例；前端 canvas 测试覆盖 code 节点本地
+  校验。后端全量 `pytest` 1095 passed / 47 skipped；前端 `typecheck`、
+  `lint`、全量 `vitest`（304 passed）和 `build` 全绿。
+
+#### Sprint M10 学习总结
+
+M10 的价值是把 M9 的代码执行能力从“Agent 工具”接到“可编排工作流”，复用同一
+个沙箱边界而不用为 workflow 再造一套执行器。新增节点时最需要防的是工具面漂移：
+workflow-builder 校验用的是运行时 ToolRegistry，而 Agent 默认 tool list 先加了
+`code_executor`，如果两个注册表不一致，画布会校验出与运行时不匹配的结果。把
+`provide_tool_registry()` 和 AgentService 的 seed 保持同源，是这次顺手补掉的关键
+一致性缺口；前端也保持“画布类型、标签、默认 config、本地校验”四处同步，避免出现
+后端已支持但 UI 无法编辑的半成品节点。

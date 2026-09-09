@@ -75,21 +75,25 @@ describe('workflow-builder canvas helpers', () => {
     const definition = createEmptyDefinition()
     const llm = createBuilderNode('llm', 'llm-1', { x: 260, y: 0 })
     llm.config.prompt_template = ''
+    const code = createBuilderNode('code', 'code-1', { x: 260, y: 280 })
+    code.config.code_template = ''
     const condition = createBuilderNode('condition', 'condition-1', { x: 520, y: 0 })
     condition.config.branches = [
       { id: 'b1', condition: null, target: 'output-1' },
       { id: 'b2', condition: null, target: 'output-1' },
       { id: 'b3', condition: '{{input.text}} ==', target: 'output-1' },
     ]
-    definition.nodes = [definition.nodes[0]!, llm, condition, definition.nodes[1]!]
+    definition.nodes = [definition.nodes[0]!, llm, code, condition, definition.nodes[1]!]
     definition.edges = [
       { from: 'input-1', to: 'llm-1' },
-      { from: 'llm-1', to: 'condition-1' },
+      { from: 'llm-1', to: 'code-1' },
+      { from: 'code-1', to: 'condition-1' },
     ]
 
     const message = validateDefinitionForSave('流程', definition)
 
     expect(message).toContain('缺少 prompt_template')
+    expect(message).toContain('缺少 code_template')
     expect(message).toContain('只允许一个默认分支')
     expect(message).toContain('target output-1 重复')
     expect(message).toContain('表达式不合法')

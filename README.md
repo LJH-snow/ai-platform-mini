@@ -57,7 +57,7 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
 - **安全与多租户**：API Key 哈希存储、scrypt 密码哈希、限流、Token 配额、
   计费计划、审计日志；RAG 文档按租户隔离；Prompt、原始 Tool payload、Provider
   响应和敏感信息不公开。
-- **工程质量**：后端 97 个测试文件、1117 个测试用例（默认 1076 通过、41 个
+- **工程质量**：后端 97 个测试文件、1142 个测试用例（默认 1095 通过、47 个
   PostgreSQL 集成用例按需启用）+ 前端 Vitest/Playwright/a11y 门禁、真实浏览器
   验证、失败/超时/断连回归、多 Python 版本 CI 和 Code Review 记录。
 
@@ -231,9 +231,10 @@ trace + metrics"]
 - 通用串行 DAG 编排，与固定 PDF 工作流命名空间隔离：`app/workflows/engine/`
   负责定义校验与执行引擎，`app/workflow_builder/` 提供 API/双存储/真实节点
   执行器，React Flow 前端负责画布交互
-- 节点类型：`input` / `llm` / `knowledge` / `tool` / `condition` / `agent` /
-  `output`；保存前校验 DAG 无环、入边 ≤1、条件表达式三字面形式、模板引用
-  存在性与拓扑序；发布冻结版本，试运行落 run 快照
+- 节点类型：`input` / `llm` / `knowledge` / `tool` / `code` / `condition` /
+  `agent` / `output`；保存前校验 DAG 无环、入边 ≤1、条件表达式三字面形式、
+  模板引用存在性与拓扑序；`code` 节点复用受限 Python 沙箱执行器，并校验
+  `code_executor` 在当前工作空间可用；发布冻结版本，试运行落 run 快照
 - 前端入口：左侧导航 `Workflow Builder`，支持新建/编辑节点、画布连线、节点
   配置表单、本地校验、保存/发布/取消发布/删除，以及 JSON 试运行并查看
   `node_results` 时间线
@@ -970,3 +971,8 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     定义、with/try/raise、lambda/dunder 与超长/复杂 AST；print 输出和最后表达式
     结果统一返回，线程池 5 秒超时并标记为高风险工具；新增 13 个执行器测试并更新
     Agent 工具注册契约，后端门禁全绿
+17. **Sprint M10（已完成）**：Workflow Builder `code` 节点——引擎新增
+    `NodeType.CODE`，工作流节点可用 `code_template` 渲染任意前置节点输出后交给
+    `CodeExecutorTool` 执行；服务层校验 `code_executor` 注册和工作空间启用状态，
+    容器层统一工具注册表补入 `CodeExecutorTool`（避免 Agent/工作流工具面漂移）；
+    前端画布支持拖入代码节点、配置 Python 代码模板和本地校验；后端/前端门禁全绿

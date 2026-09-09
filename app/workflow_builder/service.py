@@ -331,6 +331,24 @@ class WorkflowBuilderService:
                         f"tool 节点 {node.id} 引用的工具在"
                         f"当前工作空间未启用：{tool_name}"
                     )
+            elif node.type is NodeType.CODE:
+                code_template = node.config.get("code_template")
+                if not isinstance(code_template, str) or not code_template.strip():
+                    raise ValidationError(
+                        f"code 节点 {node.id} 缺少 code_template 配置"
+                    )
+                tool_name = "code_executor"
+                if self._tool_registry.get_descriptor(tool_name) is None:
+                    raise ValidationError(
+                        f"code 节点 {node.id} 依赖的工具未注册：{tool_name}"
+                    )
+                if not await self._agent_definition_service.is_tool_enabled(
+                    workspace_id, tool_name
+                ):
+                    raise ValidationError(
+                        f"code 节点 {node.id} 依赖的工具在"
+                        f"当前工作空间未启用：{tool_name}"
+                    )
             elif node.type is NodeType.AGENT:
                 agent_id = node.config.get("agent_id")
                 if not isinstance(agent_id, str) or not agent_id.strip():

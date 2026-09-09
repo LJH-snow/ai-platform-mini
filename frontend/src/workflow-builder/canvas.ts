@@ -15,6 +15,7 @@ export const WORKFLOW_BUILDER_NODE_LABELS: Record<WorkflowBuilderNodeType, strin
   llm: 'LLM',
   knowledge: '知识库',
   tool: '工具',
+  code: '代码',
   condition: '条件',
   agent: 'Agent',
   output: '输出',
@@ -53,6 +54,7 @@ export const createBuilderNode = (
     llm: { prompt_template: '' },
     knowledge: { query_template: '' },
     tool: { tool: 'calculator', arguments_template: { expression: '{{input.text}}' } },
+    code: { code_template: '' },
     condition: { branches: [{ id: 'branch-1', condition: null, target: '' }] },
     agent: { agent_id: '', prompt: '' },
     output: { output_template: '{{input.text}}' },
@@ -227,6 +229,9 @@ export const validateDefinitionForSave = (
     }
     if (node.type === 'tool' && !String(node.config.tool ?? '').trim()) {
       errors.push(`工具节点 ${node.id} 缺少 tool 名称。`)
+    }
+    if (node.type === 'code' && !String(node.config.code_template ?? '').trim()) {
+      errors.push(`代码节点 ${node.id} 缺少 code_template。`)
     }
     if (node.type === 'agent' && !String(node.config.agent_id ?? '').trim()) {
       errors.push(`Agent 节点 ${node.id} 缺少 agent_id。`)

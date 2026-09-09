@@ -185,6 +185,32 @@ def tool_definition_dict(tool_name: str = TOOL_CALCULATOR) -> dict[str, object]:
     }
 
 
+def code_definition_dict(
+    code_template: str = "max([{{input.a}}, {{input.b}}])",
+) -> dict[str, object]:
+    """n1(input) -> n2(code) -> n3(output)."""
+    return {
+        "nodes": [
+            {"id": "n1", "type": "input", "config": {}},
+            {
+                "id": "n2",
+                "type": "code",
+                "config": {"code_template": code_template},
+            },
+            {
+                "id": "n3",
+                "type": "output",
+                "config": {"output_template": "{{n2.output}}"},
+            },
+        ],
+        "edges": [
+            {"from": "n1", "to": "n2"},
+            {"from": "n2", "to": "n3"},
+        ],
+        "version": 1,
+    }
+
+
 def agent_definition_dict(agent_id: str) -> dict[str, object]:
     """n1(input) -> n2(agent) -> n3(output)."""
     return {

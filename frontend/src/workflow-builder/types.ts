@@ -3,6 +3,7 @@ export const WORKFLOW_BUILDER_NODE_TYPES = [
   'llm',
   'knowledge',
   'tool',
+  'code',
   'condition',
   'agent',
   'output',
@@ -30,6 +31,7 @@ export type WorkflowBuilderNodeConfig = {
   top_k?: number
   tool?: string
   arguments_template?: unknown
+  code_template?: string
   branches?: WorkflowBuilderBranch[]
   agent_id?: string
   prompt?: string
