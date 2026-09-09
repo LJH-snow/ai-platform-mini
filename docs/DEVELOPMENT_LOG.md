@@ -1022,3 +1022,26 @@ API Key 口径；本次只新增了一个按 IP 的 service provider 和 depende
 限流抽象。auth IP 限流放在路由依赖层执行，天然覆盖 register 和 login 在进入业务
 逻辑前的一致边界；成功响应补 `X-RateLimit-*`、失败响应补 `Retry-After`，让客户端
 在正反向都能感知配额，而不是只看到 429。
+
+
+### Sprint M12（用户 API Key 退出/自我撤销，2026-09-09）
+
+- 新增 `POST /api/v1/auth/logout`：当前 Bearer 必须绑定用户身份，成功后将
+  该 API Key 标记为 `revoked`，旧凭证立即失效。
+- 复用现有 `APIKeyService.revoke_key()`，不新增撤销抽象；非用户绑定 Key
+  返回 400，未携带鉴权头返回 401。
+- 测试：`logout` 成功撤销当前注册用户 Key 后 `/me` 返回 401；未带鉴权头
+  调用 `logout` 返回 401。
+- 门禁：`ruff format --check .`、`ruff check .`、`mypy app tests`、
+  `pytest` 全量 1102 passed / 47 skipped。
+- 后续可在此基础上扩展用户级 Key 管理（列出/撤销自己的其他 Key），当前先封闭
+  “这只 Key 不想要了”的自助退出路径。
+
+#### Sprint M12 学习总结
+
+接口 Key 是无状态 Bearer，没有服务端会话；对一个任务型 API Key 平台来说，
+“退出”最诚实的语义是撤销当前凭证，而不是只删前端 localStorage。Sprint M12
+保持了最小改动：沿用 `require_api_key` 鉴权、`IdentityContext.user_id`
+做用户绑定校验、`APIKeyService.revoke_key()` 做状态变更，因此无状态授权链
+不引入新的 session/JWT 概念。真正要紧的约束是“只能撤销当前用户自己的 Key”，
+读到的 identity 必须来自当前请求，不能用前端传参指定要撤销谁。

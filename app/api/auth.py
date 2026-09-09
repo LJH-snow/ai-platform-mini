@@ -75,6 +75,11 @@ class LoginResponse(BaseModel):
     api_key: str
 
 
+class LogoutResponse(BaseModel):
+    key_hash_prefix: str
+    revoked: bool
+
+
 class MeResponse(BaseModel):
     user: UserResponse
     workspaces: list[WorkspaceSummary]
@@ -265,6 +270,39 @@ async def login(
         user=_user_to_response(user),
         workspaces=workspaces,
         api_key=raw_key,
+    )
+
+
+@router.post(
+    "/logout",
+    response_model=LogoutResponse,
+    summary="Revoke the current user-bound API key",
+)
+async def logout(
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_api_key)],
+    key_service: Annotated[APIKeyService, Depends(provide_api_key_service)],
+) -> LogoutResponse:
+    context: RequestContext = request.state.context
+    identity = context.identity
+    if identity is None or identity.user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Only user-bound API keys can be logged out.",
+        )
+
+    revoked = await key_service.revoke_key(identity.api_key_hash)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="API key not found.")
+
+    logger.info(
+        "api_key_logged_out user_id=%s key_hash=%s",
+        identity.user_id,
+        identity.api_key_hash[:12],
+    )
+    return LogoutResponse(
+        key_hash_prefix=identity.api_key_hash[:8],
+        revoked=revoked,
     )
 
 

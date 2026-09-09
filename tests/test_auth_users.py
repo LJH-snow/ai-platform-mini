@@ -353,3 +353,45 @@ def test_me_with_valid_key_returns_user_and_workspaces() -> None:
         assert body["workspaces"][0]["role"] == "owner"
     finally:
         _teardown_overrides()
+
+
+# ── Logout ─────────────────────────────────────────────────────────────────
+
+
+def test_logout_revokes_current_user_key() -> None:
+    user_repo, ws_repo, key_repo = _setup_test_services()
+    try:
+        reg_response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "logout@example.com",
+                "display_name": "Logout",
+                "password": "secret123",
+            },
+        )
+        assert reg_response.status_code == 201
+        api_key = reg_response.json()["api_key"]
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+        me_before = client.get("/api/v1/auth/me", headers=headers)
+        assert me_before.status_code == 200
+
+        logout_response = client.post("/api/v1/auth/logout", headers=headers)
+        assert logout_response.status_code == 200
+        body = logout_response.json()
+        assert body["revoked"] is True
+        assert len(body["key_hash_prefix"]) == 8
+
+        me_after = client.get("/api/v1/auth/me", headers=headers)
+        assert me_after.status_code == 401
+    finally:
+        _teardown_overrides()
+
+
+def test_logout_without_auth_returns_401() -> None:
+    _ = _setup_test_services()
+    try:
+        response = client.post("/api/v1/auth/logout")
+        assert response.status_code == 401
+    finally:
+        _teardown_overrides()
