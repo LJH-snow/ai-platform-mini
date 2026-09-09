@@ -97,6 +97,14 @@ export const createAuthClient = (options: AuthClientOptions) => {
         apiKey,
       ),
 
+    /** Rename one of the current user's workspaces. */
+    renameWorkspace: (apiKey: string, workspaceId: string, name: string) =>
+      request<WorkspaceSummary>(
+        `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`,
+        { method: 'PUT', body: JSON.stringify({ name }) },
+        apiKey,
+      ),
+
     /** Add a member to a workspace. */
     addMember: (apiKey: string, workspaceId: string, email: string, role: string) =>
       request<MemberSummary>(

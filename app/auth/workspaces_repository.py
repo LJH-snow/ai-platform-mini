@@ -39,6 +39,10 @@ class WorkspaceRepository(Protocol):
         self, workspace_id: str
     ) -> WorkspaceRecord | None: ...
 
+    async def update_workspace(
+        self, workspace_id: str, name: str
+    ) -> WorkspaceRecord | None: ...
+
     async def list_workspaces_for_user(
         self, user_id: str
     ) -> list[tuple[WorkspaceRecord, str]]:
@@ -77,6 +81,16 @@ class InMemoryWorkspaceRepository:
 
     async def find_workspace_by_id(self, workspace_id: str) -> WorkspaceRecord | None:
         return self._workspaces.get(workspace_id)
+
+    async def update_workspace(
+        self, workspace_id: str, name: str
+    ) -> WorkspaceRecord | None:
+        ws = self._workspaces.get(workspace_id)
+        if ws is None:
+            return None
+        ws.name = name
+        ws.updated_at = datetime.now(UTC)
+        return ws
 
     async def list_workspaces_for_user(
         self, user_id: str
@@ -162,6 +176,21 @@ class PostgresWorkspaceRepository:
             )
             if row is None:
                 return None
+            return _ws_row_to_record(row)
+
+    async def update_workspace(
+        self, workspace_id: str, name: str
+    ) -> WorkspaceRecord | None:
+        async with self._session_factory() as session:
+            row = await session.scalar(
+                select(WorkspaceTable).where(WorkspaceTable.id == workspace_id)
+            )
+            if row is None:
+                return None
+            row.name = name
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+            await session.refresh(row)
             return _ws_row_to_record(row)
 
     async def list_workspaces_for_user(

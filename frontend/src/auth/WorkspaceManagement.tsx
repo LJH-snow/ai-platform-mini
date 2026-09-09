@@ -24,7 +24,14 @@ export function WorkspaceManagement({
   // Create workspace form state
   const [newWorkspaceName, setNewWorkspaceName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [renameName, setRenameName] = useState('')
+  const [renaming, setRenaming] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+
+  const selectedWorkspace = workspaces.find((ws) => ws.id === currentWorkspaceId) ?? null
+  const canRename =
+    selectedWorkspace !== null &&
+    (selectedWorkspace.role === 'owner' || selectedWorkspace.role === 'admin')
 
   const loadWorkspaces = async () => {
     setLoading(true)
@@ -59,6 +66,23 @@ export function WorkspaceManagement({
       setMessage(err instanceof Error ? err.message : '创建工作空间失败')
     } finally {
       setCreating(false)
+    }
+  }
+
+  const handleRename = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!currentWorkspaceId || !renameName.trim() || !selectedWorkspace) return
+    setRenaming(true)
+    setMessage(null)
+    try {
+      await client.renameWorkspace(apiKey, currentWorkspaceId, renameName.trim())
+      setMessage('工作空间名称已更新')
+      setRenameName('')
+      await loadWorkspaces()
+    } catch (err: unknown) {
+      setMessage(err instanceof Error ? err.message : '重命名工作空间失败')
+    } finally {
+      setRenaming(false)
     }
   }
 
@@ -117,6 +141,27 @@ export function WorkspaceManagement({
           </button>
         </form>
       </section>
+
+      {canRename ? (
+        <section className="workspaceManagementSection">
+          <h3>重命名当前工作空间</h3>
+          <form className="renameWorkspaceForm" onSubmit={handleRename}>
+            <label htmlFor="workspace-rename">新名称</label>
+            <input
+              id="workspace-rename"
+              type="text"
+              placeholder={selectedWorkspace.name}
+              value={renameName}
+              onChange={(e) => setRenameName(e.target.value)}
+              required
+              disabled={renaming}
+            />
+            <button type="submit" disabled={renaming || !renameName.trim()}>
+              {renaming ? '保存中…' : '保存名称'}
+            </button>
+          </form>
+        </section>
+      ) : null}
 
       {currentWorkspaceId ? (
         <MemberManagement

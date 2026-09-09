@@ -83,4 +83,28 @@ describe('auth API key client', () => {
     )
     expect(revoked.revoked).toBe(true)
   })
+
+  it('renames a workspace with a PUT request', async () => {
+    const fetchImpl = vi.fn(async () =>
+      okJson({
+        id: 'ws-1',
+        name: 'Renamed Team',
+        role: 'owner',
+        member_count: 1,
+      }),
+    )
+    const client = createAuthClient({ fetchImpl })
+
+    const renamed = await client.renameWorkspace('sk-user', 'ws-1', 'Renamed Team')
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/api/v1/workspaces/ws-1',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ name: 'Renamed Team' }),
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-user' }),
+      }),
+    )
+    expect(renamed.name).toBe('Renamed Team')
+  })
 })

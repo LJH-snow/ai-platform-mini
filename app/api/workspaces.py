@@ -33,6 +33,10 @@ class CreateWorkspaceRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
 
 
+class RenameWorkspaceRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+
+
 class WorkspaceResponse(BaseModel):
     id: str
     name: str
@@ -112,6 +116,40 @@ async def create_workspace(
         name=body.name,
     )
     return WorkspaceResponse(id=ws.id, name=ws.name, role=role)
+
+
+@router.put(
+    "/{workspace_id}",
+    response_model=WorkspaceResponse,
+    summary="Rename a workspace",
+)
+async def rename_workspace(
+    workspace_id: str,
+    body: RenameWorkspaceRequest,
+    request: Request,
+    _api_key: Annotated[APIKey, Depends(require_api_key)],
+    ws_service: Annotated[WorkspaceService, Depends(provide_workspace_service)],
+) -> WorkspaceResponse:
+    identity = _require_identity(request)
+    if identity.user_id is None:  # type: ignore[unreachable]
+        raise AuthenticationError("Not authenticated as a user.")
+
+    updated = await ws_service.rename_workspace(
+        workspace_id=workspace_id,
+        actor_user_id=identity.user_id,
+        name=body.name,
+    )
+    role = next(
+        (
+            member_role
+            for candidate, member_role in await ws_service.list_workspaces_for_user(
+                identity.user_id
+            )
+            if candidate.id == workspace_id
+        ),
+        "member",
+    )
+    return WorkspaceResponse(id=updated.id, name=updated.name, role=role)
 
 
 @router.get(

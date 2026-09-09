@@ -462,6 +462,7 @@ GitHub Actions（`.github/workflows/ci.yml`）4 个 job：
 | GET | `/api/v1/auth/me` | 当前身份与工作空间列表 |
 | POST | `/api/v1/workspaces` | 创建 workspace |
 | GET | `/api/v1/workspaces` | 列出工作空间 |
+| PUT | `/api/v1/workspaces/{workspace_id}` | 重命名工作空间（owner/admin） |
 | POST | `/api/v1/workspaces/{workspace_id}/members` | 添加成员 |
 | GET | `/api/v1/workspaces/{workspace_id}/members` | 列出成员 |
 | PUT | `/api/v1/workspaces/{workspace_id}/members/{user_id}` | 更新成员角色 |
@@ -997,3 +998,8 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     `UserApiKeyManagement`，支持列出/创建/复制/撤销当前用户自己的 Key；前端
     API client 与类型定义覆盖 `listKeys`/`createKey`/`revokeKey`，新增组件与
     client/组件测试；前端 `typecheck`、`lint`、`test`、`build` 全绿
+22. **Sprint M15（已完成）**：工作空间重命名——新增
+    `PUT /api/v1/workspaces/{workspace_id}`，仅 owner/admin 可改名称，Repository
+    层补齐内存/PostgreSQL 实现并记录 `workspace.rename` 审计；前端“工作空间”页
+    在当前空间为 owner/admin 时显示重命名表单；后端 `pytest` 1111 passed，
+    前端 vitest 315 passed 全绿

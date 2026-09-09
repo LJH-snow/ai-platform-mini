@@ -133,6 +133,74 @@ def test_create_workspace_without_auth_returns_401(setup: tuple) -> None:
         _teardown()
 
 
+# ── Rename Workspace ────────────────────────────────────────────────────────
+
+
+def test_rename_workspace(setup: tuple) -> None:
+    user_repo, ws_repo, key_repo = setup
+    try:
+        reg = _register_and_get_key(
+            user_repo, ws_repo, key_repo, "rename@example.com", "Renamer"
+        )
+        api_key = str(reg["api_key"])
+        workspace_id = str(reg["workspace"]["id"])  # type: ignore[index]
+
+        response = client.put(
+            f"/api/v1/workspaces/{workspace_id}",
+            json={"name": "Team Renamed"},
+            headers=_auth_header(api_key),
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["name"] == "Team Renamed"
+        assert body["role"] == "owner"
+
+        listed = client.get("/api/v1/workspaces", headers=_auth_header(api_key))
+        assert listed.status_code == 200
+        workspaces = listed.json()
+        renamed = next(ws for ws in workspaces if ws["id"] == workspace_id)
+        assert renamed["name"] == "Team Renamed"
+    finally:
+        _teardown()
+
+
+def test_rename_workspace_requires_owner_or_admin(setup: tuple) -> None:
+    user_repo, ws_repo, key_repo = setup
+    try:
+        reg = _register_and_get_key(
+            user_repo, ws_repo, key_repo, "owner3@example.com", "Owner3"
+        )
+        workspace_id = str(reg["workspace"]["id"])  # type: ignore[index]
+
+        reg_viewer = _register_and_get_key(
+            user_repo, ws_repo, key_repo, "viewer3@example.com", "Viewer3"
+        )
+        viewer_key = str(reg_viewer["api_key"])
+
+        ws_svc = WorkspaceService(workspace_repo=ws_repo, user_repo=user_repo)
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                ws_svc.add_member(
+                    workspace_id=workspace_id,
+                    actor_user_id=reg["user"]["id"],  # type: ignore[index]
+                    target_email="viewer3@example.com",
+                    role="viewer",
+                )
+            )
+        finally:
+            loop.close()
+
+        response = client.put(
+            f"/api/v1/workspaces/{workspace_id}",
+            json={"name": "Forbidden Rename"},
+            headers=_auth_header(viewer_key),
+        )
+        assert response.status_code == 403
+    finally:
+        _teardown()
+
+
 # ── List Workspaces ─────────────────────────────────────────────────────────
 
 

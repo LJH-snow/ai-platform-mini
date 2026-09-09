@@ -1092,3 +1092,29 @@ API Key 管理 UI 的核心是不要让前端越权：组件只消费当前用�
 响应中出现一次，所以 UI 在成功后立即展示并可复制，不设计成再次查询明文。撤销操作
 属于不可逆动作，前端用确认交互兜底；接口层面继续复用已有 REST 设计，没有引入新的
 状态管理或额外 API，保持前端与后端契约一一对应。
+
+
+### Sprint M15（工作空间重命名，2026-09-09）
+
+- Repository 层为 `WorkspaceRepository` 增加 `update_workspace()`，内存与
+  PostgreSQL 实现均更新 `name` 与 `updated_at`，返回最新 workspace record。
+- `WorkspaceService.rename_workspace()` 只允许 owner/admin 管理成员角色执行，
+  校验名称非空/长度后落库，并记录 `workspace.rename` 审计事件（before/after name）。
+- 新增 `PUT /api/v1/workspaces/{workspace_id}` 用户端点：沿用现有
+  `require_api_key` + `_require_identity` 边界，返回 `{id, name, role}`。
+- `auth/client.ts` 增加 `renameWorkspace()`，`WorkspaceManagement` 在当前工作空间
+  为 owner/admin 时显示“重命名当前工作空间”表单，成功保存后刷新列表。
+- 测试：后端 `test_workspaces.py` 覆盖 owner 重命名成功和 viewer 无权改名（403）；
+  前端 `WorkspaceManagement.test.tsx` 覆盖 owner 提交改名、member 不显示表单，
+  `client.test.ts` 覆盖 PUT 请求契约。
+- 门禁：`ruff format --check .`、`ruff check .`、`mypy app tests`、`pytest`
+  全量 1111 passed / 47 skipped；前端 `typecheck`、`lint`、`format:check`、
+  全量 vitest（315 passed）和 `build` 全绿。
+
+#### Sprint M15 学习总结
+
+工作空间改名看似是简单 CRUD，但必须绑定“谁有权限改”：后端复用 owner/admin 的
+成员管理角色边界，而不是只校验登录态，避免 member/viewer 把共享工作空间名称改掉。
+这次把更新能力放到现有 `WorkspaceRepository` 协议里，让内存和 PostgreSQL 行为保持
+一致，并在服务层记录 before/after，方便后续 Admin 审计直接看到谁改了什么。前端只在
+当前角色允许时渲染表单，避免把权限判断散落到不可见的禁用态里。

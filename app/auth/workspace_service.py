@@ -76,6 +76,47 @@ class WorkspaceService:
     ) -> list[tuple[WorkspaceRecord, str]]:
         return await self._ws_repo.list_workspaces_for_user(user_id)
 
+    async def rename_workspace(
+        self,
+        workspace_id: str,
+        actor_user_id: str,
+        name: str,
+        *,
+        actor: AuditActor | None = None,
+    ) -> WorkspaceRecord:
+        """Rename a workspace. Only owner/admin can manage workspace metadata."""
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValidationError("Workspace name is required.")
+        if len(cleaned) > 128:
+            raise ValidationError("Workspace name is too long.")
+        await self._require_member_role(
+            workspace_id, actor_user_id, _MEMBER_MANAGEMENT_ROLES
+        )
+        current = await self._ws_repo.find_workspace_by_id(workspace_id)
+        if current is None:
+            raise ValidationError("Workspace not found.")
+        previous_name = current.name
+        updated = await self._ws_repo.update_workspace(workspace_id, cleaned)
+        if updated is None:
+            raise ValidationError("Workspace not found.")
+        if self._audit is not None and actor is not None:
+            await self._audit.record(
+                action="workspace.rename",
+                resource_type="workspace",
+                resource_id=workspace_id,
+                actor=actor,
+                before={"name": previous_name},
+                after={"name": cleaned},
+            )
+        logger.info(
+            "workspace_renamed id=%s actor=%s name=%s",
+            workspace_id,
+            actor_user_id,
+            cleaned,
+        )
+        return updated
+
     # ── Member management ───────────────────────────────────────────────
 
     async def _require_member_role(
