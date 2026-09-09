@@ -94,4 +94,73 @@ describe('admin workspace quota client', () => {
 
     expect(fetchImpl).toHaveBeenCalledWith('/admin/workspaces/ws%201/quota', expect.anything())
   })
+
+  it('lists admin plans', async () => {
+    const fetchImpl = vi.fn(async () =>
+      okJson([
+        {
+          id: 'plan-free',
+          name: 'Free',
+          version: 1,
+          daily_token_limit: 5000,
+          monthly_token_limit: null,
+          max_agents: 1,
+          max_documents: 10,
+          max_members: 3,
+          features: { rag: true },
+        },
+      ]),
+    )
+    const client = createAdminClient({ apiKey: 'sk-admin', fetchImpl })
+
+    const plans = await client.listPlans()
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/admin/plans',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-admin' }),
+      }),
+    )
+    expect(plans[0]?.name).toBe('Free')
+  })
+
+  it('lists subscriptions with query parameters', async () => {
+    const fetchImpl = vi.fn(async () => okJson([]))
+    const client = createAdminClient({ apiKey: 'sk-admin', fetchImpl })
+
+    await client.listSubscriptions({ plan_id: 'plan-pro', status: 'ACTIVE', limit: 20 })
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/admin/subscriptions?plan_id=plan-pro&status=ACTIVE&limit=20',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-admin' }),
+      }),
+    )
+  })
+
+  it('assigns a subscription with POST body and encoded workspace id', async () => {
+    const fetchImpl = vi.fn(async () =>
+      okJson({
+        id: 'sub-1',
+        workspace_id: 'ws 1',
+        plan_id: 'plan-pro',
+        plan_name: 'Pro',
+        status: 'TRIAL',
+        started_at: null,
+        expired_at: null,
+      }),
+    )
+    const client = createAdminClient({ apiKey: 'sk-admin', fetchImpl })
+
+    const subscription = await client.assignSubscription('ws 1', 'plan-pro', 'TRIAL')
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      '/admin/workspaces/ws%201/subscription',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ plan_id: 'plan-pro', status: 'TRIAL' }),
+      }),
+    )
+    expect(subscription.plan_name).toBe('Pro')
+  })
 })

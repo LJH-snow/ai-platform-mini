@@ -41,3 +41,25 @@ export type AgentRunSummary = {
 export type AgentRunRecord = AgentRunSummary & {
   response: Record<string, unknown>
 }
+
+export type PlanAdmin = {
+  id: string
+  name: string
+  version: number
+  daily_token_limit: number | null
+  monthly_token_limit: number | null
+  max_agents: number | null
+  max_documents: number | null
+  max_members: number | null
+  features: Record<string, boolean>
+}
+
+export type SubscriptionAdmin = {
+  id: string
+  workspace_id: string
+  plan_id: string
+  plan_name: string | null
+  status: string
+  started_at: string | null
+  expired_at: string | null
+}

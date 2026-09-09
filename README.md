@@ -1003,3 +1003,7 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     层补齐内存/PostgreSQL 实现并记录 `workspace.rename` 审计；前端“工作空间”页
     在当前空间为 owner/admin 时显示重命名表单；后端 `pytest` 1111 passed，
     前端 vitest 315 passed 全绿
+23. **Sprint M16（已完成）**：管理员后台订阅/计划管理 UI——admin client 新增
+    `listPlans` / `listSubscriptions` / `assignSubscription`，
+    AdminDashboard 展示计划列表/订阅列表，并支持给 Workspace 分配或变更
+    订阅计划与状态；复用后端已有 admin billing API，无需修改后端

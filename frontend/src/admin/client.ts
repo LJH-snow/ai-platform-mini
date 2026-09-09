@@ -3,6 +3,8 @@ import type {
   AgentRunRecord,
   AgentRunSummary,
   CreatedAdminApiKey,
+  PlanAdmin,
+  SubscriptionAdmin,
   UsageAggregation,
 } from './types.ts'
 
@@ -117,6 +119,22 @@ export const createAdminClient = (options: AdminClientOptions) => {
         method: 'PUT',
         body: JSON.stringify(body),
       }),
+    listPlans: () => request<PlanAdmin[]>('/admin/plans'),
+    listSubscriptions: (params: { plan_id?: string; status?: string; limit?: number } = {}) => {
+      const query = new URLSearchParams()
+      if (params.plan_id) query.set('plan_id', params.plan_id)
+      if (params.status) query.set('status', params.status)
+      query.set('limit', String(params.limit ?? 100))
+      return request<SubscriptionAdmin[]>(`/admin/subscriptions?${query.toString()}`)
+    },
+    assignSubscription: (workspaceId: string, planId: string, status: string = 'ACTIVE') =>
+      request<SubscriptionAdmin>(
+        `/admin/workspaces/${encodeURIComponent(workspaceId)}/subscription`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ plan_id: planId, status }),
+        },
+      ),
   }
 }
 

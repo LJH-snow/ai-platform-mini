@@ -1118,3 +1118,31 @@ API Key 管理 UI 的核心是不要让前端越权：组件只消费当前用�
 这次把更新能力放到现有 `WorkspaceRepository` 协议里，让内存和 PostgreSQL 行为保持
 一致，并在服务层记录 before/after，方便后续 Admin 审计直接看到谁改了什么。前端只在
 当前角色允许时渲染表单，避免把权限判断散落到不可见的禁用态里。
+
+
+### Sprint M16（管理员后台订阅/计划管理 UI，2026-09-09）
+
+- `frontend/src/admin/types.ts` 增加 `PlanAdmin` / `SubscriptionAdmin` 类型，与
+  `GET /admin/plans`、`GET /admin/subscriptions` 的响应字段对齐。
+- `frontend/src/admin/client.ts` 增加 `listPlans()`、`listSubscriptions()`
+  （支持 `plan_id` / `status` / `limit` 查询参数）和 `assignSubscription()`
+  （`POST /admin/workspaces/{workspace_id}/subscription`，workspace id 做 path
+  encode，body 为 `{ plan_id, status }`）。
+- `AdminDashboard` 新增“订阅与计划管理”区域：展示可用计划（日/月限额、Agents、
+  文档、成员、feature 概览）、订阅列表（Workspace、计划、状态、开始/到期时间），
+  并提供 Workspace + 计划 + 状态表单进行分配/变更；登录和刷新后台时会同步加载
+  billing 数据。
+- `App.css` 补充 billing 表单、计划卡片、内联错误/通知等样式，沿用现有管理员后台
+  `.panel/.adminCard/.keyTable` 视觉体系，没有引入嵌套卡片。
+- 测试：`frontend/src/admin/client.test.ts` 新增 `listPlans`、
+  `listSubscriptions` query params、`assignSubscription` POST body + path encode
+  三个请求契约测试。
+
+#### Sprint M16 学习总结
+
+管理员后台接入 billing 时，前端应该沿用现有 admin client 的统一 `request()` 封装，
+而不是在组件里直接拼 `fetch`，这样认证头、错误映射和 query 构造都只有一份实现。
+计划卡片的展示重点是让运营者一眼看到限额边界，因此把 Nullable 限额统一转成占位符，
+feature 集合按启用项降噪输出。分配订阅表单把 Workspace、Plan、Status 三个字段放在
+同一行，能让高频的“给某个工作空间换计划”操作保持紧凑；后端仍承担 404 与状态枚举
+校验，前端只负责请求契约和交互反馈。

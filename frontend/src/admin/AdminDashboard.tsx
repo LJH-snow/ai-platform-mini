@@ -7,6 +7,8 @@ import type {
   AgentRunRecord,
   AgentRunSummary,
   CreatedAdminApiKey,
+  PlanAdmin,
+  SubscriptionAdmin,
   UsageAggregation,
 } from './types.ts'
 import { formatAgentTimestamp } from '../agent/time.ts'
@@ -49,6 +51,10 @@ const formatStatus = (status: string): string => {
     timed_out: '超时',
     cancelled: '已取消',
     stopped: '已停止',
+    ACTIVE: '有效',
+    TRIAL: '试用',
+    EXPIRED: '已过期',
+    CANCELLED: '已取消',
   }
   return labels[status] ?? status
 }
@@ -76,6 +82,14 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
   const [auditEvents, setAuditEvents] = useState<AuditEvent[] | null>(null)
   const [auditError, setAuditError] = useState<string | null>(null)
   const [usageMonth, setUsageMonth] = useState(monthInShanghai)
+  const [plans, setPlans] = useState<PlanAdmin[]>([])
+  const [subscriptions, setSubscriptions] = useState<SubscriptionAdmin[]>([])
+  const [subscriptionWorkspaceId, setSubscriptionWorkspaceId] = useState('')
+  const [selectedPlanId, setSelectedPlanId] = useState('')
+  const [selectedSubscriptionStatus, setSelectedSubscriptionStatus] = useState('ACTIVE')
+  const [subscriptionNotice, setSubscriptionNotice] = useState<string | null>(null)
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(null)
+  const [billingLoading, setBillingLoading] = useState(false)
   const [usagePeriod, setUsagePeriod] = useState<UsagePeriod>('daily')
   const [newKeyName, setNewKeyName] = useState('HR 演示用户')
   const [createdKey, setCreatedKey] = useState<CreatedAdminApiKey | null>(null)
@@ -145,6 +159,7 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
       setClient(nextClient)
       setNotice('管理员登录成功。')
       await loadDashboard(nextClient, nextKeys)
+      await loadBilling(nextClient)
     } catch (caught) {
       setClient(null)
       setError(caught instanceof AdminApiError ? caught.message : '管理员登录失败。')
@@ -253,6 +268,47 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
     } catch (caught) {
       setAuditError(caught instanceof Error ? caught.message : '审计记录加载失败。')
       setAuditEvents(null)
+    }
+  }
+
+  const loadBilling = async (nextClient: AdminClient): Promise<void> => {
+    setBillingLoading(true)
+    setSubscriptionError(null)
+    try {
+      const [nextPlans, nextSubscriptions] = await Promise.all([
+        nextClient.listPlans(),
+        nextClient.listSubscriptions({ limit: 100 }),
+      ])
+      setPlans(nextPlans)
+      if (nextPlans.length > 0 && !selectedPlanId) setSelectedPlanId(nextPlans[0].id)
+      setSubscriptions(nextSubscriptions)
+    } catch (caught) {
+      setSubscriptionError(caught instanceof Error ? caught.message : '订阅/计划加载失败。')
+    } finally {
+      setBillingLoading(false)
+    }
+  }
+
+  const assignSubscription = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (!client || !subscriptionWorkspaceId.trim() || !selectedPlanId) return
+    setBillingLoading(true)
+    setSubscriptionError(null)
+    setSubscriptionNotice(null)
+    try {
+      const subscription = await client.assignSubscription(
+        subscriptionWorkspaceId.trim(),
+        selectedPlanId,
+        selectedSubscriptionStatus,
+      )
+      setSubscriptionNotice(
+        `已分配计划：${subscription.plan_name ?? subscription.plan_id}，状态 ${formatStatus(subscription.status)}。`,
+      )
+      setSubscriptionWorkspaceId('')
+      await loadBilling(client)
+    } catch (caught) {
+      setSubscriptionError(caught instanceof Error ? caught.message : '订阅分配失败。')
+      setBillingLoading(false)
     }
   }
 
@@ -657,6 +713,114 @@ export function AdminDashboard({ apiBaseUrl, onBack }: AdminDashboardProps): JSX
             {quotaNotice}
           </p>
         )}
+      </section>
+
+      <section className="panel adminCard billingCard">
+        <div className="panelHeader">
+          <div>
+            <h2>订阅与计划管理</h2>
+            <p>查看可用计划，并给 Workspace 分配或变更订阅状态。</p>
+          </div>
+          <button
+            type="button"
+            className="secondaryButton"
+            onClick={() => void loadBilling(client)}
+            disabled={billingLoading}
+          >
+            刷新
+          </button>
+        </div>
+        {subscriptionError !== null && (
+          <p className="inlineError" role="alert">
+            {subscriptionError}
+          </p>
+        )}
+        {subscriptionNotice !== null && (
+          <p className="inlineNotice" role="status">
+            {subscriptionNotice}
+          </p>
+        )}
+        <form onSubmit={(event) => void assignSubscription(event)} className="billingForm">
+          <input
+            aria-label="Workspace ID"
+            placeholder="Workspace ID"
+            value={subscriptionWorkspaceId}
+            onChange={(event) => setSubscriptionWorkspaceId(event.target.value)}
+          />
+          <select
+            aria-label="订阅计划"
+            value={selectedPlanId}
+            onChange={(event) => setSelectedPlanId(event.target.value)}
+          >
+            <option value="">选择计划</option>
+            {plans.map((plan) => (
+              <option key={plan.id} value={plan.id}>
+                {plan.name}
+              </option>
+            ))}
+          </select>
+          <select
+            aria-label="订阅状态"
+            value={selectedSubscriptionStatus}
+            onChange={(event) => setSelectedSubscriptionStatus(event.target.value)}
+          >
+            <option value="ACTIVE">有效 ACTIVE</option>
+            <option value="TRIAL">试用 TRIAL</option>
+            <option value="EXPIRED">已过期 EXPIRED</option>
+            <option value="CANCELLED">已取消 CANCELLED</option>
+          </select>
+          <button
+            type="submit"
+            disabled={billingLoading || !subscriptionWorkspaceId.trim() || !selectedPlanId}
+          >
+            分配 / 变更
+          </button>
+        </form>
+        <div className="planGrid" aria-label="可用计划">
+          {plans.map((plan) => (
+            <div className="planCard" key={plan.id}>
+              <strong>{plan.name}</strong>
+              <span>版本 {plan.version}</span>
+              <div className="planMeta">
+                <span>日限 {formatNumber(plan.daily_token_limit)}</span>
+                <span>月限 {formatNumber(plan.monthly_token_limit)}</span>
+                <span>Agents {formatNumber(plan.max_agents)}</span>
+                <span>成员 {formatNumber(plan.max_members)}</span>
+                <span>文档 {formatNumber(plan.max_documents)}</span>
+              </div>
+              <p className="planFeatures">
+                {Object.entries(plan.features)
+                  .filter(([, enabled]) => enabled)
+                  .map(([feature]) => feature)
+                  .join('、') || '无额外功能'}
+              </p>
+            </div>
+          ))}
+          {plans.length === 0 ? <p className="formHint">暂无可用计划。</p> : null}
+        </div>
+        <div className="keyTable" role="table" aria-label="订阅列表">
+          <div className="keyRow keyHeader">
+            <span>Workspace</span>
+            <span>计划</span>
+            <span>状态</span>
+            <span>开始时间</span>
+            <span>到期时间</span>
+          </div>
+          {subscriptions.map((item) => (
+            <div className="keyRow" key={item.id}>
+              <span>{item.workspace_id}</span>
+              <span>{item.plan_name ?? item.plan_id}</span>
+              <span className={`statusText status-${item.status.toLowerCase()}`}>
+                {formatStatus(item.status)}
+              </span>
+              <span>{formatAgentTimestamp(item.started_at)}</span>
+              <span>{formatAgentTimestamp(item.expired_at)}</span>
+            </div>
+          ))}
+          {subscriptions.length === 0 ? (
+            <p className="formHint">暂无订阅记录；分配第一个计划后会出现在这里。</p>
+          ) : null}
+        </div>
       </section>
 
       <section className="panel adminCard auditCard">

@@ -138,6 +138,12 @@ h1 {
   margin-bottom: 0.5rem;
 }
 
+.panelHeader > div > p {
+  color: #526177;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
 .requestStatus {
   display: inline-block;
   letter-spacing: normal;
@@ -1175,6 +1181,69 @@ select:focus-visible {
   flex: 0 1 170px;
 }
 
+.billingForm {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 0.8fr) minmax(140px, 0.7fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.billingForm input,
+.billingForm select {
+  min-width: 0;
+}
+
+.planGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.75rem;
+}
+
+.planCard {
+  display: grid;
+  gap: 0.45rem;
+  border: 1px solid #dfe6f2;
+  border-radius: 8px;
+  padding: 0.85rem;
+  background: #fbfcff;
+}
+
+.planCard strong {
+  color: #172033;
+}
+
+.planCard > span {
+  color: #64728a;
+  font-size: 0.76rem;
+}
+
+.planMeta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 0.75rem;
+}
+
+.planMeta span {
+  color: #526177;
+  font-size: 0.78rem;
+}
+
+.planFeatures {
+  margin-top: 0.3rem;
+  color: #7a4a00;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.inlineError {
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  color: #8f3422;
+  background: #fff0eb;
+  line-height: 1.5;
+}
+
 .successNotice,
 .secretKeyNotice {
   border-radius: 14px;
@@ -1330,6 +1399,11 @@ select:focus-visible {
 @media (max-width: 820px) {
   .adminGrid {
     grid-template-columns: 1fr;
+  }
+
+  .billingForm {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .heroActions {
