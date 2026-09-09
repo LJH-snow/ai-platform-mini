@@ -55,6 +55,8 @@ class Settings(BaseSettings):
 
     rate_limit_enabled: bool = True
     rate_limit_per_minute: int = 60
+    auth_ip_rate_limit_enabled: bool = True
+    auth_ip_rate_limit_per_minute: int = 20
 
     quota_daily_tokens: int = Field(default=0, ge=0)
     quota_monthly_tokens: int = Field(default=0, ge=0)

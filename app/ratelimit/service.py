@@ -11,6 +11,23 @@ class RateLimitService:
     def __init__(self, limiter: RateLimiter) -> None:
         self._limiter = limiter
 
+    def check_and_record_key(self, key: str, name: str) -> RateLimitResult:
+        result = self._limiter.acquire(key)
+
+        if not result.allowed:
+            logger.warning(
+                "rate_limit_exceeded scope=auth_ip name=%s limit=%d reset_after=%ds",
+                name,
+                result.limit,
+                result.reset_after,
+            )
+            raise RateLimitError(
+                f"IP rate limit exceeded. Limit: {result.limit} requests per minute. "
+                f"Retry after {result.reset_after}s."
+            )
+
+        return result
+
     def check_and_record(self, api_key: APIKey) -> RateLimitResult:
         result = self._limiter.acquire(api_key.key)
 

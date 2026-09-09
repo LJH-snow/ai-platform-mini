@@ -182,6 +182,20 @@ def provide_rate_limit_service() -> RateLimitService:
 
 
 @lru_cache
+def provide_auth_ip_rate_limiter() -> RateLimiter:
+    settings = get_settings()
+    return MemorySlidingWindowLimiter(
+        limit=settings.auth_ip_rate_limit_per_minute,
+        window_seconds=60,
+    )
+
+
+@lru_cache
+def provide_auth_ip_rate_limit_service() -> RateLimitService:
+    return RateLimitService(limiter=provide_auth_ip_rate_limiter())
+
+
+@lru_cache
 def provide_quota_service() -> QuotaService:
     settings = get_settings()
     config = QuotaConfig(
@@ -755,6 +769,8 @@ def clear_container_cache() -> None:
     provide_quota_service.cache_clear()
     provide_rate_limit_service.cache_clear()
     provide_rate_limiter.cache_clear()
+    provide_auth_ip_rate_limit_service.cache_clear()
+    provide_auth_ip_rate_limiter.cache_clear()
     provide_usage_collector.cache_clear()
     provide_usage_service.cache_clear()
     provide_multi_agent_config_service.cache_clear()

@@ -57,7 +57,8 @@ Gateway、有界 Agent Runtime（Tool Calling）、RAG 检索增强、长期记�
 - **安全与多租户**：API Key 哈希存储、scrypt 密码哈希、限流、Token 配额、
   计费计划、审计日志；RAG 文档按租户隔离；Prompt、原始 Tool payload、Provider
   响应和敏感信息不公开。
-- **工程质量**：后端 97 个测试文件、1142 个测试用例（默认 1095 通过、47 个
+- 公开认证端点按 IP 限流（默认 20 次/分钟，可通过环境变量调整或关闭）。
+- **工程质量**：后端 97 个测试文件、1147 个测试用例（默认 1100 通过、47 个
   PostgreSQL 集成用例按需启用）+ 前端 Vitest/Playwright/a11y 门禁、真实浏览器
   验证、失败/超时/断连回归、多 Python 版本 CI 和 Code Review 记录。
 
@@ -267,6 +268,8 @@ trace + metrics"]
   仅通过 `.env` 加载，绝不进入 Git
 - 滑动窗口限流（Protocol 抽象，预留 Redis 切换）、Bearer 鉴权、租户隔离
   固化在 repository 查询条件中，避免 Service 层遗漏导致跨租户读取
+- 公开认证端点（`/api/v1/auth/register`、`/api/v1/auth/login`）按 IP 限流，
+  默认 20 次/分钟，可通过 `AUTH_IP_RATE_LIMIT_ENABLED` 调整或关闭
 - Agent 公开契约只暴露有界安全摘要；RAG 内容作为不可信参考材料渲染，
   不执行其中的指令或 HTML
 - 文档上传有大小/页数/字符数上限校验；`malicious` 注入文档拒绝入库
@@ -726,6 +729,9 @@ CONVERSATION_HISTORY_SUMMARY_MAX_CHARS=2000
 # Rate limiting
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_PER_MINUTE=60
+# Public auth endpoints are IP-limited (register/login)
+AUTH_IP_RATE_LIMIT_ENABLED=true
+AUTH_IP_RATE_LIMIT_PER_MINUTE=20
 
 # Token quota (0 = disabled)
 QUOTA_DAILY_TOKENS=0
@@ -976,3 +982,7 @@ Sprint 1–M2 的逐条交付、学习总结与 Code Review 沉淀见
     `CodeExecutorTool` 执行；服务层校验 `code_executor` 注册和工作空间启用状态，
     容器层统一工具注册表补入 `CodeExecutorTool`（避免 Agent/工作流工具面漂移）；
     前端画布支持拖入代码节点、配置 Python 代码模板和本地校验；后端/前端门禁全绿
+18. **Sprint M11（已完成）**：公开认证端点 IP 限流——`register`/`login`
+    按客户端 IP 使用独立滑动窗口限流，默认 20 次/分钟，可通过
+    `AUTH_IP_RATE_LIMIT_ENABLED` 关闭；成功响应带 `X-RateLimit-*` 头，
+    超出时返回 429 和 `Retry-After`

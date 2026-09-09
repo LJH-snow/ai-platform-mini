@@ -996,3 +996,29 @@ workflow-builder 校验用的是运行时 ToolRegistry，而 Agent 默认 tool l
 `provide_tool_registry()` 和 AgentService 的 seed 保持同源，是这次顺手补掉的关键
 一致性缺口；前端也保持“画布类型、标签、默认 config、本地校验”四处同步，避免出现
 后端已支持但 UI 无法编辑的半成品节点。
+
+
+### Sprint M11（公开认证端点 IP 限流，2026-09-09）
+
+- 新增 `provide_auth_ip_rate_limiter()` / `provide_auth_ip_rate_limit_service()`
+  独立于 API Key 限流的滑动窗口实例；`RateLimitService.check_and_record_key()`
+  按 key/name 记录与拒绝，超出时抛统一 `RateLimitError`。
+- `require_auth_ip_rate_limit` FastAPI dependency 读取
+  `AUTH_IP_RATE_LIMIT_ENABLED`，默认开启；key 使用 `auth_ip:{client_ip}`，
+  成功时把 remaining/limit/reset_after 写回 `request.state`。
+- 路由接入：`/api/v1/auth/register`、`/api/v1/auth/login` 都先执行 IP 限流；
+  成功响应带 `X-RateLimit-Limit` / `X-RateLimit-Remaining` /
+  `X-RateLimit-Reset`，429 响应带 `Retry-After`。
+- 测试：`check_and_record_key` 的放行/拒绝/key 隔离 3 个用例；auth register
+  超过 IP 阈值返回 429，关闭 `AUTH_IP_RATE_LIMIT_ENABLED` 后不受限制 2 个用例。
+- 门禁：`ruff format --check .`、`ruff check .`、`mypy app tests`、
+  `pytest` 全量 1100 passed / 47 skipped。
+
+#### Sprint M11 学习总结
+
+公开认证端点没有 API Key 可绑定，所以不能复用现有 `require_rate_limit` 的
+API Key 口径；本次只新增了一个按 IP 的 service provider 和 dependency，仍然复用
+同一个 `RateLimiter` Protocol / `MemorySlidingWindowLimiter`，没有引入第二套
+限流抽象。auth IP 限流放在路由依赖层执行，天然覆盖 register 和 login 在进入业务
+逻辑前的一致边界；成功响应补 `X-RateLimit-*`、失败响应补 `Retry-After`，让客户端
+在正反向都能感知配额，而不是只看到 429。

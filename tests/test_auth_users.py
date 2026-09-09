@@ -1,5 +1,7 @@
 """Tests for auth API: register, login, me."""
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,7 +19,10 @@ from app.auth.workspace_service import WorkspaceService
 from app.auth.workspaces_repository import (
     InMemoryWorkspaceRepository,
 )
+from app.core.container import provide_auth_ip_rate_limit_service
 from app.main import app
+from app.ratelimit.memory import MemorySlidingWindowLimiter
+from app.ratelimit.service import RateLimitService
 
 client = TestClient(app)
 
@@ -155,6 +160,92 @@ def test_register_short_password_returns_422() -> None:
             },
         )
         assert response.status_code == 422
+    finally:
+        _teardown_overrides()
+
+
+def test_register_ip_rate_limit_returns_429_after_allowed_requests() -> None:
+    _ = _setup_test_services()
+    try:
+        auth_ip_service = RateLimitService(
+            limiter=MemorySlidingWindowLimiter(limit=2, window_seconds=60)
+        )
+        app.dependency_overrides[provide_auth_ip_rate_limit_service] = lambda: (
+            auth_ip_service
+        )
+
+        first = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "limit-one@example.com",
+                "display_name": "Limit One",
+                "password": "secret123",
+            },
+        )
+        assert first.status_code == 201
+        assert first.headers["X-RateLimit-Limit"] == "2"
+        assert first.headers["X-RateLimit-Remaining"] == "1"
+
+        second = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "limit-two@example.com",
+                "display_name": "Limit Two",
+                "password": "secret123",
+            },
+        )
+        assert second.status_code == 201
+        assert second.headers["X-RateLimit-Remaining"] == "0"
+
+        third = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "limit-three@example.com",
+                "display_name": "Limit Three",
+                "password": "secret123",
+            },
+        )
+        assert third.status_code == 429
+        assert int(third.headers["Retry-After"]) > 0
+    finally:
+        _teardown_overrides()
+
+
+def test_register_ip_rate_limit_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = _setup_test_services()
+    try:
+        monkeypatch.setattr(
+            "app.ratelimit.dependencies.get_settings",
+            lambda: SimpleNamespace(auth_ip_rate_limit_enabled=False),
+        )
+        auth_ip_service = RateLimitService(
+            limiter=MemorySlidingWindowLimiter(limit=1, window_seconds=60)
+        )
+        app.dependency_overrides[provide_auth_ip_rate_limit_service] = lambda: (
+            auth_ip_service
+        )
+
+        first = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "no-limit-one@example.com",
+                "display_name": "No Limit One",
+                "password": "secret123",
+            },
+        )
+        assert first.status_code == 201
+
+        second = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "no-limit-two@example.com",
+                "display_name": "No Limit Two",
+                "password": "secret123",
+            },
+        )
+        assert second.status_code == 201
     finally:
         _teardown_overrides()
 

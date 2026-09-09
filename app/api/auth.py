@@ -6,7 +6,7 @@ import logging
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app.auth.dependencies import provide_api_key_service, require_api_key
@@ -29,6 +29,7 @@ from app.auth.workspaces_repository import (
 from app.core.context import RequestContext
 from app.core.settings import get_settings
 from app.exceptions.base import AuthenticationError
+from app.ratelimit.dependencies import require_auth_ip_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,17 @@ def _user_to_response(user: UserRecord) -> UserResponse:
     )
 
 
+def _apply_rate_limit_headers(request: Request, response: Response) -> None:
+    remaining = getattr(request.state, "rate_limit_remaining", None)
+    limit = getattr(request.state, "rate_limit_limit", None)
+    reset_after = getattr(request.state, "rate_limit_reset_after", None)
+    if remaining is None or limit is None or reset_after is None:
+        return
+    response.headers["X-RateLimit-Limit"] = str(limit)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Reset"] = str(reset_after)
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 
@@ -150,12 +162,12 @@ def _user_to_response(user: UserRecord) -> UserResponse:
 async def register(
     body: RegisterRequest,
     request: Request,
+    response: Response,
+    _auth_ip_limit: Annotated[None, Depends(require_auth_ip_rate_limit)],
     user_service: Annotated[UserService, Depends(provide_user_service)],
     ws_service: Annotated[WorkspaceService, Depends(provide_workspace_service)],
     key_service: Annotated[APIKeyService, Depends(provide_api_key_service)],
 ) -> RegisterResponse:
-    # TODO(Sprint A5): add IP-based rate limiting for public auth endpoints;
-    # current require_rate_limit depends on API key which is unavailable here.
     # 1. Create user
     user = await user_service.register(
         email=body.email,
@@ -191,6 +203,8 @@ async def register(
 
     logger.info("user_registered_complete user_id=%s ws_id=%s", user.id, ws.id)
 
+    _apply_rate_limit_headers(request, response)
+
     return RegisterResponse(
         user=_user_to_response(user),
         workspace=WorkspaceSummary(id=ws.id, name=ws.name, role=role),
@@ -206,11 +220,12 @@ async def register(
 async def login(
     body: LoginRequest,
     request: Request,
+    response: Response,
+    _auth_ip_limit: Annotated[None, Depends(require_auth_ip_rate_limit)],
     user_service: Annotated[UserService, Depends(provide_user_service)],
     ws_service: Annotated[WorkspaceService, Depends(provide_workspace_service)],
     key_service: Annotated[APIKeyService, Depends(provide_api_key_service)],
 ) -> LoginResponse:
-    # TODO(Sprint A5): add IP-based rate limiting for public auth endpoints.
     settings = get_settings()
     if settings.auth_storage != "postgres":
         raise HTTPException(
@@ -243,6 +258,8 @@ async def login(
     )
 
     logger.info("user_logged_in user_id=%s", user.id)
+
+    _apply_rate_limit_headers(request, response)
 
     return LoginResponse(
         user=_user_to_response(user),

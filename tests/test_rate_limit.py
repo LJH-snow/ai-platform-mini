@@ -82,6 +82,33 @@ def test_service_per_key_isolation() -> None:
     assert result.remaining == 0
 
 
+def test_service_check_and_record_key_allows_under_limit() -> None:
+    service = _make_service(3)
+
+    result = service.check_and_record_key("auth_ip:127.0.0.1", "127.0.0.1")
+    assert result.remaining == 2
+    assert result.limit == 3
+
+
+def test_service_check_and_record_key_blocks_over_limit() -> None:
+    service = _make_service(2)
+
+    service.check_and_record_key("auth_ip:127.0.0.1", "127.0.0.1")
+    service.check_and_record_key("auth_ip:127.0.0.1", "127.0.0.1")
+
+    with pytest.raises(RateLimitError, match="IP rate limit exceeded"):
+        service.check_and_record_key("auth_ip:127.0.0.1", "127.0.0.1")
+
+
+def test_service_check_and_record_key_isolation() -> None:
+    service = _make_service(1)
+
+    service.check_and_record_key("auth_ip:127.0.0.1", "127.0.0.1")
+
+    result = service.check_and_record_key("auth_ip:127.0.0.2", "127.0.0.2")
+    assert result.remaining == 0
+
+
 def test_acquire_returns_reset_after() -> None:
     limiter = MemorySlidingWindowLimiter(limit=5, window_seconds=60)
     result = limiter.acquire("sk-test")
